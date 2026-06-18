@@ -29,3 +29,18 @@ split: unsplit
 ```
 
 They validate structurally so later review tools can consume them, but the normal splitter rejects them unless `--allow-unreviewed` is explicitly used. Do not commit large public datasets, private/company RTL, proprietary logs, or uncertain-license material.
+
+To review and promote local public drafts, generate a review packet and then promote an edited JSONL:
+
+```bash
+python scripts/dataset/prepare_review_packet.py \
+  --input data/drafts/public_manifest_draft_v0.1.jsonl \
+  --output-dir data/review/public_manifest_batch_001
+
+python scripts/dataset/promote_reviewed_rows.py \
+  --input data/review/public_manifest_batch_001/reviewed_rows.jsonl \
+  --output data/processed/public_validated_v0.1.jsonl \
+  --report data/reports/public_validated_v0.1_report.json
+```
+
+Promotion does not prove correctness. It rejects unedited import stubs and enforces public source, license, provenance, and existing claim-evidence validation gates before writing validated candidate rows. See `docs/dataset/review_promotion_workflow.md`.

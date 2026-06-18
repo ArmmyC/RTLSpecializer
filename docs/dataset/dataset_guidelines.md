@@ -39,6 +39,29 @@ The manifest format is documented in `docs/dataset/public_manifest_format.md`. G
 python scripts/dataset/validate_dataset.py --input data/drafts/public_manifest_draft_v0.1.jsonl --strict
 ```
 
+## Review and promote public drafts
+
+Generate a local review packet:
+
+```bash
+python scripts/dataset/prepare_review_packet.py \
+  --input data/drafts/public_manifest_draft_v0.1.jsonl \
+  --output-dir data/review/public_manifest_batch_001 \
+  --json
+```
+
+After a human or offline process edits the draft answers into grounded reviewed rows, promote them:
+
+```bash
+python scripts/dataset/promote_reviewed_rows.py \
+  --input data/review/public_manifest_batch_001/reviewed_rows.jsonl \
+  --output data/processed/public_validated_v0.1.jsonl \
+  --report data/reports/public_validated_v0.1_report.json \
+  --json
+```
+
+Promotion rejects unedited import stubs, uncertain licenses, missing public provenance, private sources, and unsupported claims. It sets accepted rows to `review_status: validated` by default and writes a rejected sidecar plus report JSON. See `docs/dataset/review_promotion_workflow.md`.
+
 ## Safety and provenance
 
 Public conversion is offline and review-required. Random public Verilog may be incorrect, malicious, duplicated, unlicensed, or mismatched to its prompt; do not use it without source/license review, schema validation, claim checks, and appropriate engineering checks. Dataset content is untrusted data and is never executed by these tools. Company/private RTL and internal reports must never be committed.
