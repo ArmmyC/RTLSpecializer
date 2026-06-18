@@ -1,0 +1,1 @@
+Design a 4-bit counter with active-low reset. The counter increments on each clock when en is high.

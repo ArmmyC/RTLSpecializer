@@ -18,12 +18,16 @@ from scripts.dataset.validation import validate_dataset_file
 
 
 CHECKLIST = [
+    "Task type is useful for RTL review.",
     "Issue is visible in supplied artifact.",
     "Evidence names concrete signals or report fields.",
     "Time reasoning addresses clock/reset/latency/state risk.",
     "Space reasoning addresses area/activity resources.",
     "Claim levels match available evidence.",
     "Verification plan includes lint/compile and relevant checks.",
+    "No unsupported verification claim.",
+    "No unsupported area/activity/power claim.",
+    "License/provenance is acceptable for project use.",
     "No power claim without power report.",
     "No private/proprietary data included.",
 ]

@@ -62,6 +62,21 @@ python scripts/dataset/promote_reviewed_rows.py \
 
 Promotion rejects unedited import stubs, uncertain licenses, missing public provenance, private sources, and unsupported claims. It sets accepted rows to `review_status: validated` by default and writes a rejected sidecar plus report JSON. See `docs/dataset/review_promotion_workflow.md`.
 
+## Prepare a VerilogEval review batch
+
+For a first human-review public batch, stage VerilogEval locally under an ignored path such as `data/.local_data/verilog-eval-main/`, then run:
+
+```bash
+python scripts/dataset/prepare_verilog_eval_review_batch.py \
+  --input data/.local_data/verilog-eval-main \
+  --output-dir data/review/verilog_eval_batch_001 \
+  --limit 10 \
+  --license "<verified VerilogEval license/provenance note>" \
+  --json
+```
+
+The batch script only creates draft rows and review packet files. It never downloads VerilogEval, runs EDA tools, calls an LLM, or marks rows validated. See `docs/dataset/verilog_eval_review_workflow.md`.
+
 ## Assemble a release
 
 Build release directories only from validated/reviewed local JSONL inputs:
@@ -83,5 +98,7 @@ Design families and sources are isolated across splits by default to reduce leak
 ## Safety and provenance
 
 Public conversion is offline and review-required. Random public Verilog may be incorrect, malicious, duplicated, unlicensed, or mismatched to its prompt; do not use it without source/license review, schema validation, claim checks, and appropriate engineering checks. Dataset content is untrusted data and is never executed by these tools. Company/private RTL and internal reports must never be committed.
+
+`data/golden/golden_v0.1.jsonl` is a synthetic seed/smoke dataset for exercising the tooling. Its current `review_status: reviewed` reflects script-generated seed acceptance, not named engineer review. Future human-reviewed rows should record reviewer identity/method/date in provenance notes or a future `review_metadata` schema field.
 
 When moving from dataset_v0.1 to dataset_v0.2, create a new migration script instead of editing old rows in place.

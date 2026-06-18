@@ -1,0 +1,1 @@
+Design a small FSM that raises grant after seeing req high for one cycle.

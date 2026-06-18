@@ -1,0 +1,1 @@
+Design an 8-bit shift register with synchronous load and shift enable.
