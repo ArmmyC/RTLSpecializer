@@ -70,3 +70,7 @@ Each release directory contains:
 ## Limitations
 
 Release assembly is packaging and validation, not proof. It does not establish RTL correctness, timing safety, area improvement, activity improvement, or power behavior. Those claims remain governed by the existing claim-level and evidence-status policies.
+
+## Evaluation
+
+After building a release, use `scripts/eval/make_baseline_candidates.py` and `scripts/eval/evaluate_answers.py` to run deterministic local scoring on a split such as `test.jsonl`. Evaluation is also offline and does not perform model inference or semantic proof. See `docs/eval/evaluation_harness.md`.
