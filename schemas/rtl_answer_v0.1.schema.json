@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_answer_v0.1.schema.json",
+  "title": "RTLSpecializer answer v0.1",
+  "description": "A conservative, evidence-aware RTL answer.",
+  "type": "object",
+  "required": ["schema_version", "task_type", "issue_summary", "time_reasoning", "space_reasoning", "safe_optimization", "functional_risk", "verification_plan", "claim_levels", "patch"],
+  "properties": {
+    "schema_version": {"const": "rtl_answer_v0.1", "description": "Answer schema version."},
+    "task_type": {"enum": ["rtl_bug_review", "rtl_area_activity_review", "rtl_tool_report_explanation", "unsafe_optimization_rejection", "rtl_before_after_judgment"]},
+    "issue_summary": {"type": "array", "minItems": 1, "description": "Issues supported by supplied evidence.", "items": {"type": "object", "required": ["issue", "severity", "evidence"], "properties": {"issue": {"type": "string"}, "severity": {"enum": ["low", "medium", "high"]}, "evidence": {"type": "object"}}}},
+    "time_reasoning": {"type": "object", "description": "Cycle, state, latency, and reset risks."},
+    "space_reasoning": {"type": "object", "description": "Resource, area, and activity reasoning."},
+    "safe_optimization": {"type": "object", "description": "Conservative recommendation."},
+    "functional_risk": {"type": "array", "description": "Risks that require verification."},
+    "verification_plan": {"type": "array", "description": "Required tool or review checks."},
+    "claim_levels": {"type": "object", "required": ["correctness", "area", "activity", "power"], "description": "Per-domain confidence.", "properties": {"correctness": {"$ref": "#/$defs/claim"}, "area": {"$ref": "#/$defs/claim"}, "activity": {"$ref": "#/$defs/claim"}, "power": {"$ref": "#/$defs/claim"}}},
+    "patch": {"type": "object", "description": "Optional patch metadata."}
+  },
+  "$defs": {"claim": {"enum": ["suggestion_only", "tool_supported", "verified", "insufficient_evidence", "not_applicable"]}},
+  "example": {"schema_version": "rtl_answer_v0.1", "task_type": "rtl_bug_review", "claim_levels": {"correctness": "suggestion_only", "area": "insufficient_evidence", "activity": "not_applicable", "power": "insufficient_evidence"}}
+}

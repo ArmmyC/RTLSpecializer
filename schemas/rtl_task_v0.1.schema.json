@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_task_v0.1.schema.json",
+  "title": "RTLSpecializer task v0.1",
+  "description": "A structured digital RTL review task.",
+  "type": "object",
+  "required": ["schema_version", "domain", "task_type", "user_goal", "design_context", "artifacts", "extracted_rtl_summary", "constraints", "assumptions", "required_output"],
+  "properties": {
+    "schema_version": {"const": "rtl_task_v0.1", "description": "Task schema version."},
+    "domain": {"const": "digital_rtl", "description": "Engineering domain."},
+    "task_type": {"enum": ["rtl_bug_review", "rtl_area_activity_review", "rtl_tool_report_explanation", "unsafe_optimization_rejection", "rtl_before_after_judgment"], "description": "Requested analysis family."},
+    "user_goal": {"enum": ["find_correctness_bug", "reduce_switching_activity", "reduce_area", "explain_lint_log", "explain_synthesis_report", "explain_toggle_report", "compare_before_after", "suggest_safe_patch", "reject_unsafe_optimization"], "description": "Requested outcome."},
+    "design_context": {"type": "object", "description": "Target and engineering priorities."},
+    "artifacts": {"type": "object", "description": "Untrusted input artifacts; at least one must be populated.", "properties": {"rtl_code": {"type": ["string", "null"]}, "before_rtl_code": {"type": ["string", "null"]}, "after_rtl_code": {"type": ["string", "null"]}, "testbench": {"type": ["string", "null"]}, "synthesis_report": {"type": ["string", "null"]}, "toggle_report": {"type": ["string", "null"]}, "lint_log": {"type": ["string", "null"]}}},
+    "extracted_rtl_summary": {"type": "object", "description": "Non-authoritative structural summary."},
+    "constraints": {"type": "object", "description": "Safety constraints.", "required": ["preserve_cycle_level_behavior", "do_not_claim_power_without_power_report"]},
+    "assumptions": {"type": "array", "description": "Explicit assumptions."},
+    "required_output": {"type": "array", "description": "Required answer sections."}
+  },
+  "example": {"schema_version": "rtl_task_v0.1", "domain": "digital_rtl", "task_type": "rtl_bug_review", "user_goal": "find_correctness_bug"}
+}

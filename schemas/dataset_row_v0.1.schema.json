@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dataset_row_v0.1.schema.json",
+  "title": "RTLSpecializer dataset row v0.1",
+  "description": "Provenance-bearing three-message SFT row.",
+  "type": "object",
+  "required": ["id", "dataset_version", "split", "source", "license", "design_family", "task_family", "created_by", "review_status", "provenance", "tool_checks", "messages"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1, "description": "Unique stable row identifier."},
+    "dataset_version": {"const": "dataset_v0.1"},
+    "split": {"enum": ["train", "val", "test", "unsplit"]},
+    "source": {"enum": ["handwritten_golden", "synthetic_rfid_style", "public_verilog_eval", "public_rtllm", "public_rtllm_2", "public_rtlfixer", "public_openllm_rtl", "teacher_generated", "llm_converted_public"]},
+    "license": {"type": "string", "minLength": 1, "description": "License or usage label."},
+    "design_family": {"type": "string", "minLength": 1},
+    "task_family": {"enum": ["rtl_bug_review", "rtl_area_activity_review", "rtl_tool_report_explanation", "unsafe_optimization_rejection", "rtl_before_after_judgment"]},
+    "created_by": {"type": "string", "minLength": 1},
+    "review_status": {"enum": ["draft", "validated", "reviewed", "rejected"]},
+    "provenance": {"type": "object", "required": ["origin", "public_dataset_name", "public_dataset_url", "source_commit", "notes"], "description": "Traceable origin metadata."},
+    "tool_checks": {"type": "object", "required": ["parse", "lint", "simulation", "equivalence", "synthesis", "toggle", "power"], "description": "Evidence metadata; null means unavailable."},
+    "messages": {"type": "array", "minItems": 3, "maxItems": 3, "description": "System, user task, and assistant answer messages in order."}
+  },
+  "example": {"id": "golden_counter_bug_001", "dataset_version": "dataset_v0.1", "split": "unsplit", "source": "handwritten_golden", "license": "project_internal", "design_family": "counter", "task_family": "rtl_bug_review", "created_by": "human", "review_status": "reviewed"}
+}

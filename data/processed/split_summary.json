@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "input_rows": 20,
+  "train_rows": 14,
+  "val_rows": 3,
+  "test_rows": 3,
+  "output_files": {
+    "train": "data\\processed\\train.jsonl",
+    "val": "data\\processed\\val.jsonl",
+    "test": "data\\processed\\test.jsonl",
+    "summary": "data\\processed\\split_summary.json"
+  },
+  "seed": 7,
+  "ratios": {
+    "train": 0.7,
+    "val": 0.15,
+    "test": 0.15
+  }
+}
