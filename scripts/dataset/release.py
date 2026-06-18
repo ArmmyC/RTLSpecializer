@@ -69,11 +69,11 @@ def file_sha256(path: Path) -> str:
 def load_release_inputs(paths: list[Path]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     rows: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    warnings: list[str] = []
+    errors: list[str] = []
     for path in paths:
         report = validate_dataset_file(path, strict=True)
         if not report.ok:
-            warnings.extend(item.format() for item in report.errors + report.warnings)
+            errors.extend(item.format() for item in report.errors + report.warnings)
         loaded, problems = load_jsonl(path)
         for problem in problems:
             rejected.append({"id": None, "reason": "input load failed", "errors": [problem.message], "row": {"input": str(path)}})
@@ -82,7 +82,7 @@ def load_release_inputs(paths: list[Path]) -> tuple[list[dict[str, Any]], list[d
             row["_release_input"] = str(path)
             row["_release_line"] = line
             rows.append(row)
-    return rows, rejected, warnings
+    return rows, rejected, errors
 
 
 def release_eligibility_errors(row: dict[str, Any]) -> list[str]:
@@ -154,6 +154,44 @@ def _reason(errors: list[str]) -> str:
 
 def _reject(row: dict[str, Any], errors: list[str]) -> dict[str, Any]:
     return {"id": row.get("id"), "reason": _reason(errors), "errors": errors, "row": _clean_row(row)}
+
+
+def find_family_overlaps(split: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    memberships: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+    for split_name, rows in split.items():
+        for row in rows:
+            memberships[str(row.get("design_family"))][split_name].append(str(row.get("id")))
+    return {
+        family: {"rows": sorted(row_id for ids in by_split.values() for row_id in ids), "splits": sorted(by_split)}
+        for family, by_split in sorted(memberships.items())
+        if len(by_split) > 1
+    }
+
+
+def find_source_overlaps(split: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    memberships: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+    for split_name, rows in split.items():
+        for row in rows:
+            memberships[str(row.get("source"))][split_name].append(str(row.get("id")))
+    return {
+        source: {"rows": sorted(row_id for ids in by_split.values() for row_id in ids), "splits": sorted(by_split)}
+        for source, by_split in sorted(memberships.items())
+        if len(by_split) > 1
+    }
+
+
+def find_artifact_fingerprint_overlaps(split: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    memberships: dict[str, dict[str, list[str]]] = defaultdict(lambda: defaultdict(list))
+    for split_name, rows in split.items():
+        for row in rows:
+            fingerprint = artifact_fingerprint(row)
+            if fingerprint:
+                memberships[fingerprint][split_name].append(str(row.get("id")))
+    return {
+        fingerprint: {"rows": sorted(row_id for ids in by_split.values() for row_id in ids), "splits": sorted(by_split)}
+        for fingerprint, by_split in sorted(memberships.items())
+        if sum(len(ids) for ids in by_split.values()) > 1
+    }
 
 
 def _stats(split: dict[str, list[dict[str, Any]]], rejected: list[dict[str, Any]], leakage: dict[str, Any]) -> dict[str, Any]:
@@ -235,20 +273,22 @@ def build_release(config: ReleaseConfig) -> tuple[dict[str, Any], int]:
     if errors:
         return _result(False, config, 0, 0, 0, 0, 0, 0, errors, warnings), 1
 
-    loaded_rows, rejected, input_warnings = load_release_inputs(config.input_paths)
-    warnings.extend(input_warnings)
+    loaded_rows, rejected, input_errors = load_release_inputs(config.input_paths)
+    errors.extend(input_errors)
     release_dir = config.output_root / config.release_name
     temp = release_dir / ".row_validation.tmp.jsonl"
     accepted: list[dict[str, Any]] = []
     seen_ids: dict[str, str] = {}
     seen_rows: dict[str, str] = {}
-    seen_artifacts: dict[str, str] = {}
     leakage_summary = {
         "duplicate_row_ids": 0,
         "duplicate_row_fingerprints": 0,
         "duplicate_artifact_fingerprints": 0,
         "family_overlap_allowed": config.allow_family_overlap,
         "source_overlap_allowed": config.allow_source_overlap,
+        "family_overlaps": {},
+        "source_overlaps": {},
+        "artifact_fingerprint_overlaps": {},
     }
     release_dir.mkdir(parents=True, exist_ok=True)
     for row in loaded_rows:
@@ -267,13 +307,6 @@ def build_release(config: ReleaseConfig) -> tuple[dict[str, Any], int]:
             leakage_summary["duplicate_row_fingerprints"] += 1
         else:
             seen_rows[fp] = str(row_id)
-        artifact_fp = artifact_fingerprint(row)
-        if artifact_fp:
-            if artifact_fp in seen_artifacts:
-                row_errors.append(f"duplicate artifact fingerprint; first seen in {seen_artifacts[artifact_fp]}")
-                leakage_summary["duplicate_artifact_fingerprints"] += 1
-            else:
-                seen_artifacts[artifact_fp] = str(row_id)
         if row_errors:
             rejected.append(_reject(row, row_errors))
         else:
@@ -282,19 +315,35 @@ def build_release(config: ReleaseConfig) -> tuple[dict[str, Any], int]:
     if len(accepted) < config.min_rows:
         errors.append(f"accepted rows {len(accepted)} is below min_rows {config.min_rows}")
     split = split_rows(accepted, config.ratios, config.seed, config.allow_family_overlap) if accepted else {"train": [], "val": [], "test": []}
-    if not config.allow_family_overlap:
-        families: dict[str, set[str]] = defaultdict(set)
-        for split_name, rows in split.items():
-            for row in rows:
-                families[row["design_family"]].add(split_name)
-        overlaps = {family: sorted(names) for family, names in families.items() if len(names) > 1}
-        if overlaps:
-            errors.extend(f"design family appears in multiple splits: {family} {names}" for family, names in overlaps.items())
+    family_overlaps = find_family_overlaps(split)
+    source_overlaps = find_source_overlaps(split)
+    artifact_overlaps = find_artifact_fingerprint_overlaps(split)
+    leakage_summary["family_overlaps"] = family_overlaps
+    leakage_summary["source_overlaps"] = source_overlaps
+    leakage_summary["artifact_fingerprint_overlaps"] = artifact_overlaps
+    leakage_summary["duplicate_artifact_fingerprints"] = len(artifact_overlaps)
+    if family_overlaps and not config.allow_family_overlap:
+        errors.extend(f"design family appears in multiple splits: {family} {details['splits']}" for family, details in family_overlaps.items())
+    if family_overlaps and config.allow_family_overlap:
+        warnings.extend(f"family overlap allowed for {family} across {details['splits']}" for family, details in family_overlaps.items())
+    if source_overlaps and not config.allow_source_overlap:
+        errors.extend(f"source appears in multiple splits: {source} {details['splits']}" for source, details in source_overlaps.items())
+    if source_overlaps and config.allow_source_overlap:
+        warnings.extend(f"source overlap allowed for {source} across {details['splits']}" for source, details in source_overlaps.items())
+    cross_split_artifacts = {fingerprint: details for fingerprint, details in artifact_overlaps.items() if len(details["splits"]) > 1}
+    same_split_artifacts = {fingerprint: details for fingerprint, details in artifact_overlaps.items() if len(details["splits"]) == 1}
+    warnings.extend(f"duplicate artifact fingerprint in one split for {fingerprint} in {details['splits']}" for fingerprint, details in same_split_artifacts.items())
+    if cross_split_artifacts and not config.allow_family_overlap:
+        errors.extend(f"duplicate artifact fingerprint crosses splits: {fingerprint} {details['splits']}" for fingerprint, details in cross_split_artifacts.items())
+    if cross_split_artifacts and config.allow_family_overlap:
+        warnings.extend(f"artifact fingerprint overlap allowed for {fingerprint} across {details['splits']}" for fingerprint, details in cross_split_artifacts.items())
     for name, rows in split.items():
         write_jsonl(release_dir / f"{name}.jsonl", rows)
     write_jsonl(release_dir / "rejected_rows.jsonl", rejected)
     write_jsonl(release_dir / "all_accepted.unsplit.jsonl", accepted)
     for name in ("train", "val", "test"):
+        if not split[name]:
+            continue
         report = validate_dataset_file(release_dir / f"{name}.jsonl", strict=True)
         errors.extend(item.format() for item in report.errors + report.warnings)
     stats = _stats(split, rejected, leakage_summary)

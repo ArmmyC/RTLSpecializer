@@ -72,10 +72,13 @@ python scripts/dataset/build_dataset_release.py \
   --input data/golden/golden_v0.1.jsonl \
   --output-dir data/releases \
   --seed 7 \
+  --allow-source-overlap \
   --json
 ```
 
-A release writes train/val/test JSONL files, `rejected_rows.jsonl`, `manifest.json` with SHA-256 hashes, `stats.json`, and `dataset_card.md`. Draft/rejected rows, uncertain licenses, duplicate IDs/fingerprints, import stubs, and invalid rows are excluded. Design families are isolated across splits by default to reduce leakage. See `docs/dataset/release_workflow.md`.
+A release writes train/val/test JSONL files, `rejected_rows.jsonl`, `manifest.json` with SHA-256 hashes, `stats.json`, and `dataset_card.md`. Draft/rejected rows, uncertain licenses, duplicate row IDs/full-row fingerprints, import stubs, and invalid rows are excluded.
+
+Design families and sources are isolated across splits by default to reduce leakage. Tiny single-source smoke releases, such as the golden-only example above, should pass `--allow-source-overlap` and treat the warning as an explicit audit note. Duplicate artifact fingerprints are checked after splitting: same-split duplicates are warnings, while cross-split duplicates fail unless overlap is explicitly allowed. See `docs/dataset/release_workflow.md`.
 
 ## Safety and provenance
 

@@ -17,6 +17,7 @@ python scripts/dataset/build_dataset_release.py \
   --input data/golden/golden_v0.1.jsonl \
   --output-dir data/releases \
   --seed 7 \
+  --allow-source-overlap \
   --json
 ```
 
@@ -32,13 +33,22 @@ Rows enter a release only when they:
 - have a known non-empty license,
 - do not contain generic public-import stub answer text,
 - do not contain private/proprietary source markers,
-- do not duplicate row IDs, full-row fingerprints, or artifact fingerprints.
+- do not duplicate row IDs or full-row fingerprints.
 
 Draft and rejected rows are written to `rejected_rows.jsonl` with their reason and original row.
 
 ## Split isolation
 
 By default the builder splits by `design_family` so the same family does not appear in multiple splits. This reduces leakage between train, validation, and test sets. Use `--allow-family-overlap` only for an explicit experiment.
+
+The builder also checks source overlap. By default, the same `source` enum may not appear in multiple splits. This is intentionally strict and can fail tiny smoke-test releases where all rows come from `handwritten_golden`; pass `--allow-source-overlap` when that overlap is intentional and documented. Allowed source overlap is recorded in `stats.json` and emitted as a warning.
+
+Duplicate checks have different meanings:
+
+- Duplicate row IDs and duplicate full-row fingerprints are rejected before splitting.
+- Duplicate artifact fingerprints are checked after splitting, once train/val/test membership is known.
+- Duplicate artifacts inside a single split are reported as warnings because they do not leak between train/val/test.
+- Duplicate artifacts crossing splits fail the release unless `--allow-family-overlap` is explicitly passed.
 
 ## Release files
 
@@ -55,7 +65,7 @@ Each release directory contains:
 
 `manifest.json` records the release name, schema versions, seed, ratios, input files, row counts, and SHA-256 hashes for generated files. Hashes are computed from file bytes after writing.
 
-`stats.json` records counts by split, source, task type, design family, review status, claim levels, rejection reason, and duplicate/leakage checks.
+`stats.json` records counts by split, source, task type, design family, review status, claim levels, rejection reason, and duplicate/leakage checks. The leakage summary includes `family_overlaps`, `source_overlaps`, and `artifact_fingerprint_overlaps` with row IDs and split names for debugging.
 
 ## Limitations
 
