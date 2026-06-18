@@ -174,7 +174,6 @@ def make_row(index: int, example: Example) -> dict:
         "assumptions": ["The artifact is synthetic and limited to the behavior shown; no unstated tool result is assumed."], "required_output": REQUIRED_OUTPUT,
     }
     levels = {"correctness": "suggestion_only", "area": "insufficient_evidence", "activity": "suggestion_only" if activity_task else "not_applicable", "power": "insufficient_evidence"}
-    if example.artifact_field == "synthesis_report": levels["area"] = "tool_supported"
     if example.artifact_field == "toggle_report": levels["activity"] = "tool_supported"
     answer = {
         "schema_version": "rtl_answer_v0.1", "task_type": example.task_type,

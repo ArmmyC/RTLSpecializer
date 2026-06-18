@@ -37,3 +37,13 @@ def test_weaker_claim_language_is_allowed(tmp_path, valid_row) -> None:
     report = validate_dataset_file(write_rows(tmp_path / "good.jsonl", [valid_row]))
     assert report.ok
 
+
+def test_improvement_claim_rejects_unknown_or_failed_check(tmp_path, valid_row) -> None:
+    _set_recommendation(valid_row, "Area is improved.")
+    for status in ("unknown", "fail", "not_run"):
+        valid_row["tool_checks"]["synthesis"] = {
+            "status": status, "tool": "synthetic_fixture", "version": None,
+            "summary": "Synthetic result", "artifact_ref": None,
+        }
+        report = validate_dataset_file(write_rows(tmp_path / f"{status}.jsonl", [valid_row]))
+        assert any("area improvement" in item.message for item in report.errors)

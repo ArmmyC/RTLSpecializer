@@ -62,6 +62,17 @@ _PLACEHOLDER_MARKERS = (
     "// synthetic before rtl",
     "// synthetic proposed rtl",
 )
+EVIDENCE_TOOLS = {
+    "correctness": ("simulation", "equivalence"),
+    "area": ("synthesis",),
+    "activity": ("toggle",),
+    "power": ("power",),
+}
+TOOL_ARTIFACTS = {
+    "lint": "lint_log",
+    "synthesis": "synthesis_report",
+    "toggle": "toggle_report",
+}
 _MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", re.IGNORECASE)
 _SUBSTANTIVE_RE = re.compile(
     r"\b(?:input|output|inout|logic|reg|wire)\b[^;]*(?:[,;)]|$)"
@@ -91,6 +102,49 @@ def artifact_has_substantive_rtl(text: str) -> bool:
 
 def is_placeholder_rtl(text: str) -> bool:
     return not artifact_has_substantive_rtl(text)
+
+
+def tool_check_status(row: dict[str, Any], tool: str) -> str | None:
+    checks = row.get("tool_checks")
+    if not isinstance(checks, dict):
+        return None
+    check = checks.get(tool)
+    if not isinstance(check, dict) or check.get("status") not in TOOL_STATUSES:
+        return None
+    return check["status"]
+
+
+def has_passing_tool_evidence(row: dict[str, Any], tool: str) -> bool:
+    return tool_check_status(row, tool) == "pass"
+
+
+def _relevant_artifact(row: dict[str, Any], tool: str) -> str | None:
+    artifact_name = TOOL_ARTIFACTS.get(tool)
+    messages = row.get("messages")
+    if not artifact_name or not isinstance(messages, list) or len(messages) < 2:
+        return None
+    user = messages[1]
+    task = user.get("content") if isinstance(user, dict) else None
+    artifacts = task.get("artifacts") if isinstance(task, dict) else None
+    value = artifacts.get(artifact_name) if isinstance(artifacts, dict) else None
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def has_tool_evidence(row: dict[str, Any], tool: str) -> bool:
+    status = tool_check_status(row, tool)
+    if status not in {"pass", "fail", "unknown"}:
+        return False
+    check = row["tool_checks"][tool]
+    summary = check.get("summary")
+    has_summary = isinstance(summary, str) and bool(summary.strip())
+    has_artifact = _relevant_artifact(row, tool) is not None
+    if not (has_summary or has_artifact):
+        return False
+    if status in {"fail", "unknown"}:
+        messages = row.get("messages")
+        task = messages[1].get("content") if isinstance(messages, list) and len(messages) > 1 and isinstance(messages[1], dict) else None
+        return isinstance(task, dict) and task.get("task_type") == "rtl_tool_report_explanation" and has_artifact
+    return True
 
 
 def validate_dataset_file(path: Path, strict: bool = False) -> ValidationReport:
@@ -363,14 +417,11 @@ def _validate_answer(answer: dict[str, Any], task: dict[str, Any], row: dict[str
         for domain in sorted(CLAIM_DOMAINS):
             if levels.get(domain) not in CLAIM_LEVELS:
                 error(f"messages[2].content.claim_levels.{domain}", f"invalid claim level {levels.get(domain)!r}")
-        evidence_tools = {
-            "correctness": ("simulation", "equivalence"),
-            "area": ("synthesis",), "activity": ("toggle",), "power": ("power",),
-        }
-        row_checks = row.get("tool_checks", {}) if isinstance(row.get("tool_checks"), dict) else {}
-        for domain, tools in evidence_tools.items():
-            if levels.get(domain) in {"tool_supported", "verified"} and not any(row_checks.get(tool) for tool in tools):
-                error(f"messages[2].content.claim_levels.{domain}", f"{levels[domain]} requires {' or '.join(tools)} evidence")
+        for domain, tools in EVIDENCE_TOOLS.items():
+            if levels.get(domain) == "verified" and not any(has_passing_tool_evidence(row, tool) for tool in tools):
+                error(f"messages[2].content.claim_levels.{domain}", f"verified requires a passing {' or '.join(tools)} check")
+            if levels.get(domain) == "tool_supported" and not any(has_tool_evidence(row, tool) for tool in tools):
+                error(f"messages[2].content.claim_levels.{domain}", f"tool_supported requires meaningful {' or '.join(tools)} evidence")
     if "claim_level" in answer:
         warning("messages[2].content.claim_level", "legacy claim_level is migration-only; use claim_levels")
         if "claim_levels" not in answer:

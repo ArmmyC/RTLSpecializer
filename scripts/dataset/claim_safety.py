@@ -16,6 +16,11 @@ def _has_warning(answer: dict[str, Any], section: str, words: tuple[str, ...]) -
     return any(word in text for word in words)
 
 
+def _has_passing_check(checks: dict[str, Any], tool: str) -> bool:
+    check = checks.get(tool)
+    return isinstance(check, dict) and check.get("status") == "pass"
+
+
 def find_unsupported_claims(row: dict[str, Any], answer: dict[str, Any]) -> list[tuple[str, str]]:
     text = _answer_text(answer)
     strong_text = re.sub(
@@ -31,16 +36,16 @@ def find_unsupported_claims(row: dict[str, Any], answer: dict[str, Any]) -> list
 
     strong_power = re.search(r"\b(reduces?|reduced|lower(?:s|ed)?|improves?|improved)\s+(?:the\s+)?power\b|\bpower\s+(?:(?:is|was|has been)\s+)?(?:reduced|lower|improved)", strong_text)
     measured_power = re.search(r"\b(measured|measurement|report(?:ed)?)\b[^.]{0,60}\bpower\b|\bpower\b[^.]{0,60}\b(measured|measurement)\b", text)
-    if strong_power and not checks.get("power"):
+    if strong_power and not _has_passing_check(checks, "power"):
         issues.append(("tool_checks.power", "unsupported power improvement claim without power evidence"))
     if measured_power and not artifacts.get("power_report"):
         issues.append(("messages[1].content.artifacts.power_report", "measured power claim requires a power report artifact"))
 
-    if re.search(r"\b(area (?:(?:is|was|has been) )?improved|reduces? area|area (?:reduced|decreased)|smaller area)\b", strong_text) and not checks.get("synthesis"):
+    if re.search(r"\b(area (?:(?:is|was|has been) )?improved|reduces? area|area (?:reduced|decreased)|smaller area)\b", strong_text) and not _has_passing_check(checks, "synthesis"):
         issues.append(("tool_checks.synthesis", "unsupported area improvement claim without synthesis evidence"))
-    if re.search(r"\b(guaranteed lower activity|switching (?:is|was) (?:reduced|improved)|reduces? (?:switching|toggle) activity|toggle (?:is|was) improved)\b", strong_text) and not checks.get("toggle"):
+    if re.search(r"\b(guaranteed lower activity|switching (?:is|was) (?:reduced|improved)|reduces? (?:switching|toggle) activity|toggle (?:is|was) improved)\b", strong_text) and not _has_passing_check(checks, "toggle"):
         issues.append(("tool_checks.toggle", "unsupported switching/toggle improvement claim without toggle evidence"))
-    if re.search(r"\b(correctness (?:is|was|has been) verified|verified correct|proven correct)\b", text) and not (checks.get("simulation") or checks.get("equivalence")):
+    if re.search(r"\b(correctness (?:is|was|has been) verified|verified correct|proven correct)\b", text) and not (_has_passing_check(checks, "simulation") or _has_passing_check(checks, "equivalence")):
         issues.append(("tool_checks.simulation", "unsupported verified correctness claim without simulation or equivalence evidence"))
 
     if re.search(r"\b(this |the )?patch is safe\b", text) and not answer.get("functional_risk"):

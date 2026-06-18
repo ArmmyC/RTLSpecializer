@@ -7,6 +7,9 @@ from scripts.dataset.io_utils import load_jsonl
 from scripts.dataset.validation import (
     artifact_has_substantive_rtl,
     extract_module_names,
+    has_passing_tool_evidence,
+    has_tool_evidence,
+    tool_check_status,
     validate_dataset_file,
 )
 from tests.dataset.conftest import GOLDEN, write_rows
@@ -112,3 +115,49 @@ def test_golden_ids_and_rtl_evidence_are_grounded() -> None:
             evidence = issue["evidence"]
             assert evidence["signal_names"]
             assert evidence["code_location"]["module"] in modules
+
+
+def _tool_check(status: str, summary: str = "Synthetic check result") -> dict:
+    return {"status": status, "tool": "synthetic_fixture", "version": None, "summary": summary, "artifact_ref": None}
+
+
+def test_verified_correctness_rejects_unknown_fail_and_not_run(tmp_path, valid_row) -> None:
+    valid_row["messages"][2]["content"]["claim_levels"]["correctness"] = "verified"
+    for status in ("unknown", "fail", "not_run"):
+        valid_row["tool_checks"]["simulation"] = _tool_check(status)
+        report = validate_dataset_file(write_rows(tmp_path / f"{status}.jsonl", [valid_row]))
+        assert any("verified requires a passing simulation or equivalence check" in item.message for item in report.errors)
+
+
+def test_verified_correctness_accepts_simulation_or_equivalence_pass(tmp_path, valid_row) -> None:
+    valid_row["messages"][2]["content"]["claim_levels"]["correctness"] = "verified"
+    valid_row["tool_checks"]["simulation"] = _tool_check("pass")
+    assert validate_dataset_file(write_rows(tmp_path / "simulation.jsonl", [valid_row])).ok
+    valid_row["tool_checks"]["simulation"] = None
+    valid_row["tool_checks"]["equivalence"] = _tool_check("pass")
+    assert validate_dataset_file(write_rows(tmp_path / "equivalence.jsonl", [valid_row])).ok
+
+
+def test_tool_supported_rejects_null_not_run_and_empty_evidence(tmp_path, valid_row) -> None:
+    valid_row["messages"][2]["content"]["claim_levels"]["activity"] = "tool_supported"
+    for name, check in (("null", None), ("not_run", _tool_check("not_run")), ("empty", _tool_check("pass", ""))):
+        valid_row["tool_checks"]["toggle"] = check
+        report = validate_dataset_file(write_rows(tmp_path / f"{name}.jsonl", [valid_row]))
+        assert any("tool_supported requires meaningful toggle evidence" in item.message for item in report.errors)
+
+
+def test_unknown_report_evidence_supports_conservative_tool_claim(tmp_path) -> None:
+    rows, problems = load_jsonl(GOLDEN)
+    assert not problems
+    row = next(row for _, row in rows if row["id"].startswith("golden_timer_report"))
+    assert tool_check_status(row, "toggle") == "unknown"
+    assert has_tool_evidence(row, "toggle")
+    assert not has_passing_tool_evidence(row, "toggle")
+    assert validate_dataset_file(write_rows(tmp_path / "toggle.jsonl", [row]), strict=True).ok
+
+
+def test_golden_synthesis_report_keeps_area_conservative() -> None:
+    rows, problems = load_jsonl(GOLDEN)
+    assert not problems
+    row = next(row for _, row in rows if row["id"].startswith("golden_fsm_report"))
+    assert row["messages"][2]["content"]["claim_levels"]["area"] == "insufficient_evidence"
