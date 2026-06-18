@@ -1,0 +1,1 @@
+Design a synchronous 4-bit counter with active-low reset and an enable input.

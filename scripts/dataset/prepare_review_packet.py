@@ -67,9 +67,21 @@ def _review_markdown(row: dict[str, Any]) -> str:
         lines.append(f"| `{key}` | `{value}` |")
     lines.extend(["", "## Provenance", "", "```json", json.dumps(provenance, indent=2), "```", "", "## Supplied artifacts", ""])
     for name, value in artifact_items(row):
-        lines.extend([f"### `{name}`", "", "```systemverilog", value, "```", ""])
+        if name == "lint_log" and value.startswith("VerilogEval prompt/specification"):
+            heading = "### VerilogEval prompt/specification"
+            displayed = value.split("\n", 1)[1] if "\n" in value else value
+            language = "text"
+        elif name == "rtl_code":
+            heading, displayed, language = "### Reference RTL", value, "systemverilog"
+        elif name == "testbench":
+            heading, displayed, language = "### Testbench/checker", value, "systemverilog"
+        elif name in {"before_rtl_code", "after_rtl_code"}:
+            heading, displayed, language = f"### `{name}`", value, "systemverilog"
+        else:
+            heading, displayed, language = f"### `{name}`", value, "text"
+        lines.extend([heading, "", f"```{language}", displayed, "```", ""])
     lines.extend([
-        "## Current assistant answer",
+        "## Draft assistant answer",
         "",
         "```json",
         json.dumps(answer, indent=2),

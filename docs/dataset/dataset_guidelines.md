@@ -77,6 +77,8 @@ python scripts/dataset/prepare_verilog_eval_review_batch.py \
 
 The batch script only creates draft rows and review packet files. It never downloads VerilogEval, runs EDA tools, calls an LLM, or marks rows validated. See `docs/dataset/verilog_eval_review_workflow.md`.
 
+Review-batch output directories are protected from overwrite by default. Use `--force` only to refresh the tool-generated files in an exact output directory. Raw VerilogEval files must stay under ignored local-only paths and must not be committed.
+
 ## Assemble a release
 
 Build release directories only from validated/reviewed local JSONL inputs:

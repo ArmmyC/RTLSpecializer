@@ -1,0 +1,1 @@
+Design an 8-bit right shift register with synchronous reset.

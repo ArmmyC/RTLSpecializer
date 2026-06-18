@@ -1,0 +1,4 @@
+{"task_id":"json_counter","prompt":"Design a small enabled counter.","canonical_solution":"module json_counter(input logic clk, en, output logic [2:0] q); always_ff @(posedge clk) if (en) q <= q + 3'd1; endmodule","testbench":"module tb; logic clk, en; logic [2:0] q; json_counter dut(.*); endmodule"}
+{"task_id":"json_missing_prompt","canonical_solution":"module missing_prompt(input logic a, output logic y); assign y = a; endmodule"}
+{"task_id":"json_missing_module","prompt":"Design a combinational inverter.","canonical_solution":"assign y = ~a;"}
+{"task_id":"json_shift","prompt":"Design a two-bit shift register.","canonical_solution":"module json_shift(input logic clk, d, output logic [1:0] q); always_ff @(posedge clk) q <= {q[0], d}; endmodule"}
