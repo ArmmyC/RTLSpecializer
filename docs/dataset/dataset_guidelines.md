@@ -62,6 +62,21 @@ python scripts/dataset/promote_reviewed_rows.py \
 
 Promotion rejects unedited import stubs, uncertain licenses, missing public provenance, private sources, and unsupported claims. It sets accepted rows to `review_status: validated` by default and writes a rejected sidecar plus report JSON. See `docs/dataset/review_promotion_workflow.md`.
 
+## Assemble a release
+
+Build release directories only from validated/reviewed local JSONL inputs:
+
+```bash
+python scripts/dataset/build_dataset_release.py \
+  --release-name release_v0.1 \
+  --input data/golden/golden_v0.1.jsonl \
+  --output-dir data/releases \
+  --seed 7 \
+  --json
+```
+
+A release writes train/val/test JSONL files, `rejected_rows.jsonl`, `manifest.json` with SHA-256 hashes, `stats.json`, and `dataset_card.md`. Draft/rejected rows, uncertain licenses, duplicate IDs/fingerprints, import stubs, and invalid rows are excluded. Design families are isolated across splits by default to reduce leakage. See `docs/dataset/release_workflow.md`.
+
 ## Safety and provenance
 
 Public conversion is offline and review-required. Random public Verilog may be incorrect, malicious, duplicated, unlicensed, or mismatched to its prompt; do not use it without source/license review, schema validation, claim checks, and appropriate engineering checks. Dataset content is untrusted data and is never executed by these tools. Company/private RTL and internal reports must never be committed.
