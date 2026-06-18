@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import re
 from typing import Any
 
 from .claim_safety import find_unsupported_claims
@@ -56,6 +57,42 @@ def _is_nonempty(value: Any) -> bool:
     return value is not None and value != "" and value != [] and value != {}
 
 
+_PLACEHOLDER_MARKERS = (
+    "// synthetic illustrative rtl",
+    "// synthetic before rtl",
+    "// synthetic proposed rtl",
+)
+_MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", re.IGNORECASE)
+_SUBSTANTIVE_RE = re.compile(
+    r"\b(?:input|output|inout|logic|reg|wire)\b[^;]*(?:[,;)]|$)"
+    r"|\bassign\s+[A-Za-z_][A-Za-z0-9_$\[\].]*\s*="
+    r"|\balways(?:_ff|_comb|_latch)?\s*(?:@|\()"
+    r"|\bcase[xz]?\s*\(|\bif\s*\("
+    r"|\b[A-Za-z_][A-Za-z0-9_$\[\].]*\s*(?:<=|=)\s*[^=]",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def extract_module_names(text: str) -> list[str]:
+    """Extract simple Verilog/SystemVerilog module names without parsing or execution."""
+    return _MODULE_RE.findall(text) if isinstance(text, str) else []
+
+
+def artifact_has_substantive_rtl(text: str) -> bool:
+    """Conservatively distinguish useful RTL snippets from empty placeholder modules."""
+    if not isinstance(text, str) or not text.strip():
+        return False
+    lowered = text.lower()
+    if any(marker in lowered for marker in _PLACEHOLDER_MARKERS):
+        return False
+    without_comments = re.sub(r"/\*.*?\*/|//[^\r\n]*", " ", text, flags=re.DOTALL)
+    return bool(extract_module_names(without_comments) and _SUBSTANTIVE_RE.search(without_comments))
+
+
+def is_placeholder_rtl(text: str) -> bool:
+    return not artifact_has_substantive_rtl(text)
+
+
 def validate_dataset_file(path: Path, strict: bool = False) -> ValidationReport:
     loaded, read_problems = load_jsonl(path)
     errors = [ValidationMessage(str(path), item.message, item.line) for item in read_problems]
@@ -85,6 +122,10 @@ def validate_dataset_file(path: Path, strict: bool = False) -> ValidationReport:
         for field, allowed in (("split", SPLITS), ("source", SOURCES), ("task_family", TASK_TYPES), ("review_status", REVIEW_STATUSES)):
             if field in row and row.get(field) not in allowed:
                 error(field, f"invalid {field} {row.get(field)!r}")
+        if row.get("split") in {"train", "val", "test"} and row.get("review_status") not in {"validated", "reviewed"}:
+            error("review_status", "train, val, and test rows must be validated or reviewed")
+        if row.get("split") == "unsplit" and row.get("review_status") == "rejected":
+            warning("review_status", "rejected unsplit row is not training-ready")
         for field in ("license", "design_family", "created_by"):
             if field in row and not isinstance(row.get(field), str) or field in row and not row.get(field):
                 error(field, "must be a non-empty string")
@@ -138,6 +179,7 @@ def validate_dataset_file(path: Path, strict: bool = False) -> ValidationReport:
 
         _validate_task(task, row, error)
         _validate_answer(answer, task, row, error, warning)
+        _validate_golden_quality(row, task, answer, error)
         for field, message in find_unsupported_claims(row, answer):
             error(field, message)
 
@@ -154,6 +196,46 @@ def validate_dataset_file(path: Path, strict: bool = False) -> ValidationReport:
     summary = {"by_task_type": dict(sorted(by_task.items()))}
     ok = not errors and (not strict or not warnings)
     return ValidationReport(ok, len(loaded), errors, warnings, summary)
+
+
+def _validate_golden_quality(row: dict[str, Any], task: dict[str, Any], answer: dict[str, Any], error: Any) -> None:
+    if row.get("source") != "handwritten_golden" or row.get("review_status") != "reviewed":
+        return
+    row_id = row.get("id", "")
+    if not re.fullmatch(r"golden_[a-z0-9_]+_(?:bug|activity|report|reject|compare)_\d{3}", row_id):
+        error("id", "reviewed golden row id must use descriptive golden_<family>_<task>_<number> format")
+    artifacts = task.get("artifacts", {})
+    if not isinstance(artifacts, dict):
+        return
+    task_type = task.get("task_type")
+    rtl_fields = ("before_rtl_code", "after_rtl_code") if task_type == "rtl_before_after_judgment" else ("rtl_code",)
+    rtl_values = [(field, artifacts.get(field)) for field in rtl_fields if _is_nonempty(artifacts.get(field))]
+    if task_type == "rtl_before_after_judgment":
+        for field in rtl_fields:
+            if not artifact_has_substantive_rtl(artifacts.get(field)):
+                error(f"messages[1].content.artifacts.{field}", "reviewed golden before/after rows require substantive RTL on both sides")
+    elif task_type != "rtl_tool_report_explanation":
+        if not rtl_values or not artifact_has_substantive_rtl(rtl_values[0][1]):
+            error("messages[1].content.artifacts.rtl_code", "reviewed golden rows must contain substantive RTL, not placeholder modules")
+    for field, text in rtl_values:
+        if not artifact_has_substantive_rtl(text):
+            error(f"messages[1].content.artifacts.{field}", "reviewed golden rows must contain substantive RTL, not placeholder modules")
+    if not rtl_values:
+        return
+    module_names = {name.lower() for _, text in rtl_values for name in extract_module_names(text)}
+    issues = answer.get("issue_summary", [])
+    for index, issue in enumerate(issues if isinstance(issues, list) else []):
+        evidence = issue.get("evidence", {}) if isinstance(issue, dict) else {}
+        signals = evidence.get("signal_names") if isinstance(evidence, dict) else None
+        if not isinstance(signals, list) or not signals:
+            error(f"messages[2].content.issue_summary[{index}].evidence.signal_names", "RTL-backed reviewed golden rows require concrete signal names")
+        location = evidence.get("code_location", {}) if isinstance(evidence, dict) else {}
+        module = location.get("module") if isinstance(location, dict) else None
+        if not isinstance(module, str) or module.lower() not in module_names:
+            error(f"messages[2].content.issue_summary[{index}].evidence.code_location.module", "must name a module present in the supplied RTL")
+        block = location.get("block") if isinstance(location, dict) else None
+        if block not in {"always_ff", "always_comb", "always", "assign", "case"}:
+            error(f"messages[2].content.issue_summary[{index}].evidence.code_location.block", "must identify a meaningful RTL block")
 
 
 def _validate_task(task: dict[str, Any], row: dict[str, Any], error: Any) -> None:

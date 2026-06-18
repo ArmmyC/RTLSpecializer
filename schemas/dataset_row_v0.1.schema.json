@@ -6,18 +6,35 @@
   "type": "object",
   "required": ["id", "dataset_version", "split", "source", "license", "design_family", "task_family", "created_by", "review_status", "provenance", "tool_checks", "messages"],
   "properties": {
-    "id": {"type": "string", "minLength": 1, "description": "Unique stable row identifier."},
+    "id": {"type": "string", "minLength": 1},
     "dataset_version": {"const": "dataset_v0.1"},
     "split": {"enum": ["train", "val", "test", "unsplit"]},
     "source": {"enum": ["handwritten_golden", "synthetic_rfid_style", "public_verilog_eval", "public_rtllm", "public_rtllm_2", "public_rtlfixer", "public_openllm_rtl", "teacher_generated", "llm_converted_public"]},
-    "license": {"type": "string", "minLength": 1, "description": "License or usage label."},
+    "license": {"type": "string", "minLength": 1},
     "design_family": {"type": "string", "minLength": 1},
     "task_family": {"enum": ["rtl_bug_review", "rtl_area_activity_review", "rtl_tool_report_explanation", "unsafe_optimization_rejection", "rtl_before_after_judgment"]},
     "created_by": {"type": "string", "minLength": 1},
     "review_status": {"enum": ["draft", "validated", "reviewed", "rejected"]},
-    "provenance": {"type": "object", "required": ["origin", "public_dataset_name", "public_dataset_url", "source_commit", "notes"], "description": "Traceable origin metadata."},
-    "tool_checks": {"type": "object", "required": ["parse", "lint", "simulation", "equivalence", "synthesis", "toggle", "power"], "description": "Evidence metadata; null means unavailable."},
-    "messages": {"type": "array", "minItems": 3, "maxItems": 3, "description": "System, user task, and assistant answer messages in order."}
+    "provenance": {
+      "type": "object", "required": ["origin", "public_dataset_name", "public_dataset_url", "source_commit", "notes"],
+      "properties": {"origin": {"type": "string", "minLength": 1}, "public_dataset_name": {"type": ["string", "null"]}, "public_dataset_url": {"type": ["string", "null"]}, "source_commit": {"type": ["string", "null"]}, "notes": {"type": "string"}}
+    },
+    "tool_checks": {
+      "type": "object", "required": ["parse", "lint", "simulation", "equivalence", "synthesis", "toggle", "power"],
+      "properties": {"parse": {"$ref": "#/$defs/toolCheck"}, "lint": {"$ref": "#/$defs/toolCheck"}, "simulation": {"$ref": "#/$defs/toolCheck"}, "equivalence": {"$ref": "#/$defs/toolCheck"}, "synthesis": {"$ref": "#/$defs/toolCheck"}, "toggle": {"$ref": "#/$defs/toolCheck"}, "power": {"$ref": "#/$defs/toolCheck"}}
+    },
+    "messages": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "prefixItems": [
+        {"type": "object", "required": ["role", "content"], "properties": {"role": {"const": "system"}, "content": {"type": "string", "minLength": 1}}},
+        {"type": "object", "required": ["role", "content"], "properties": {"role": {"const": "user"}, "content": {"type": "object"}}},
+        {"type": "object", "required": ["role", "content"], "properties": {"role": {"const": "assistant"}, "content": {"type": "object"}}}
+      ]
+    }
   },
-  "example": {"id": "golden_counter_bug_001", "dataset_version": "dataset_v0.1", "split": "unsplit", "source": "handwritten_golden", "license": "project_internal", "design_family": "counter", "task_family": "rtl_bug_review", "created_by": "human", "review_status": "reviewed"}
+  "allOf": [{"if": {"properties": {"split": {"enum": ["train", "val", "test"]}}}, "then": {"properties": {"review_status": {"enum": ["validated", "reviewed"]}}}}],
+  "$defs": {
+    "toolCheck": {"anyOf": [{"type": "null"}, {"type": "object", "required": ["status"], "properties": {"status": {"enum": ["pass", "fail", "not_run", "unknown"]}, "tool": {"type": ["string", "null"]}, "version": {"type": ["string", "null"]}, "summary": {"type": ["string", "null"]}, "artifact_ref": {"type": ["string", "null"]}}}]}
+  },
+  "examples": [{"id": "golden_counter_bug_001", "dataset_version": "dataset_v0.1", "split": "unsplit", "source": "handwritten_golden", "license": "project_internal", "design_family": "counter", "task_family": "rtl_bug_review", "created_by": "human", "review_status": "reviewed"}]
 }

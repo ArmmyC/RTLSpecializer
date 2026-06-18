@@ -6,16 +6,70 @@
   "type": "object",
   "required": ["schema_version", "domain", "task_type", "user_goal", "design_context", "artifacts", "extracted_rtl_summary", "constraints", "assumptions", "required_output"],
   "properties": {
-    "schema_version": {"const": "rtl_task_v0.1", "description": "Task schema version."},
-    "domain": {"const": "digital_rtl", "description": "Engineering domain."},
-    "task_type": {"enum": ["rtl_bug_review", "rtl_area_activity_review", "rtl_tool_report_explanation", "unsafe_optimization_rejection", "rtl_before_after_judgment"], "description": "Requested analysis family."},
-    "user_goal": {"enum": ["find_correctness_bug", "reduce_switching_activity", "reduce_area", "explain_lint_log", "explain_synthesis_report", "explain_toggle_report", "compare_before_after", "suggest_safe_patch", "reject_unsafe_optimization"], "description": "Requested outcome."},
-    "design_context": {"type": "object", "description": "Target and engineering priorities."},
-    "artifacts": {"type": "object", "description": "Untrusted input artifacts; at least one must be populated.", "properties": {"rtl_code": {"type": ["string", "null"]}, "before_rtl_code": {"type": ["string", "null"]}, "after_rtl_code": {"type": ["string", "null"]}, "testbench": {"type": ["string", "null"]}, "synthesis_report": {"type": ["string", "null"]}, "toggle_report": {"type": ["string", "null"]}, "lint_log": {"type": ["string", "null"]}}},
-    "extracted_rtl_summary": {"type": "object", "description": "Non-authoritative structural summary."},
-    "constraints": {"type": "object", "description": "Safety constraints.", "required": ["preserve_cycle_level_behavior", "do_not_claim_power_without_power_report"]},
-    "assumptions": {"type": "array", "description": "Explicit assumptions."},
-    "required_output": {"type": "array", "description": "Required answer sections."}
+    "schema_version": {"const": "rtl_task_v0.1"},
+    "domain": {"const": "digital_rtl"},
+    "task_type": {"enum": ["rtl_bug_review", "rtl_area_activity_review", "rtl_tool_report_explanation", "unsafe_optimization_rejection", "rtl_before_after_judgment"]},
+    "user_goal": {"enum": ["find_correctness_bug", "reduce_switching_activity", "reduce_area", "explain_lint_log", "explain_synthesis_report", "explain_toggle_report", "compare_before_after", "suggest_safe_patch", "reject_unsafe_optimization"]},
+    "design_context": {
+      "type": "object",
+      "required": ["target_domain", "priority", "timing_policy"],
+      "properties": {
+        "target_domain": {"type": "string", "minLength": 1},
+        "priority": {"type": "array", "items": {"type": "string"}},
+        "timing_policy": {"type": "string", "minLength": 1}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["rtl_code", "before_rtl_code", "after_rtl_code", "testbench", "synthesis_report", "toggle_report", "lint_log"],
+      "properties": {
+        "rtl_code": {"type": ["string", "null"]},
+        "before_rtl_code": {"type": ["string", "null"]},
+        "after_rtl_code": {"type": ["string", "null"]},
+        "testbench": {"type": ["string", "null"]},
+        "synthesis_report": {"type": ["string", "null"]},
+        "toggle_report": {"type": ["string", "null"]},
+        "lint_log": {"type": ["string", "null"]}
+      },
+      "anyOf": [
+        {"properties": {"rtl_code": {"type": "string", "minLength": 1}}},
+        {"properties": {"before_rtl_code": {"type": "string", "minLength": 1}}},
+        {"properties": {"after_rtl_code": {"type": "string", "minLength": 1}}},
+        {"properties": {"testbench": {"type": "string", "minLength": 1}}},
+        {"properties": {"synthesis_report": {"type": "string", "minLength": 1}}},
+        {"properties": {"toggle_report": {"type": "string", "minLength": 1}}},
+        {"properties": {"lint_log": {"type": "string", "minLength": 1}}}
+      ]
+    },
+    "extracted_rtl_summary": {
+      "type": "object",
+      "required": ["top_module", "clock_signals", "reset_signals", "registered_signals", "combinational_blocks", "suspected_fsm_signals", "suspected_counters", "unused_enable_signals", "activity_hotspots"],
+      "properties": {
+        "top_module": {"type": ["string", "null"]},
+        "clock_signals": {"type": "array", "items": {"type": "string"}},
+        "reset_signals": {"type": "array", "items": {"type": "string"}},
+        "registered_signals": {"type": "array", "items": {"type": "string"}},
+        "combinational_blocks": {"type": "array", "items": {"type": "string"}},
+        "suspected_fsm_signals": {"type": "array", "items": {"type": "string"}},
+        "suspected_counters": {"type": "array", "items": {"type": "string"}},
+        "unused_enable_signals": {"type": "array", "items": {"type": "string"}},
+        "activity_hotspots": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "required": ["preserve_top_level_interface", "preserve_cycle_level_behavior", "preserve_reset_behavior", "do_not_claim_power_without_power_report", "prefer_minimal_patch"],
+      "properties": {
+        "preserve_top_level_interface": {"type": "boolean"},
+        "preserve_cycle_level_behavior": {"type": "boolean"},
+        "preserve_reset_behavior": {"type": "boolean"},
+        "do_not_claim_power_without_power_report": {"const": true},
+        "prefer_minimal_patch": {"type": "boolean"}
+      }
+    },
+    "assumptions": {"type": "array", "items": {"type": "string"}},
+    "required_output": {"type": "array", "allOf": [{"contains": {"const": "issue_summary"}}, {"contains": {"const": "time_reasoning"}}, {"contains": {"const": "space_reasoning"}}, {"contains": {"const": "safe_optimization"}}, {"contains": {"const": "functional_risk"}}, {"contains": {"const": "verification_plan"}}, {"contains": {"const": "claim_levels"}}]}
   },
-  "example": {"schema_version": "rtl_task_v0.1", "domain": "digital_rtl", "task_type": "rtl_bug_review", "user_goal": "find_correctness_bug"}
+  "allOf": [{"if": {"properties": {"task_type": {"not": {"const": "unsafe_optimization_rejection"}}}}, "then": {"properties": {"constraints": {"properties": {"preserve_cycle_level_behavior": {"const": true}}}}}}],
+  "examples": [{"schema_version": "rtl_task_v0.1", "domain": "digital_rtl", "task_type": "rtl_bug_review", "user_goal": "find_correctness_bug"}]
 }

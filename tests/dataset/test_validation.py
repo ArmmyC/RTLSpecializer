@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 
 from scripts.dataset.io_utils import load_jsonl
-from scripts.dataset.validation import validate_dataset_file
+from scripts.dataset.validation import (
+    artifact_has_substantive_rtl,
+    extract_module_names,
+    validate_dataset_file,
+)
 from tests.dataset.conftest import GOLDEN, write_rows
 
 
@@ -54,3 +59,56 @@ def test_load_jsonl_ignores_blanks_and_reports_malformed_line(tmp_path, valid_ro
     assert len(rows) == 1
     assert problems[0].line == 3
 
+
+def test_substantive_rtl_heuristic_accepts_counter_and_mux() -> None:
+    counter = "module c(input logic clk, output logic [3:0] q); always_ff @(posedge clk) q <= q + 1'b1; endmodule"
+    mux = "module m(input wire s, a, b, output wire y); assign y = s ? a : b; endmodule"
+    assert artifact_has_substantive_rtl(counter)
+    assert artifact_has_substantive_rtl(mux)
+
+
+def test_substantive_rtl_heuristic_rejects_empty_placeholder() -> None:
+    assert not artifact_has_substantive_rtl("module sample_0; // synthetic illustrative RTL\nendmodule")
+    assert not artifact_has_substantive_rtl("module empty; // comments only\nendmodule")
+
+
+def test_extract_module_names() -> None:
+    assert extract_module_names("module alpha; endmodule\nmodule beta(input wire x); endmodule") == ["alpha", "beta"]
+
+
+def test_reviewed_golden_placeholder_fails(tmp_path, valid_row) -> None:
+    valid_row["messages"][1]["content"]["artifacts"]["rtl_code"] = "module empty; // comments only\nendmodule"
+    report = validate_dataset_file(write_rows(tmp_path / "bad.jsonl", [valid_row]))
+    assert any("substantive RTL" in item.message for item in report.errors)
+
+
+def test_reviewed_golden_substantive_rtl_passes(tmp_path, valid_row) -> None:
+    report = validate_dataset_file(write_rows(tmp_path / "good.jsonl", [valid_row]), strict=True)
+    assert report.ok, [item.format() for item in report.errors]
+
+
+def test_processed_draft_fails_but_unsplit_draft_passes(tmp_path, valid_row) -> None:
+    valid_row["review_status"] = "draft"
+    valid_row["split"] = "train"
+    report = validate_dataset_file(write_rows(tmp_path / "train.jsonl", [valid_row]))
+    assert any(item.field == "review_status" and "validated or reviewed" in item.message for item in report.errors)
+    valid_row["split"] = "unsplit"
+    report = validate_dataset_file(write_rows(tmp_path / "unsplit.jsonl", [valid_row]), strict=True)
+    assert report.ok
+
+
+def test_golden_ids_and_rtl_evidence_are_grounded() -> None:
+    rows, problems = load_jsonl(GOLDEN)
+    assert not problems
+    for _, row in rows:
+        assert re.fullmatch(r"golden_[a-z0-9_]+_(?:bug|activity|report|reject|compare)_\d{3}", row["id"])
+        task = row["messages"][1]["content"]
+        answer = row["messages"][2]["content"]
+        rtl = "\n".join(value for key, value in task["artifacts"].items() if key in {"rtl_code", "before_rtl_code", "after_rtl_code"} and value)
+        if not rtl:
+            continue
+        modules = set(extract_module_names(rtl))
+        for issue in answer["issue_summary"]:
+            evidence = issue["evidence"]
+            assert evidence["signal_names"]
+            assert evidence["code_location"]["module"] in modules

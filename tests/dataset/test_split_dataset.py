@@ -5,7 +5,7 @@ import subprocess
 import sys
 
 from scripts.dataset.validation import validate_dataset_file
-from tests.dataset.conftest import GOLDEN, ROOT
+from tests.dataset.conftest import GOLDEN, ROOT, write_rows
 
 
 def test_split_command_creates_valid_isolated_files(tmp_path) -> None:
@@ -33,3 +33,12 @@ def test_invalid_split_ratios_fail(tmp_path) -> None:
     assert completed.returncode == 1
     assert "sum to 1.0" in completed.stdout
 
+
+def test_split_rejects_unsplit_draft_without_override(tmp_path, valid_row) -> None:
+    valid_row["review_status"] = "draft"
+    input_path = write_rows(tmp_path / "draft.jsonl", [valid_row])
+    output_path = tmp_path / "output"
+    command = [sys.executable, str(ROOT / "scripts/dataset/split_dataset.py"), "--input", str(input_path), "--output-dir", str(output_path)]
+    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+    assert completed.returncode == 1
+    assert "--allow-unreviewed" in completed.stdout

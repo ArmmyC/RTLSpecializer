@@ -6,17 +6,52 @@
   "type": "object",
   "required": ["schema_version", "task_type", "issue_summary", "time_reasoning", "space_reasoning", "safe_optimization", "functional_risk", "verification_plan", "claim_levels", "patch"],
   "properties": {
-    "schema_version": {"const": "rtl_answer_v0.1", "description": "Answer schema version."},
+    "schema_version": {"const": "rtl_answer_v0.1"},
     "task_type": {"enum": ["rtl_bug_review", "rtl_area_activity_review", "rtl_tool_report_explanation", "unsafe_optimization_rejection", "rtl_before_after_judgment"]},
-    "issue_summary": {"type": "array", "minItems": 1, "description": "Issues supported by supplied evidence.", "items": {"type": "object", "required": ["issue", "severity", "evidence"], "properties": {"issue": {"type": "string"}, "severity": {"enum": ["low", "medium", "high"]}, "evidence": {"type": "object"}}}},
-    "time_reasoning": {"type": "object", "description": "Cycle, state, latency, and reset risks."},
-    "space_reasoning": {"type": "object", "description": "Resource, area, and activity reasoning."},
-    "safe_optimization": {"type": "object", "description": "Conservative recommendation."},
-    "functional_risk": {"type": "array", "description": "Risks that require verification."},
-    "verification_plan": {"type": "array", "description": "Required tool or review checks."},
-    "claim_levels": {"type": "object", "required": ["correctness", "area", "activity", "power"], "description": "Per-domain confidence.", "properties": {"correctness": {"$ref": "#/$defs/claim"}, "area": {"$ref": "#/$defs/claim"}, "activity": {"$ref": "#/$defs/claim"}, "power": {"$ref": "#/$defs/claim"}}},
-    "patch": {"type": "object", "description": "Optional patch metadata."}
+    "issue_summary": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["issue", "severity", "evidence"],
+        "properties": {
+          "issue": {"type": "string", "minLength": 1},
+          "severity": {"enum": ["low", "medium", "high"]},
+          "evidence": {
+            "type": "object", "required": ["signal_names", "code_location", "reason"],
+            "properties": {
+              "signal_names": {"type": "array", "items": {"type": "string", "minLength": 1}},
+              "code_location": {
+                "type": "object", "required": ["module", "block", "line_range"],
+                "properties": {"module": {"type": ["string", "null"]}, "block": {"type": ["string", "null"]}, "line_range": {"type": ["string", "null"]}}
+              },
+              "reason": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "time_reasoning": {
+      "type": "object", "required": ["clock_cycle_behavior", "latency_or_state_risk", "reset_behavior_risk"],
+      "properties": {"clock_cycle_behavior": {"type": "string"}, "latency_or_state_risk": {"type": "string"}, "reset_behavior_risk": {"type": "string"}}
+    },
+    "space_reasoning": {
+      "type": "object", "required": ["hardware_resources_involved", "area_risk", "activity_risk"],
+      "properties": {"hardware_resources_involved": {"type": "array", "items": {"type": "string"}}, "area_risk": {"type": "string"}, "activity_risk": {"type": "string"}}
+    },
+    "safe_optimization": {
+      "type": "object", "required": ["recommendation", "patch_style", "expected_effect", "requires_spec_confirmation"],
+      "properties": {"recommendation": {"type": "string", "minLength": 1}, "patch_style": {"type": "string", "minLength": 1}, "expected_effect": {"type": "string", "minLength": 1}, "requires_spec_confirmation": {"type": "boolean"}}
+    },
+    "functional_risk": {"type": "array", "items": {"type": "string"}},
+    "verification_plan": {"type": "array", "items": {"type": "string"}},
+    "claim_levels": {
+      "type": "object", "required": ["correctness", "area", "activity", "power"],
+      "properties": {"correctness": {"$ref": "#/$defs/claim"}, "area": {"$ref": "#/$defs/claim"}, "activity": {"$ref": "#/$defs/claim"}, "power": {"$ref": "#/$defs/claim"}}
+    },
+    "patch": {
+      "type": "object", "required": ["provided", "patch_type", "diff", "notes"],
+      "properties": {"provided": {"type": "boolean"}, "patch_type": {"type": "string"}, "diff": {"type": ["string", "null"]}, "notes": {"type": ["string", "null"]}}
+    }
   },
   "$defs": {"claim": {"enum": ["suggestion_only", "tool_supported", "verified", "insufficient_evidence", "not_applicable"]}},
-  "example": {"schema_version": "rtl_answer_v0.1", "task_type": "rtl_bug_review", "claim_levels": {"correctness": "suggestion_only", "area": "insufficient_evidence", "activity": "not_applicable", "power": "insufficient_evidence"}}
+  "examples": [{"schema_version": "rtl_answer_v0.1", "task_type": "rtl_bug_review", "claim_levels": {"correctness": "suggestion_only", "area": "insufficient_evidence", "activity": "not_applicable", "power": "insufficient_evidence"}}]
 }
