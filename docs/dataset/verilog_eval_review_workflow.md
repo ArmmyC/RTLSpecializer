@@ -12,6 +12,13 @@ data/.local_data/verilog-eval-main/
 
 `data/.local_data/` is ignored. Raw VerilogEval files must stay local-only and must not be committed.
 
+Generated-data tracking policy:
+
+- `data/review/` is a local-only human-review workspace by default.
+- `data/drafts/` contains untrusted generated drafts and stays local by default.
+- `data/processed/` may contain promoted and validated rows, but those rows should be considered for commit only after human review and license/provenance approval.
+- `data/releases/` and `data/eval/runs/` are generated artifacts that normally stay local unless a specific release or evaluation result is intentionally published.
+
 Supported inputs:
 
 - a public manifest JSONL using `docs/dataset/public_manifest_format.md`,
