@@ -65,6 +65,20 @@ source: public_verilog_eval
 
 A reviewer should edit `reviewed_rows.jsonl` so each answer is grounded in real signals/code, has conservative claim levels, and includes no unsupported verification, area, activity, or power claim.
 
+Before promotion, run the read-only readiness checker. It compares the edited answers with the selected drafts, catches missing/extra/duplicate IDs, rejects unchanged import stubs, and dry-runs the public promotion gates without writing processed rows:
+
+```bash
+python scripts/dataset/check_review_batch_readiness.py \
+  --selected data/review/verilog_eval_batch_001/selected_rows.jsonl \
+  --reviewed data/review/verilog_eval_batch_001/reviewed_rows.jsonl \
+  --output-json data/review/verilog_eval_batch_001/readiness_report.json \
+  --output-md data/review/verilog_eval_batch_001/readiness_report.md \
+  --strict \
+  --json
+```
+
+Fix each reported row and rerun the check. See [the review readiness workflow](review_readiness_workflow.md) for report details. Promote only after every intended row is ready.
+
 Then run:
 
 ```bash

@@ -17,3 +17,5 @@ Dataset releases assemble validated/reviewed rows into deterministic train/val/t
 Local deterministic evaluation consumes release rows plus candidate answer JSONL and writes rubric scores, metrics, and reports without model calls. See [docs/eval/evaluation_harness.md](docs/eval/evaluation_harness.md).
 
 VerilogEval-derived review batches can be prepared from local staged data only; rows remain draft until human review and promotion. See [docs/dataset/verilog_eval_review_workflow.md](docs/dataset/verilog_eval_review_workflow.md).
+
+Manually edited review batches can be checked locally for structural validity, changed answers, stubs, ID mismatches, and promotion-gate failures before any promotion occurs. See [docs/dataset/review_readiness_workflow.md](docs/dataset/review_readiness_workflow.md).
