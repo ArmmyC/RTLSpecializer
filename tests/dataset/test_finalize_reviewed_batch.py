@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+
+import pytest
 
 import scripts.dataset.finalize_reviewed_batch as finalizer
 from scripts.dataset.finalize_reviewed_batch import FinalizationConfig, finalize_batch
@@ -37,6 +40,13 @@ def _config(tmp_path: Path, batch: Path, *, force: bool = False) -> Finalization
         allow_source_overlap=True,
         force=force,
     )
+
+
+def _directory_symlink(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
 
 
 def test_finalization_stops_for_unchanged_review(tmp_path) -> None:
@@ -165,6 +175,72 @@ def test_force_replaces_only_managed_outputs(tmp_path) -> None:
     assert finalize_batch(forced)["ok"] is True
     assert unknown_batch_file.read_text(encoding="utf-8") == "keep\n"
     assert unknown_parent_file.read_text(encoding="utf-8") == "keep\n"
+
+
+@pytest.mark.parametrize("output_name", ["release_dir", "eval_dir"])
+def test_force_rejects_symlinked_managed_output_directory(tmp_path, output_name) -> None:
+    batch = _batch(tmp_path)
+    config = _config(tmp_path, batch, force=True)
+    target = tmp_path / f"{output_name}_target"
+    target.mkdir()
+    sentinel = target / "keep.txt"
+    sentinel.write_text("keep\n", encoding="utf-8")
+    output = (
+        config.release_output_dir / config.release_name
+        if output_name == "release_dir"
+        else config.eval_output_dir
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    _directory_symlink(output, target)
+
+    result = finalize_batch(config)
+
+    assert result["ok"] is False
+    assert "managed output directory must not be a symlink" in " ".join(result["errors"])
+    assert output.is_symlink()
+    assert sentinel.read_text(encoding="utf-8") == "keep\n"
+
+
+@pytest.mark.parametrize("dangerous", [Path.home(), ROOT, Path(ROOT.anchor)])
+def test_managed_output_directory_rejects_dangerous_roots(tmp_path, dangerous) -> None:
+    config = replace(_config(tmp_path, _batch(tmp_path), force=True), eval_output_dir=dangerous)
+
+    result = finalize_batch(config)
+
+    assert result["ok"] is False
+    assert "managed output directory must not be" in " ".join(result["errors"])
+
+
+def test_managed_output_directory_cannot_contain_batch_inputs(tmp_path) -> None:
+    release_root = tmp_path / "releases"
+    batch_parent = release_root / "fixture_release"
+    batch_parent.mkdir(parents=True)
+    config = _config(tmp_path, _batch(batch_parent), force=True)
+
+    result = finalize_batch(config)
+
+    assert result["ok"] is False
+    assert "release_dir must not contain an input path" in " ".join(result["errors"])
+
+
+def test_cli_json_preflight_failure_is_parseable(tmp_path) -> None:
+    missing_batch = tmp_path / "missing"
+    completed = subprocess.run([
+        sys.executable, "scripts/dataset/finalize_reviewed_batch.py",
+        "--batch-dir", str(missing_batch),
+        "--processed-output", str(tmp_path / "processed.jsonl"),
+        "--promotion-report", str(tmp_path / "promotion.json"),
+        "--release-name", "fixture_release",
+        "--release-output-dir", str(tmp_path / "releases"),
+        "--candidate-output", str(tmp_path / "candidates.jsonl"),
+        "--eval-output-dir", str(tmp_path / "eval"),
+        "--golden-input", str(GOLDEN), "--json", "--force",
+    ], cwd=ROOT, text=True, capture_output=True, check=False)
+
+    payload = json.loads(completed.stdout)
+    assert completed.returncode == 1
+    assert payload["ok"] is False
+    assert any("batch directory not found" in error for error in payload["errors"])
 
 
 def test_local_data_output_is_rejected(tmp_path) -> None:

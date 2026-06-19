@@ -22,6 +22,9 @@ from scripts.eval.evaluator import evaluate_dataset, load_candidate_answers, loa
 from scripts.eval.make_baseline_candidates import make_candidates
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 @dataclass(frozen=True)
 class FinalizationConfig:
     batch_dir: Path
@@ -38,7 +41,11 @@ class FinalizationConfig:
 
 
 def _inside_local_data(path: Path) -> bool:
-    return any(part.lower() == ".local_data" for part in path.resolve().parts)
+    return any(
+        part.lower() == ".local_data"
+        for candidate in (path.absolute(), path.resolve())
+        for part in candidate.parts
+    )
 
 
 def _is_within(path: Path, directory: Path) -> bool:
@@ -47,6 +54,25 @@ def _is_within(path: Path, directory: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _exists_or_symlink(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _is_filesystem_root(path: Path) -> bool:
+    resolved = path.resolve()
+    return resolved.parent == resolved
+
+
+def _symlink_in_ancestry(path: Path) -> Path | None:
+    current = path.absolute()
+    while True:
+        if current.is_symlink():
+            return current
+        if current.parent == current:
+            return None
+        current = current.parent
 
 
 def _paths(config: FinalizationConfig) -> dict[str, Path]:
@@ -87,19 +113,35 @@ def _preflight(config: FinalizationConfig, paths: dict[str, Path]) -> list[str]:
         errors.append(f"batch directory must not be inside .local_data: {config.batch_dir}")
     if _inside_local_data(config.golden_input):
         errors.append(f"golden input must not be inside .local_data: {config.golden_input}")
-    managed = {name: path.resolve() for name, path in paths.items() if name not in {"selected", "reviewed"}}
+    managed_paths = {name: path for name, path in paths.items() if name not in {"selected", "reviewed"}}
+    managed = {name: path.resolve() for name, path in managed_paths.items()}
     by_path: dict[Path, list[str]] = {}
     for name, path in managed.items():
         by_path.setdefault(path, []).append(name)
     for path, names in by_path.items():
         if len(names) > 1:
             errors.append(f"managed output paths collide ({', '.join(sorted(names))}): {path}")
-    protected = [paths["selected"], paths["reviewed"], config.golden_input]
+    protected = [config.batch_dir, paths["selected"], paths["reviewed"], config.golden_input]
     for name, path in managed.items():
         if any(path == item.resolve() for item in protected):
             errors.append(f"managed output must not overwrite an input ({name}): {path}")
     for directory_name in ("release_dir", "eval_dir"):
         directory = paths[directory_name]
+        if directory.is_symlink():
+            errors.append(f"managed output directory must not be a symlink: {directory}")
+        else:
+            symlink_ancestor = _symlink_in_ancestry(directory.parent)
+            if symlink_ancestor is not None:
+                errors.append(
+                    f"managed output directory ancestry must not contain a symlink: {symlink_ancestor}"
+                )
+        resolved_directory = directory.resolve()
+        if _is_filesystem_root(directory):
+            errors.append(f"managed output directory must not be a filesystem root: {directory}")
+        if resolved_directory == REPO_ROOT:
+            errors.append(f"managed output directory must not be the repository root: {directory}")
+        if resolved_directory == Path.home().resolve():
+            errors.append(f"managed output directory must not be the home directory: {directory}")
         if any(_is_within(item, directory) for item in protected):
             errors.append(f"{directory_name} must not contain an input path: {directory}")
     if _is_within(paths["release_dir"], paths["eval_dir"]) or _is_within(paths["eval_dir"], paths["release_dir"]):
@@ -110,30 +152,44 @@ def _preflight(config: FinalizationConfig, paths: dict[str, Path]) -> list[str]:
         if _is_within(path, paths["release_dir"]) or _is_within(path, paths["eval_dir"]):
             errors.append(f"managed output must not be nested inside release/evaluation directories: {path}")
     if not config.force:
-        for name, path in managed.items():
-            if path.exists():
+        for name, path in managed_paths.items():
+            if _exists_or_symlink(path):
                 errors.append(f"output already exists ({name}); use --force to replace it: {path}")
     else:
-        for name, path in managed.items():
+        for name, path in managed_paths.items():
             expects_directory = name in {"release_dir", "eval_dir"}
-            if path.exists() and expects_directory != path.is_dir():
+            if _exists_or_symlink(path) and expects_directory != path.is_dir():
                 expected = "directory" if expects_directory else "file"
                 errors.append(f"existing managed output is not a {expected} ({name}): {path}")
     return errors
 
 
 def _remove_file(path: Path) -> None:
-    if path.exists():
-        if not path.is_file():
+    if _exists_or_symlink(path):
+        if not path.is_symlink() and not path.is_file():
             raise ValueError(f"expected generated file path but found non-file: {path}")
         path.unlink()
 
 
-def _remove_dir(path: Path) -> None:
-    if path.exists():
+def _remove_dir(path: Path, protected: list[Path]) -> None:
+    if _exists_or_symlink(path):
+        if path.is_symlink():
+            raise ValueError(f"managed output directory must not be a symlink: {path}")
         if not path.is_dir():
             raise ValueError(f"expected generated directory path but found non-directory: {path}")
-        shutil.rmtree(path.resolve())
+        if _inside_local_data(path):
+            raise ValueError(f"output must not be inside .local_data: {path}")
+        symlink_ancestor = _symlink_in_ancestry(path.parent)
+        if symlink_ancestor is not None:
+            raise ValueError(
+                f"managed output directory ancestry must not contain a symlink: {symlink_ancestor}"
+            )
+        resolved = path.resolve()
+        if _is_filesystem_root(path) or resolved in {REPO_ROOT, Path.home().resolve()}:
+            raise ValueError(f"refusing to remove dangerous managed output directory: {path}")
+        if any(_is_within(item, path) for item in protected):
+            raise ValueError(f"managed output directory must not contain an input path: {path}")
+        shutil.rmtree(path)
 
 
 def _cleanup_reports(paths: dict[str, Path]) -> None:
@@ -141,11 +197,12 @@ def _cleanup_reports(paths: dict[str, Path]) -> None:
         _remove_file(paths[name])
 
 
-def _cleanup_pipeline_outputs(paths: dict[str, Path]) -> None:
+def _cleanup_pipeline_outputs(config: FinalizationConfig, paths: dict[str, Path]) -> None:
     for name in ("processed", "promotion_report", "promotion_rejected", "candidate"):
         _remove_file(paths[name])
-    _remove_dir(paths["release_dir"])
-    _remove_dir(paths["eval_dir"])
+    protected = [config.batch_dir, paths["selected"], paths["reviewed"], config.golden_input]
+    _remove_dir(paths["release_dir"], protected)
+    _remove_dir(paths["eval_dir"], protected)
 
 
 def _empty_summary(config: FinalizationConfig, paths: dict[str, Path]) -> dict[str, Any]:
@@ -248,7 +305,7 @@ def finalize_batch(config: FinalizationConfig) -> dict[str, Any]:
             return _stop(summary, paths, "readiness check failed; no rows were promoted")
 
         if config.force:
-            _cleanup_pipeline_outputs(paths)
+            _cleanup_pipeline_outputs(config, paths)
         reviewed_rows, load_errors = load_rows(paths["reviewed"])
         if load_errors:
             return _stop(summary, paths, "reviewed rows could not be loaded: " + "; ".join(load_errors))
