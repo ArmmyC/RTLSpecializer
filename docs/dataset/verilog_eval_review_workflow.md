@@ -79,6 +79,8 @@ python scripts/dataset/check_review_batch_readiness.py \
 
 Fix each reported row and rerun the check. See [the review readiness workflow](review_readiness_workflow.md) for report details. Promote only after every intended row is ready.
 
+Once every intended row is ready, the [reviewed batch finalization workflow](finalize_reviewed_batch_workflow.md) can safely connect strict promotion, deterministic release assembly, conservative baseline generation, and deterministic evaluation. It stops before promotion for any not-ready batch and keeps generated artifacts local.
+
 Then run:
 
 ```bash

@@ -30,3 +30,5 @@ python scripts/dataset/promote_reviewed_rows.py \
 ```
 
 Readiness is a preflight report, not approval. Human review and license/provenance approval remain required.
+
+For an all-ready batch, the guarded [reviewed batch finalization workflow](finalize_reviewed_batch_workflow.md) can run promotion, release assembly, conservative baseline generation, and deterministic evaluation in one local command. It still does not replace human review or authorize publication.
