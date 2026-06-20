@@ -55,6 +55,8 @@ python scripts/eval/run_model_candidates.py \
 
 The endpoint defaults to localhost. Non-local endpoints require explicit authorization with `--allow-nonlocal-endpoint`. Use `--dry-run` to verify selection, output, and report behavior without making a network call.
 
+Localhost does not imply a trusted model service: its process and operator can read submitted prompts and RTL. API keys are supplied only through named environment variables, never literal configuration values. Review data exposure before using the non-local opt-in.
+
 For repeatable comparisons across multiple local models, use the [model benchmark suite](model_benchmark_suite.md). It generates or reuses per-model candidates, evaluates each candidate file with this harness, optionally includes `rule_baseline`, and aggregates scalar results into JSON, Markdown, and CSV summaries.
 
 ## Evaluate candidates
@@ -89,4 +91,4 @@ Safety failures are counted separately from the score. The evaluator reuses exis
 
 ## Limitations
 
-This harness is not semantic proof. It checks structure, conservative claim behavior, references to supplied artifacts/signals, and rubric heuristics. It is meant to provide a stable baseline before fine-tuning or comparing future model outputs.
+This harness is not semantic proof. It checks structure, conservative claim behavior, references to supplied artifacts/signals, and rubric heuristics. Generated candidate, raw, and evaluation outputs remain local and should not be committed without deliberate review.

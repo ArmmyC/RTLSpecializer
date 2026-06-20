@@ -8,6 +8,7 @@ import sys
 
 import pytest
 
+import scripts.eval.model_candidate_runner as runner
 from scripts.dataset.io_utils import load_jsonl, write_jsonl
 from scripts.eval.model_candidate_runner import (
     RunnerConfig,
@@ -45,7 +46,7 @@ def rows() -> list[dict]:
 
 
 def _dataset(tmp_path: Path, rows: list[dict]) -> Path:
-    path = tmp_path / "dataset.jsonl"
+    path = tmp_path / "input" / "dataset.jsonl"
     write_jsonl(path, rows)
     return path
 
@@ -53,7 +54,7 @@ def _dataset(tmp_path: Path, rows: list[dict]) -> Path:
 def _config(tmp_path: Path, rows: list[dict], **changes) -> RunnerConfig:
     values = {
         "dataset": _dataset(tmp_path, rows),
-        "output": tmp_path / "candidates.jsonl",
+        "output": tmp_path / "output" / "candidates.jsonl",
         "model": "fixture-model",
         "overwrite": True,
     }
@@ -62,14 +63,17 @@ def _config(tmp_path: Path, rows: list[dict], **changes) -> RunnerConfig:
 
 
 def test_prompt_includes_context_schema_and_claim_policy(rows) -> None:
-    messages = build_prompt(rows[0])
+    row = deepcopy(rows[0])
+    row["messages"][2]["content"]["issue_summary"] = ["UNIQUE_REFERENCE_ONLY_MARKER"]
+    messages = build_prompt(row)
     prompt = "\n".join(message["content"] for message in messages)
-    assert rows[0]["task_family"] in prompt
+    assert row["task_family"] in prompt
     assert "artifacts" in prompt and "tool_checks" in prompt
     assert "rtl_answer_v0.1" in prompt
     assert "insufficient_evidence" in prompt
     assert "lint/compile" in prompt
     assert "reference answer" not in prompt.lower()
+    assert "UNIQUE_REFERENCE_ONLY_MARKER" not in prompt
 
 
 def test_parser_accepts_direct_json_object() -> None:
@@ -82,6 +86,16 @@ def test_parser_extracts_json_from_surrounding_text() -> None:
     result = parse_model_output('result follows: {"schema_version":"rtl_answer_v0.1"} done')
     assert result.status == "extracted_json"
     assert result.answer is not None
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_parser_rejects_full_candidate_rows(wrapped) -> None:
+    raw = json.dumps({"id": "row", "answer": {"schema_version": "rtl_answer_v0.1"}})
+    if wrapped:
+        raw = f"candidate follows: {raw}"
+    result = parse_model_output(raw)
+    assert result.status == "parse_failed"
+    assert result.answer is None
 
 
 @pytest.mark.parametrize("raw", ['[]', '"text"', '42', 'no json here'])
@@ -127,8 +141,46 @@ def test_nonlocal_endpoint_requires_explicit_opt_in() -> None:
     ) == "models.example"
 
 
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "[::1]"])
+def test_local_endpoints_are_accepted(host) -> None:
+    assert validate_endpoint(f"http://{host}:8000/v1/chat/completions/") in {
+        "127.0.0.1", "localhost", "::1",
+    }
+
+
+@pytest.mark.parametrize("endpoint", [
+    "http://user:secret@127.0.0.1:8000/v1/chat/completions",
+    "http://127.0.0.1:8000/v1/chat/completions?debug=1",
+    "http://127.0.0.1:8000/v1/chat/completions#fragment",
+])
+def test_endpoint_rejects_credentials_query_and_fragment(endpoint) -> None:
+    with pytest.raises(ValueError):
+        validate_endpoint(endpoint)
+
+
+def test_api_key_value_is_not_serialized(tmp_path, rows, monkeypatch) -> None:
+    secret = "unique-fixture-secret-value"
+    monkeypatch.setenv("FIXTURE_MODEL_KEY", secret)
+    raw = json.dumps(rows[0]["messages"][2]["content"])
+
+    def fake_client(endpoint, api_key):
+        assert api_key == secret
+        return FakeClient([raw])
+
+    monkeypatch.setattr(runner, "OpenAIChatClient", fake_client)
+    config = _config(tmp_path, rows[:1], api_key_env="FIXTURE_MODEL_KEY")
+    report, code = run_model_candidates(config)
+    serialized = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (config.output, *runner._report_paths(config.output))
+    )
+    assert code == 0 and report["ok"]
+    assert secret not in serialized and secret not in json.dumps(report)
+
+
 def test_existing_output_requires_resume_or_overwrite(tmp_path, rows) -> None:
     config = _config(tmp_path, rows, overwrite=False)
+    config.output.parent.mkdir(parents=True)
     config.output.write_text("keep\n", encoding="utf-8")
     report, code = run_model_candidates(config, FakeClient([]))
     assert code == 1
@@ -172,6 +224,70 @@ def test_raw_output_uses_safe_filename(tmp_path, rows) -> None:
     raw_path = Path(loaded[0][1]["metadata"]["raw_output_path"])
     assert code == 0 and report["ok"]
     assert raw_path.parent == config.raw_output_dir and raw_path.read_text(encoding="utf-8") == raw
+
+
+def test_overwrite_preserves_unknown_files(tmp_path, rows) -> None:
+    config = _config(tmp_path, rows[:1])
+    config.output.parent.mkdir(parents=True)
+    unknown = config.output.parent / "reviewer_notes.md"
+    unknown.write_text("keep\n", encoding="utf-8")
+    raw = json.dumps(rows[0]["messages"][2]["content"])
+    report, code = run_model_candidates(config, FakeClient([raw]))
+    assert code == 0 and report["ok"]
+    assert unknown.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_symlinked_managed_output_is_rejected(tmp_path, rows) -> None:
+    config = _config(tmp_path, rows[:1])
+    config.output.parent.mkdir(parents=True)
+    target = tmp_path / "target.jsonl"
+    target.write_text("keep\n", encoding="utf-8")
+    try:
+        config.output.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+    report, code = run_model_candidates(config, FakeClient([]))
+    assert code == 1 and "must not be a symlink" in " ".join(report["errors"])
+    assert target.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_symlinked_raw_directory_and_input_parent_are_rejected(tmp_path, rows) -> None:
+    dataset = _dataset(tmp_path, rows[:1])
+    raw_target = tmp_path / "raw-target"
+    raw_target.mkdir()
+    raw_link = tmp_path / "raw-link"
+    try:
+        raw_link.symlink_to(raw_target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+    config = RunnerConfig(
+        dataset=dataset,
+        output=dataset.parent / "candidates.jsonl",
+        model="fixture-model",
+        raw_output_dir=raw_link,
+        overwrite=True,
+    )
+    report, code = run_model_candidates(config, FakeClient([]))
+    errors = " ".join(report["errors"])
+    assert code == 1
+    assert "must not be a symlink" in errors
+    assert "must not contain the dataset input" in errors
+
+
+def test_symlinked_raw_managed_file_is_rejected(tmp_path, rows) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    config = _config(tmp_path, rows[:1], raw_output_dir=raw_dir)
+    target = tmp_path / "raw-target.txt"
+    target.write_text("keep\n", encoding="utf-8")
+    raw_path = safe_raw_output_path(raw_dir, rows[0]["id"])
+    try:
+        raw_path.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"file symlinks unavailable: {exc}")
+    report, code = run_model_candidates(config, FakeClient([]))
+    assert code == 1 and "must not be a symlink" in " ".join(report["errors"])
+    assert target.read_text(encoding="utf-8") == "keep\n"
 
 
 def test_strict_mode_fails_on_parse_error_but_writes_candidate(tmp_path, rows) -> None:

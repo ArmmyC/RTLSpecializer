@@ -85,6 +85,32 @@ def test_secret_bearing_unknown_config_field_is_rejected(tmp_path) -> None:
     assert not (_options(tmp_path, config).output_dir / "benchmark_config.resolved.json").exists()
 
 
+@pytest.mark.parametrize("location", ["top", "defaults", "model"])
+def test_unsupported_config_fields_are_rejected(tmp_path, location) -> None:
+    model = _model("fixture")
+    extra: dict = {}
+    if location == "top":
+        extra["unexpected"] = True
+    elif location == "defaults":
+        extra["defaults"] = {"unexpected": True}
+    else:
+        model["unexpected"] = True
+    config = _config(tmp_path, models=[model], **extra)
+    summary, code = run_benchmark_suite(_options(tmp_path, config, dry_run=True))
+    assert code == 1 and "unsupported" in " ".join(summary["errors"])
+
+
+def test_resolved_config_contains_env_name_not_secret_value(tmp_path, monkeypatch) -> None:
+    secret = "unique-benchmark-secret-value"
+    monkeypatch.setenv("FIXTURE_BENCHMARK_KEY", secret)
+    config = _config(tmp_path, models=[_model("local", api_key_env="FIXTURE_BENCHMARK_KEY")])
+    options = _options(tmp_path, config, dry_run=True)
+    summary, code = run_benchmark_suite(options)
+    resolved = (options.output_dir / "benchmark_config.resolved.json").read_text(encoding="utf-8")
+    assert code == 0 and summary["ok"]
+    assert "FIXTURE_BENCHMARK_KEY" in resolved and secret not in resolved
+
+
 def test_dry_run_creates_summaries_without_endpoint_calls(tmp_path, monkeypatch) -> None:
     config = _config(tmp_path, models=[_model("local")])
     calls = 0
@@ -157,6 +183,19 @@ def test_csv_summary_is_parseable(tmp_path) -> None:
     )))
     assert code == 0 and len(rows) == len(summary["results"]) == 1
     assert rows[0]["name"] == "rule_baseline"
+    payload = json.loads((options.output_dir / "benchmark_summary.json").read_text(encoding="utf-8"))
+    markdown = (options.output_dir / "benchmark_summary.md").read_text(encoding="utf-8")
+    assert payload["ok"] is True and "| `rule_baseline` |" in markdown
+
+
+@pytest.mark.parametrize("changes, message", [
+    ({"resume": True, "overwrite": True}, "resume and --overwrite"),
+    ({"skip_candidates": True, "evaluate_only": True}, "skip-candidates and --evaluate-only"),
+])
+def test_mutually_exclusive_modes_are_rejected(tmp_path, changes, message) -> None:
+    config = _config(tmp_path, baseline=True)
+    summary, code = run_benchmark_suite(_options(tmp_path, config, **changes))
+    assert code == 1 and message in " ".join(summary["errors"])
 
 
 def test_nonempty_output_requires_resume_or_overwrite(tmp_path) -> None:
@@ -198,6 +237,42 @@ def test_symlinked_output_directory_is_rejected_without_touching_target(tmp_path
     summary, code = run_benchmark_suite(SuiteOptions(config=config, output_dir=link, overwrite=True))
     assert code == 1 and "must not be a symlink" in " ".join(summary["errors"])
     assert sentinel.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_symlinked_output_ancestry_is_rejected(tmp_path) -> None:
+    config = _config(tmp_path, baseline=True)
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "linked-parent"
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+    summary, code = run_benchmark_suite(SuiteOptions(
+        config=config, output_dir=link / "suite", overwrite=True,
+    ))
+    assert code == 1 and "ancestry must not contain a symlink" in " ".join(summary["errors"])
+
+
+@pytest.mark.parametrize("dangerous", [ROOT, Path.home(), Path(Path.home().anchor)])
+def test_dangerous_output_roots_are_rejected(tmp_path, dangerous) -> None:
+    config = _config(tmp_path, baseline=True)
+    summary, code = run_benchmark_suite(SuiteOptions(
+        config=config, output_dir=dangerous, overwrite=True,
+    ))
+    assert code == 1 and "must not be a filesystem, repository, or home root" in " ".join(summary["errors"])
+
+
+def test_output_root_must_not_contain_dataset(tmp_path) -> None:
+    dataset_dir = tmp_path / "input"
+    dataset_dir.mkdir()
+    dataset = dataset_dir / "dataset.jsonl"
+    dataset.write_text(GOLDEN.read_text(encoding="utf-8"), encoding="utf-8")
+    config = _config(tmp_path, baseline=True, dataset=str(dataset))
+    summary, code = run_benchmark_suite(SuiteOptions(
+        config=config, output_dir=dataset_dir, overwrite=True,
+    ))
+    assert code == 1 and "must not contain the dataset input" in " ".join(summary["errors"])
 
 
 def test_evaluate_only_uses_existing_candidates(tmp_path) -> None:

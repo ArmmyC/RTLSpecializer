@@ -29,6 +29,8 @@ Dry-run rows use `parse_status: dry_run`, `validation_status: not_validated`, an
 
 The default endpoint is `http://127.0.0.1:8000/v1/chat/completions`. Only `127.0.0.1`, `localhost`, and `::1` are accepted by default.
 
+Localhost limits network exposure; it does not make the model server trusted. The server operator and server process can read every submitted prompt, including task RTL and extracted artifacts. Review who operates the endpoint and start with the dry-run above before enabling inference.
+
 ```bash
 python scripts/eval/run_model_candidates.py \
   --dataset data/releases/release_v0.1/test.jsonl \
@@ -76,7 +78,8 @@ Direct JSON is preferred. The runner can conservatively extract the first valid 
 - An existing output fails unless `--resume` or `--overwrite` is supplied; the flags are mutually exclusive.
 - `--resume` validates unique existing IDs, preserves those rows, and generates only missing selected IDs.
 - `--overwrite` replaces the exact candidate file and its two sidecar reports.
-- Candidate, raw, and evaluation outputs inside `.local_data` are rejected.
+- Candidate, raw, and evaluation outputs inside `.local_data` are rejected. Managed output directories also reject filesystem/repository/home roots, the dataset input parent, symlink directories or symlinked ancestry, and dangerous overlaps.
+- `--overwrite` replaces only the exact managed candidate, report, raw-row, and evaluator files. It does not clear output directories, follow directory symlinks, or remove unknown files.
 - `--raw-output-dir` optionally stores exact model text under sanitized, hash-suffixed filenames. Raw output may contain sensitive RTL or model text and should remain local.
 - `--strict` returns failure when any generated row has parse or validation errors. Endpoint failures are fatal in all modes.
 
@@ -94,6 +97,6 @@ python scripts/eval/evaluate_answers.py \
   --json
 ```
 
-Evaluator scores are deterministic structural and evidence-safety heuristics. They are not semantic proof, simulation results, equivalence results, or proof of RTL correctness.
+Evaluator scores are deterministic structural and evidence-safety heuristics. They are not semantic proof, simulation results, equivalence results, or proof of RTL correctness. Candidate, raw, report, and evaluation artifacts are generated local outputs and should not be committed unless deliberately reviewed and approved.
 
 To compare multiple local model configurations on the same filtered rows, use the [local model benchmark suite](model_benchmark_suite.md). It reuses this runner’s endpoint, parsing, validation, resume, and output-safety behavior and adds rule-baseline comparison plus aggregate JSON, Markdown, and CSV reports.

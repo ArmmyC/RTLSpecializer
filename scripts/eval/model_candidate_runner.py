@@ -30,6 +30,8 @@ from scripts.eval.model_prompting import (
 
 DEFAULT_ENDPOINT = "http://127.0.0.1:8000/v1/chat/completions"
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+REPO_ROOT = Path(__file__).resolve().parents[2]
+EVALUATION_FILES = ("row_results.jsonl", "unmatched_candidates.jsonl", "metrics.json", "report.md")
 
 
 @dataclass(frozen=True)
@@ -122,7 +124,7 @@ def parse_model_output(raw: str) -> ParseResult:
     else:
         if not isinstance(value, dict):
             return ParseResult(None, "parse_failed", "model output JSON must be an object, not an array or scalar")
-        if "answer" in value and value.get("schema_version") != "rtl_answer_v0.1":
+        if "answer" in value:
             return ParseResult(None, "parse_failed", "model returned a full candidate row instead of answer content")
         return ParseResult(value, "parsed_json")
 
@@ -133,8 +135,8 @@ def parse_model_output(raw: str) -> ParseResult:
         except json.JSONDecodeError:
             continue
         if isinstance(candidate, dict):
-            if "answer" in candidate and candidate.get("schema_version") != "rtl_answer_v0.1":
-                continue
+            if "answer" in candidate:
+                return ParseResult(None, "parse_failed", "model returned a full candidate row instead of answer content")
             return ParseResult(candidate, "extracted_json")
     return ParseResult(None, "parse_failed", "model output did not contain a JSON answer object")
 
@@ -159,6 +161,58 @@ def _inside_local_data(path: Path) -> bool:
         for candidate in (path.absolute(), path.resolve())
         for part in candidate.parts
     )
+
+
+def _is_within(path: Path, directory: Path) -> bool:
+    try:
+        path.resolve().relative_to(directory.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _symlink_in_ancestry(path: Path) -> Path | None:
+    current = path.absolute()
+    while True:
+        if current.is_symlink():
+            return current
+        if current.parent == current:
+            return None
+        current = current.parent
+
+
+def _dangerous_root(path: Path) -> bool:
+    resolved = path.resolve()
+    return resolved.parent == resolved or resolved in {REPO_ROOT, Path.home().resolve()}
+
+
+def _validate_directory(path: Path, label: str, dataset: Path, errors: list[str]) -> None:
+    if _inside_local_data(path):
+        errors.append(f"{label} must not be inside .local_data: {path}")
+    if path.is_symlink():
+        errors.append(f"{label} must not be a symlink: {path}")
+        return
+    ancestor = _symlink_in_ancestry(path.parent)
+    if ancestor is not None:
+        errors.append(f"{label} ancestry must not contain a symlink: {ancestor}")
+        return
+    if path.exists() and not path.is_dir():
+        errors.append(f"{label} must be a directory path: {path}")
+    if _dangerous_root(path):
+        errors.append(f"{label} must not be a filesystem, repository, or home root: {path}")
+    if _is_within(dataset, path):
+        errors.append(f"{label} must not contain the dataset input: {path}")
+
+
+def _validate_managed_file(path: Path, label: str, errors: list[str]) -> None:
+    if path.is_symlink():
+        errors.append(f"{label} must not be a symlink: {path}")
+    elif path.exists() and not path.is_file():
+        errors.append(f"{label} must be a file path: {path}")
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    return _is_within(left, right) or _is_within(right, left)
 
 
 def safe_raw_output_path(directory: Path, row_id: str) -> Path:
@@ -316,29 +370,40 @@ def run_model_candidates(config: RunnerConfig, client: ChatClient | None = None)
         errors.append("max-tokens and timeout must be positive; retries must be non-negative")
     if not 0.0 <= config.temperature <= 2.0 or (config.top_p is not None and not 0.0 < config.top_p <= 1.0):
         errors.append("temperature must be between 0 and 2; top-p must be in (0, 1]")
-    if _inside_local_data(config.output):
-        errors.append(f"output must not be inside .local_data: {config.output}")
-    if config.raw_output_dir is not None and _inside_local_data(config.raw_output_dir):
-        errors.append(f"raw output directory must not be inside .local_data: {config.raw_output_dir}")
-    if config.raw_output_dir is not None and config.raw_output_dir.exists() and not config.raw_output_dir.is_dir():
-        errors.append(f"raw output directory must be a directory: {config.raw_output_dir}")
-    if config.evaluate_output_dir is not None and _inside_local_data(config.evaluate_output_dir):
-        errors.append(f"evaluation output directory must not be inside .local_data: {config.evaluate_output_dir}")
-    if config.evaluate_output_dir is not None and config.evaluate_output_dir.exists() and not config.evaluate_output_dir.is_dir():
-        errors.append(f"evaluation output directory must be a directory: {config.evaluate_output_dir}")
+    _validate_directory(config.output.parent, "output directory", config.dataset, errors)
+    _validate_managed_file(config.output, "output", errors)
+    if config.raw_output_dir is not None:
+        _validate_directory(config.raw_output_dir, "raw output directory", config.dataset, errors)
+    if config.evaluate_output_dir is not None:
+        _validate_directory(config.evaluate_output_dir, "evaluation output directory", config.dataset, errors)
+        for filename in EVALUATION_FILES:
+            _validate_managed_file(
+                config.evaluate_output_dir / filename,
+                f"evaluation output {filename}",
+                errors,
+            )
+    if (
+        config.raw_output_dir is not None
+        and config.evaluate_output_dir is not None
+        and _paths_overlap(config.raw_output_dir, config.evaluate_output_dir)
+    ):
+        errors.append("raw and evaluation output directories must not overlap")
+    for directory, label in (
+        (config.raw_output_dir, "raw output directory"),
+        (config.evaluate_output_dir, "evaluation output directory"),
+    ):
+        if directory is not None and _is_within(config.output, directory):
+            errors.append(f"output must not be inside {label}")
     if config.output.resolve() == config.dataset.resolve():
         errors.append("output must not overwrite the dataset input")
     output_exists = config.output.exists() or config.output.is_symlink()
-    if output_exists and not config.output.is_symlink() and not config.output.is_file():
-        errors.append(f"output must be a file path: {config.output}")
     if output_exists and not config.resume and not config.overwrite:
         errors.append(f"output already exists; use --resume or --overwrite: {config.output}")
     if config.resume and not output_exists:
         errors.append(f"resume output not found: {config.output}")
     report_json, report_md = _report_paths(config.output)
     for report_path in (report_json, report_md):
-        if report_path.exists() and not report_path.is_file():
-            errors.append(f"report path must be a file: {report_path}")
+        _validate_managed_file(report_path, "report path", errors)
     if not config.resume and not config.overwrite and not output_exists:
         for report_path in (report_json, report_md):
             if report_path.exists() or report_path.is_symlink():
@@ -361,6 +426,15 @@ def run_model_candidates(config: RunnerConfig, client: ChatClient | None = None)
         selected = [row for row in selected if row["id"] in requested]
     if config.limit is not None:
         selected = selected[:config.limit]
+    if config.raw_output_dir is not None:
+        for row in selected:
+            _validate_managed_file(
+                safe_raw_output_path(config.raw_output_dir, str(row["id"])),
+                f"raw output for {row['id']}",
+                errors,
+            )
+        if errors:
+            return report, 1
 
     existing_rows: list[dict[str, Any]] = []
     completed_ids: set[str] = set()

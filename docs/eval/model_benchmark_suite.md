@@ -56,26 +56,28 @@ Endpoints are localhost-only by default. A non-local endpoint runs only when bot
 
 This double opt-in does not make private RTL safe to upload. `api_key_env` may name an environment variable, but its value is never written to resolved configs, candidates, summaries, or logs. Unsupported config keys are rejected so secret-bearing fields are not copied into reports.
 
+Localhost is only a network boundary: the local server process and its operator can read all submitted prompts and RTL. Review the server operator, configuration, and retention policy before inference. For any non-local endpoint, review the selected dataset again before granting both opt-ins.
+
 ## First run and dry-run
 
-Start with three rows:
-
-```bash
-python scripts/eval/run_benchmark_suite.py \
-  --config configs/benchmarks/verilog_eval_local_models_v0.1.json \
-  --output-dir data/eval/benchmarks/verilog_eval_local_models_v0.1 \
-  --limit 3 \
-  --json \
-  --overwrite
-```
-
-Use the repository fixture for a network-free smoke test. All model jobs are forced into candidate-runner dry-run mode:
+Start with the network-free fixture smoke test. All model jobs are forced into candidate-runner dry-run mode:
 
 ```bash
 python scripts/eval/run_benchmark_suite.py \
   --config tests/fixtures/eval/benchmark_suite_dry_run.json \
   --output-dir /tmp/rtl_specializer_benchmark_suite_dry_run \
   --dry-run \
+  --json \
+  --overwrite
+```
+
+After reviewing the resolved configuration, run a small local benchmark:
+
+```bash
+python scripts/eval/run_benchmark_suite.py \
+  --config configs/benchmarks/verilog_eval_local_models_v0.1.json \
+  --output-dir data/eval/benchmarks/verilog_eval_local_models_v0.1 \
+  --limit 3 \
   --json \
   --overwrite
 ```
@@ -99,6 +101,8 @@ The suite writes these exact files under `--output-dir`:
 - `models/<name>/links.json`
 
 Candidate and evaluator outputs use `candidate_dir` and `eval_dir`. When omitted, non-overlapping sibling directories are derived from `--output-dir`. Output roots, job directories, and raw-output directories must not overlap dangerously, be symlinks or traverse symlinked directory ancestry, contain the dataset, target filesystem/repository/home roots, or reside inside `.local_data`.
+
+All benchmark summaries, candidates, raw responses, and evaluator artifacts are generated local outputs. Keep them out of commits unless they have been deliberately reviewed and approved.
 
 The Markdown comparison table sorts by mean score descending, safety failures ascending, then model name. CSV contains scalar fields for downstream analysis.
 
