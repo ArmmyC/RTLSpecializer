@@ -55,6 +55,8 @@ python scripts/eval/run_model_candidates.py \
 
 The endpoint defaults to localhost. Non-local endpoints require explicit authorization with `--allow-nonlocal-endpoint`. Use `--dry-run` to verify selection, output, and report behavior without making a network call.
 
+For repeatable comparisons across multiple local models, use the [model benchmark suite](model_benchmark_suite.md). It generates or reuses per-model candidates, evaluates each candidate file with this harness, optionally includes `rule_baseline`, and aggregates scalar results into JSON, Markdown, and CSV summaries.
+
 ## Evaluate candidates
 
 ```bash

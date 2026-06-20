@@ -18,6 +18,8 @@ Local deterministic evaluation consumes release rows plus candidate answer JSONL
 
 Evaluator-ready candidates can also be generated from a local OpenAI-compatible chat endpoint, with localhost-only defaults, strict JSON parsing, resumable output, and a network-free dry-run mode. See [docs/eval/model_candidate_runner.md](docs/eval/model_candidate_runner.md).
 
+Multiple local model configurations and the rule baseline can be run through one repeatable benchmark suite with JSON, Markdown, and CSV summaries. See [docs/eval/model_benchmark_suite.md](docs/eval/model_benchmark_suite.md).
+
 VerilogEval-derived review batches can be prepared from local staged data only; rows remain draft until human review and promotion. See [docs/dataset/verilog_eval_review_workflow.md](docs/dataset/verilog_eval_review_workflow.md).
 
 Manually edited review batches can be checked locally for structural validity, changed answers, stubs, ID mismatches, and promotion-gate failures before any promotion occurs. See [docs/dataset/review_readiness_workflow.md](docs/dataset/review_readiness_workflow.md).

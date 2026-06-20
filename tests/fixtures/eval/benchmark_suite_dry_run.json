@@ -1,0 +1,20 @@
+{
+  "run_id": "fixture_dry_run",
+  "dataset": "data/golden/golden_v0.1.jsonl",
+  "include_rule_baseline": true,
+  "defaults": {
+    "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+    "prompt_template": "rtl_answer_v0.1_default",
+    "temperature": 0.0,
+    "max_tokens": 8192,
+    "timeout": 120,
+    "retries": 1,
+    "strict": false
+  },
+  "models": [
+    {
+      "name": "dry_run_model",
+      "model": "dry-run-model"
+    }
+  ]
+}

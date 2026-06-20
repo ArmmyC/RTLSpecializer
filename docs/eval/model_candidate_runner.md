@@ -95,3 +95,5 @@ python scripts/eval/evaluate_answers.py \
 ```
 
 Evaluator scores are deterministic structural and evidence-safety heuristics. They are not semantic proof, simulation results, equivalence results, or proof of RTL correctness.
+
+To compare multiple local model configurations on the same filtered rows, use the [local model benchmark suite](model_benchmark_suite.md). It reuses this runner’s endpoint, parsing, validation, resume, and output-safety behavior and adds rule-baseline comparison plus aggregate JSON, Markdown, and CSV reports.
