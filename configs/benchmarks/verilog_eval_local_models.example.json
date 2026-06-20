@@ -1,0 +1,25 @@
+{
+  "run_id": "verilog_eval_local_models_v0.1",
+  "dataset": "data/releases/release_v0.1_plus_verilog_eval_001/test.jsonl",
+  "include_rule_baseline": true,
+  "defaults": {
+    "prompt_template": "rtl_answer_v0.1_default",
+    "temperature": 0.0,
+    "max_tokens": 8192,
+    "timeout": 120,
+    "retries": 1,
+    "strict": false
+  },
+  "models": [
+    {
+      "name": "local_model_8000",
+      "model": "replace-with-local-model-name",
+      "endpoint": "http://127.0.0.1:8000/v1/chat/completions"
+    },
+    {
+      "name": "local_model_8001",
+      "model": "replace-with-second-local-model-name",
+      "endpoint": "http://127.0.0.1:8001/v1/chat/completions"
+    }
+  ]
+}

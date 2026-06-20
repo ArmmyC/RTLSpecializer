@@ -22,6 +22,8 @@ Run the network-free dry-run first. A localhost server and its operator can stil
 
 Multiple local model configurations and the rule baseline can be run through one repeatable benchmark suite with JSON, Markdown, and CSV summaries. See [docs/eval/model_benchmark_suite.md](docs/eval/model_benchmark_suite.md).
 
+For the first reviewed VerilogEval comparison, follow the [first local benchmark runbook](docs/eval/first_local_benchmark_runbook.md) and copy a safe starting configuration from [configs/benchmarks](configs/benchmarks/README.md).
+
 VerilogEval-derived review batches can be prepared from local staged data only; rows remain draft until human review and promotion. See [docs/dataset/verilog_eval_review_workflow.md](docs/dataset/verilog_eval_review_workflow.md).
 
 Manually edited review batches can be checked locally for structural validity, changed answers, stubs, ID mismatches, and promotion-gate failures before any promotion occurs. See [docs/dataset/review_readiness_workflow.md](docs/dataset/review_readiness_workflow.md).
