@@ -27,3 +27,7 @@ Manually edited review batches can be checked locally for structural validity, c
 After every intended row passes readiness, a guarded local finalization command can connect strict promotion, deterministic release assembly, conservative baseline generation, and deterministic evaluation without replacing human review. See [docs/dataset/finalize_reviewed_batch_workflow.md](docs/dataset/finalize_reviewed_batch_workflow.md).
 
 Codex/agent workflow guidance lives in [AGENTS.md](AGENTS.md), with reusable review and prompt templates under [docs/codex/](docs/codex/).
+
+## CI smoke checks
+
+GitHub Actions runs strict golden-dataset validation and the deterministic dataset/evaluation test suite on every pull request and push to `main`. CI does not call models, run EDA tools, simulate or synthesize RTL, train models, or download raw datasets. Local generated data remains ignored and must not be committed.
