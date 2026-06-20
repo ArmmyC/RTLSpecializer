@@ -231,7 +231,8 @@ def _markdown(result: dict[str, Any]) -> str:
         if not row["changed_from_selected"]:
             reasons.insert(0, "assistant answer is unchanged")
         reason_text = "; ".join(reasons) or "not ready"
-        lines.append(f"| `{row['id']}` | {reason_text.replace('|', '\\|')} | {row['suggested_next_action']} |")
+        escaped_reason_text = reason_text.replace("|", "\\|")
+        lines.append(f"| `{row['id']}` | {escaped_reason_text} | {row['suggested_next_action']} |")
     if not needs_work:
         lines.append("| — | None | — |")
     lines.extend(["", "## Missing and extra rows", ""])
