@@ -41,6 +41,20 @@ python scripts/eval/make_baseline_candidates.py \
 
 The baseline is intentionally conservative. It uses dataset artifacts and extracted signal metadata, avoids copying reference answers verbatim, and does not claim verified correctness, area improvement, activity improvement, or power improvement.
 
+## Generate local model candidates
+
+The [local model candidate runner](model_candidate_runner.md) builds strict `rtl_answer_v0.1` prompts and can call a local OpenAI-compatible `/v1/chat/completions` endpoint:
+
+```bash
+python scripts/eval/run_model_candidates.py \
+  --dataset data/releases/release_v0.1/test.jsonl \
+  --output data/eval/candidates/local_model_v0.1.jsonl \
+  --model local-model-name \
+  --json
+```
+
+The endpoint defaults to localhost. Non-local endpoints require explicit authorization with `--allow-nonlocal-endpoint`. Use `--dry-run` to verify selection, output, and report behavior without making a network call.
+
 ## Evaluate candidates
 
 ```bash
