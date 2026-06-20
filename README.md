@@ -25,3 +25,5 @@ VerilogEval-derived review batches can be prepared from local staged data only; 
 Manually edited review batches can be checked locally for structural validity, changed answers, stubs, ID mismatches, and promotion-gate failures before any promotion occurs. See [docs/dataset/review_readiness_workflow.md](docs/dataset/review_readiness_workflow.md).
 
 After every intended row passes readiness, a guarded local finalization command can connect strict promotion, deterministic release assembly, conservative baseline generation, and deterministic evaluation without replacing human review. See [docs/dataset/finalize_reviewed_batch_workflow.md](docs/dataset/finalize_reviewed_batch_workflow.md).
+
+Codex/agent workflow guidance lives in [AGENTS.md](AGENTS.md), with reusable review and prompt templates under [docs/codex/](docs/codex/).
