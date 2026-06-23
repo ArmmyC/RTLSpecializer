@@ -67,6 +67,8 @@ A reviewer should edit `reviewed_rows.jsonl` so each answer is grounded in real 
 
 For a focused review session, follow the [manual review session guide](manual_review_session_guide.md) and apply the [RTL answer review checklist](rtl_answer_review_checklist.md) to each row. These aids support human judgment; they do not authorize automated review.
 
+Before readiness checking, run the [read-only triage assistant](review_triage_workflow.md). It flags duplicated answers, placeholder task artifacts, weak issue summaries, unsupported claim wording, and likely reset-language contradictions without changing either input file or approving any row.
+
 Before promotion, run the read-only readiness checker. It compares the edited answers with the selected drafts, catches missing/extra/duplicate IDs, rejects unchanged import stubs, and dry-runs the public promotion gates without writing processed rows:
 
 ```bash

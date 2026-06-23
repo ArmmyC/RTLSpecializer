@@ -28,6 +28,8 @@ VerilogEval-derived review batches can be prepared from local staged data only; 
 
 Human reviewers can structure a focused 60–90 minute pass with the [manual review session guide](docs/dataset/manual_review_session_guide.md) and its per-answer checklist.
 
+Manually edited review batches can first be triaged locally for duplicated answers, placeholder task artifacts, claim wording, and reset-language risks without changing any rows. See [docs/dataset/review_triage_workflow.md](docs/dataset/review_triage_workflow.md).
+
 Manually edited review batches can be checked locally for structural validity, changed answers, stubs, ID mismatches, and promotion-gate failures before any promotion occurs. See [docs/dataset/review_readiness_workflow.md](docs/dataset/review_readiness_workflow.md).
 
 After every intended row passes readiness, a guarded local finalization command can connect strict promotion, deterministic release assembly, conservative baseline generation, and deterministic evaluation without replacing human review. See [docs/dataset/finalize_reviewed_batch_workflow.md](docs/dataset/finalize_reviewed_batch_workflow.md).
