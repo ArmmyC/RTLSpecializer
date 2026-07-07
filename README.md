@@ -28,7 +28,7 @@ VerilogEval-derived review batches can be prepared from local staged data only; 
 
 Raw VerilogEval source tasks can also be exported into small local JSON batches for manual ChatGPT/Claude normalization into `rtl_task_v0.1`, then validated locally before later drafting and review. See [docs/dataset/llm_normalization_batch_workflow.md](docs/dataset/llm_normalization_batch_workflow.md).
 
-Clean `rtl_task.v0.1` rows can be exported into small local teacher-answer batches for manual ChatGPT/Claude/larger-teacher generation of conservative `rtl_answer.v0.1`, then validated and merged into draft chat rows. See [docs/dataset/rtl_answer_teacher_generation_workflow.md](docs/dataset/rtl_answer_teacher_generation_workflow.md).
+Clean `rtl_task_v0.1` rows can be exported into small local teacher-answer batches for manual ChatGPT/Claude/larger-teacher generation of conservative `rtl_answer_v0.1`, then validated and merged into draft chat rows. See [docs/dataset/rtl_answer_teacher_generation_workflow.md](docs/dataset/rtl_answer_teacher_generation_workflow.md).
 
 Human reviewers can structure a focused 60–90 minute pass with the [manual review session guide](docs/dataset/manual_review_session_guide.md) and its per-answer checklist.
 

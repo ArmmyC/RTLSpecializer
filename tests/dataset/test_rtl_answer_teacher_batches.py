@@ -11,6 +11,10 @@ from scripts.dataset.rtl_answer_teacher_batches import (
 )
 
 
+ROOT = Path(__file__).resolve().parents[2]
+PROMPT_TEMPLATE = ROOT / "docs" / "dataset" / "llm_rtl_answer_generation_prompt.md"
+
+
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
@@ -144,6 +148,18 @@ def test_exports_deterministic_teacher_batch_files(tmp_path) -> None:
     assert (tmp_path / "first" / "batch_001.json").read_text(encoding="utf-8") == (
         tmp_path / "second" / "batch_001.json"
     ).read_text(encoding="utf-8")
+
+
+def test_teacher_prompt_uses_canonical_schema_names_and_wrapper() -> None:
+    text = PROMPT_TEMPLATE.read_text(encoding="utf-8")
+    lowered = text.lower()
+    assert "rtl_task.v0.1" not in text
+    assert "rtl_answer.v0.1" not in text
+    assert "rtl_task_v0.1" in text
+    assert "rtl_answer_v0.1" in text
+    assert "number of returned answers must exactly match" in lowered
+    assert "same order as the input rows" in lowered
+    assert '"answers"' in text
 
 
 def test_batch_size_limit_and_force_behaviour(tmp_path) -> None:

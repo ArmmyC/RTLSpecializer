@@ -27,7 +27,7 @@ Supported inputs:
 
 If you are starting from raw VerilogEval source tasks that still need `rtl_task_v0.1` normalization, first follow the [LLM normalization batch workflow](llm_normalization_batch_workflow.md). That step exports small local raw batches for manual ChatGPT/Claude conversion and validates the returned task JSON locally before any later drafting or review workflow.
 
-If you already have clean normalized `rtl_task.v0.1` rows and need teacher `rtl_answer.v0.1` drafts, follow the [RTL answer teacher generation workflow](rtl_answer_teacher_generation_workflow.md). That step exports small local task batches for manual teacher-model answer generation, validates returned answers for conservative evidence handling, and merges task/answer pairs into draft chat rows without approval or promotion.
+If you already have clean normalized `rtl_task_v0.1` rows and need teacher `rtl_answer_v0.1` drafts, follow the [RTL answer teacher generation workflow](rtl_answer_teacher_generation_workflow.md). That step exports small local task batches for manual teacher-model answer generation, validates returned answers for conservative evidence handling, and merges task/answer pairs into draft chat rows without approval or promotion.
 
 ## Prepare a draft review batch
 

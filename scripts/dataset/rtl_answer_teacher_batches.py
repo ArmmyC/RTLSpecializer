@@ -272,7 +272,7 @@ def export_rtl_answer_teacher_batches(
     if limit is not None:
         windowed = windowed[:limit]
     if not windowed:
-        errors.append("no rtl_task.v0.1 rows found after applying --start-index/--limit")
+        errors.append("no rtl_task_v0.1 rows found after applying --start-index/--limit")
         return _export_result(False, input_path, output_dir, batch_size, start_index, limit, len(task_rows), 0, [], errors, warnings), 1
 
     batch_count = math.ceil(len(windowed) / batch_size)
@@ -454,7 +454,7 @@ def _validate_answer_row(answer: dict[str, Any], task: dict[str, Any], index: in
     if answer.get("task_type") != task.get("task_type"):
         errors.append(f"{prefix} task_type must match source task")
     if _contains_task_copy(answer):
-        errors.append(f"{prefix} appears to contain a copied rtl_task.v0.1 object")
+        errors.append(f"{prefix} appears to contain a copied rtl_task_v0.1 object")
 
     issues = answer.get("issue_summary")
     if not isinstance(issues, list):

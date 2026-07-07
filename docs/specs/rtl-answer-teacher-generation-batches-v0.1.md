@@ -112,6 +112,9 @@ The template must instruct a human-operated teacher model to:
 - return valid JSON only,
 - not return Markdown,
 - produce one answer per input row,
+- produce the same number of answers as input rows,
+- return answers in the same order as input rows,
+- return a JSON object with an `answers` array,
 - preserve `source_id`,
 - use only supplied `rtl_task_v0.1` artifacts,
 - not invent simulation, lint, synthesis, formal, timing, toggle, area, power, or verification results,
@@ -124,7 +127,15 @@ The template must instruct a human-operated teacher model to:
 
 ## 6. Expected answer shape
 
-Returned teacher answers should be JSON objects with this shape:
+Returned teacher answers should use this wrapper:
+
+```json
+{
+  "answers": []
+}
+```
+
+Each item in `answers` should be a JSON object with this shape:
 
 ```json
 {
@@ -173,8 +184,8 @@ python scripts/dataset/validate_rtl_answer_teacher_batch.py \
 Options:
 
 ```text
---tasks <path>         source rtl_task.v0.1 JSONL, or a batch JSON object with rows
---answers <path>       returned rtl_answer.v0.1 JSON, JSON object with rows/answers, JSON array, or JSONL
+--tasks <path>         source rtl_task_v0.1 JSONL, or a batch JSON object with rows
+--answers <path>       returned rtl_answer_v0.1 JSON, JSON object with rows/answers, JSON array, or JSONL
 --output-md <path>     optional deterministic Markdown report
 --output-json <path>   optional deterministic JSON report
 --strict               fail on warnings as well as errors

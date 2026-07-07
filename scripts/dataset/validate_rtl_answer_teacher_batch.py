@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate returned rtl_answer.v0.1 teacher-answer batches."""
+"""Validate returned rtl_answer_v0.1 teacher-answer batches."""
 
 from __future__ import annotations
 

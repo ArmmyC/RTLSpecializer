@@ -7,10 +7,10 @@ It does not call ChatGPT, Claude, external APIs, model endpoints, or web downloa
 ## Flow
 
 ```text
-clean rtl_task.v0.1 JSONL
+clean rtl_task_v0.1 JSONL
   -> export teacher-answer batches
   -> human sends one batch to ChatGPT/Claude/larger teacher model using prompt template
-  -> save returned rtl_answer.v0.1 batch locally
+  -> save returned rtl_answer_v0.1 batch locally
   -> validate returned answers
   -> merge tasks + answers into draft chat rows
   -> human review / triage / readiness checks
@@ -56,7 +56,7 @@ Open:
 
 Paste the prompt template and then the batch JSON into ChatGPT, Claude, or another teacher model manually.
 
-The teacher should return `rtl_answer_v0.1` JSON only. It must not claim simulation, lint, synthesis, formal, timing, toggle, area, activity, or power results unless supplied evidence exists in the task.
+The teacher should return `rtl_answer_v0.1` JSON only, using a JSON object with an `answers` array. The number of answers should exactly match the number of input rows, and answers should appear in the same order as the input rows. It must not claim simulation, lint, synthesis, formal, timing, toggle, area, activity, or power results unless supplied evidence exists in the task.
 
 Important row types:
 

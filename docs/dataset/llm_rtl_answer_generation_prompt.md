@@ -12,25 +12,36 @@ Rules:
 2. Do not return Markdown.
 3. Do not include explanations outside JSON.
 4. Produce exactly one answer per input row.
-5. Preserve source_id exactly.
-6. Use only the supplied rtl_task.v0.1 artifacts.
-7. Do not invent simulation, lint, synthesis, formal, timing, toggle, area, activity, power, or verification results.
-8. If tool_checks are null, say those checks were not run.
-9. Never say "verified", "passed simulation", "passed lint", "synthesized", "area improved", "power improved", "toggle improved", "timing met", or similar unless corresponding evidence exists in tool_checks and supplied artifacts.
-10. area, power, activity, timing, and synthesis claims must be "insufficient_evidence" unless reports are supplied.
-11. Prefer conservative claim_levels.
-12. Include a verification plan, not verification results.
-13. For rows where source_rtl_role is "reference_rtl" and no candidate DUT is supplied, do not invent a DUT bug.
-14. For normal reference-only rows, the answer should usually say no candidate DUT-specific bug can be identified from the supplied artifacts, and any correctness judgment is by text inspection only.
-15. For rows where design_context.prompt_embedded_candidate_rtl is true or artifacts.before_rtl_code exists, analyze the prompt-embedded buggy candidate separately from the fixed/reference RTL in artifacts.rtl_code.
-16. For prompt-embedded bug rows, mention the actual bug only if supported by the supplied prompt, artifacts.before_rtl_code, or artifacts.rtl_code.
-17. For rows where design_context.prompt_embedded_context_rtl is true, treat the embedded module as context/helper RTL, not as buggy candidate DUT source.
-18. Do not say "no candidate DUT source is provided" for prompt-embedded candidate rows.
-19. Do not create or repeat rtl_task.v0.1 objects in the answer.
+5. The number of returned answers must exactly match the number of input rows.
+6. Return answers in the same order as the input rows.
+7. Preserve source_id exactly.
+8. Use only the supplied rtl_task_v0.1 artifacts.
+9. Do not invent simulation, lint, synthesis, formal, timing, toggle, area, activity, power, or verification results.
+10. If tool_checks are null, say those checks were not run.
+11. Never say "verified", "passed simulation", "passed lint", "synthesized", "area improved", "power improved", "toggle improved", "timing met", or similar unless corresponding evidence exists in tool_checks and supplied artifacts.
+12. area, power, activity, timing, and synthesis claims must be "insufficient_evidence" unless reports are supplied.
+13. Prefer conservative claim_levels.
+14. Include a verification plan, not verification results.
+15. For rows where source_rtl_role is "reference_rtl" and no candidate DUT is supplied, do not invent a DUT bug.
+16. For normal reference-only rows, the answer should usually say no candidate DUT-specific bug can be identified from the supplied artifacts, and any correctness judgment is by text inspection only.
+17. For rows where design_context.prompt_embedded_candidate_rtl is true or artifacts.before_rtl_code exists, analyze the prompt-embedded buggy candidate separately from the fixed/reference RTL in artifacts.rtl_code.
+18. For prompt-embedded bug rows, mention the actual bug only if supported by the supplied prompt, artifacts.before_rtl_code, or artifacts.rtl_code.
+19. For rows where design_context.prompt_embedded_context_rtl is true, treat the embedded module as context/helper RTL, not as buggy candidate DUT source.
+20. Do not say "no candidate DUT source is provided" for prompt-embedded candidate rows.
+21. Do not create or repeat rtl_task_v0.1 objects in the answer.
 
-Return either a JSON array of answers or a JSON object with an "answers" array.
+Always return this wrapper shape:
 
-Each answer must use this shape:
+{
+  "answers": [
+    {
+      "schema_version": "rtl_answer_v0.1",
+      "source_id": "<same source_id as input row>"
+    }
+  ]
+}
+
+Each item in answers must use this full shape:
 {
   "schema_version": "rtl_answer_v0.1",
   "source_id": "<same source_id as input row>",
@@ -87,7 +98,7 @@ Each answer must use this shape:
 ## User prompt wrapper
 
 ```text
-Generate conservative rtl_answer_v0.1 JSON for the following rtl_task.v0.1 batch using the rules above.
+Generate conservative rtl_answer_v0.1 JSON for the following rtl_task_v0.1 batch using the rules above.
 
 TASK BATCH JSON:
 <paste batch_XXX.json here>

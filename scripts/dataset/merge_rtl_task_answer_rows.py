@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Merge rtl_task.v0.1 rows and returned rtl_answer.v0.1 rows into draft chat JSONL."""
+"""Merge rtl_task_v0.1 rows and returned rtl_answer_v0.1 rows into draft chat JSONL."""
 
 from __future__ import annotations
 

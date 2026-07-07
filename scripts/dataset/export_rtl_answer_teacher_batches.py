@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export rtl_task.v0.1 rows into deterministic manual teacher-answer batches."""
+"""Export rtl_task_v0.1 rows into deterministic manual teacher-answer batches."""
 
 from __future__ import annotations
 
