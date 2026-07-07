@@ -63,6 +63,13 @@ The validator checks that:
 
 - every row keeps `source_id`,
 - `schema_version` is `rtl_task_v0.1`,
+- every row has top-level `tool_checks` with null values for unavailable evidence,
+- `design_context.source_rtl_role` is `reference_rtl`,
+- `design_context` is populated with prompt/RTL interface context (`target_module_name`, `rtl_module_name`, and `interface_ports_from_prompt`),
+- visible prompt/RTL interface direction mismatches are captured in `design_context.interface_warnings` instead of rewriting source text,
+- prompt-embedded buggy `TopModule` candidates are extracted exactly into `artifacts.before_rtl_code` with `design_context.prompt_embedded_candidate_rtl: true`,
+- prompt-embedded context/helper RTL is marked with `design_context.prompt_embedded_context_rtl: true` and is not treated as candidate DUT source,
+- `extracted_rtl_summary` is populated, including reset signals such as `resetn`, `areset`, `ar`, or `r` when the RTL uses them as resets,
 - prompt/spec text stays exact,
 - RTL/testbench text stays exact or null when absent,
 - no assistant-answer sections appear,
