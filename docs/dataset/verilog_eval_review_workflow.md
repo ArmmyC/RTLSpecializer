@@ -25,6 +25,8 @@ Supported inputs:
 - a conservative VerilogEval-style JSONL export,
 - a local VerilogEval checkout containing `dataset_spec-to-rtl/*_prompt.txt`, `*_ref.sv`, and optional `*_test.sv`.
 
+If you are starting from raw VerilogEval source tasks that still need `rtl_task_v0.1` normalization, first follow the [LLM normalization batch workflow](llm_normalization_batch_workflow.md). That step exports small local raw batches for manual ChatGPT/Claude conversion and validates the returned task JSON locally before any later drafting or review workflow.
+
 ## Prepare a draft review batch
 
 ```bash

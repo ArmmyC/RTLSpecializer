@@ -14,7 +14,26 @@ class VerilogEvalAdapter(PublicDatasetAdapter):
     def discover_examples(self, root: Path, options: ImportOptions) -> DiscoveryResult:
         manifest = root / "manifest.jsonl" if root.is_dir() else root
         if manifest.exists() and manifest.name == "manifest.jsonl":
-            return ManifestAdapter().discover_examples(manifest, options)
+            result = ManifestAdapter().discover_examples(manifest, options)
+            augmented: list[RawPublicExample] = []
+            for example in result.examples:
+                metadata = dict(example.metadata)
+                prompt = example.artifacts.get("lint_log")
+                if isinstance(prompt, str) and prompt.strip():
+                    metadata.setdefault("raw_prompt", prompt)
+                augmented.append(RawPublicExample(
+                    source_id=example.source_id,
+                    root=example.root,
+                    artifacts=example.artifacts,
+                    source=example.source,
+                    license=example.license,
+                    design_family=example.design_family,
+                    task_type=example.task_type,
+                    user_goal=example.user_goal,
+                    provenance=example.provenance,
+                    metadata=metadata,
+                ))
+            return DiscoveryResult(augmented, result.rejections, result.warnings, result.discovered_examples)
         if root.is_file() and root.suffix == ".jsonl":
             return _discover_jsonl(root, options)
         if root.is_dir():
@@ -55,6 +74,8 @@ def _family_from_id(source_id: str, prompt: str, rtl: str) -> str:
 
 
 def _example(source_id: str, root: Path, prompt: str, rtl: str, testbench: str | None, source: str, license_value: str | None, metadata: dict) -> RawPublicExample:
+    metadata = dict(metadata)
+    metadata["raw_prompt"] = prompt
     artifacts = {name: None for name in ARTIFACT_FIELDS}
     artifacts["rtl_code"] = rtl
     artifacts["testbench"] = testbench
