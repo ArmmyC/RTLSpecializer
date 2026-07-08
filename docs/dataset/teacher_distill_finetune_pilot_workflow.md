@@ -12,6 +12,8 @@ It is intentionally conservative:
 
 The workflow does not call external APIs, does not train a model itself, does not execute RTL/testbenches, and does not run EDA tools.
 
+RTLCoder-derived tasks can enter this flow only after the raw index has been normalized into reference `rtl_task_v0.1` rows, optionally expanded into synthetic buggy-candidate tasks, and then paired with validated teacher answers. See `docs/dataset/rtlcoder_synthetic_bug_workflow.md`.
+
 ## Flow
 
 ```text
@@ -36,6 +38,13 @@ data/review/verilog_eval_rtl_answer_v0_1_156_clean.jsonl
 
 The task file should contain clean `rtl_task_v0.1` rows.
 The answer file should contain clean teacher `rtl_answer_v0.1` rows.
+
+For RTLCoder-derived inputs, "clean" still does not mean "verified." It means:
+
+- provenance remains `external_rtlcoder_gpt_generated_unverified`,
+- licensing is still unconfirmed until manual review,
+- synthetic buggy candidates were created by deterministic text mutation only,
+- no row has been promoted to golden.
 
 ## Step 1: Prepare the pilot dataset
 
@@ -116,6 +125,8 @@ Treat any apparent gains as provisional until reviewed data is available.
 ## Step 6: Collect more bug-focused data later
 
 The main limitation of this pilot dataset is that most rows are reference-only, with only a small number of prompt-embedded candidate bug rows.
+
+The RTLCoder synthetic-bug path is one way to increase candidate-bug coverage, but those rows are still draft inputs. They should not be treated as proven bug labels or as reviewed truth.
 
 After the pilot:
 

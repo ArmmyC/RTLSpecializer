@@ -19,6 +19,31 @@ python scripts/dataset/import_rtlcoder_dataset.py \
 
 This importer writes a raw review index plus Markdown/JSON reports under `data/review/`, marks each row as `external_rtlcoder_gpt_generated_unverified`, defaults to the first 500 rows for a pilot pass, and never promotes or assumes correctness.
 
+To continue from the RTLCoder raw index into normalized reference `rtl_task_v0.1` rows and then deterministic synthetic bug candidates, use:
+
+```bash
+python scripts/dataset/normalize_rtlcoder_raw_index.py \
+  --input data/review/rtlcoder_raw_index_v0_1.jsonl \
+  --output data/review/rtlcoder_rtl_task_v0_1_reference_draft.jsonl \
+  --report-md data/review/rtlcoder_rtl_task_normalization_report.md \
+  --report-json data/review/rtlcoder_rtl_task_normalization_report.json \
+  --max-rows 500 \
+  --single-module-only \
+  --json
+
+python scripts/dataset/synthesize_rtl_bug_variants.py \
+  --input data/review/rtlcoder_rtl_task_v0_1_reference_draft.jsonl \
+  --output data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
+  --report-md data/review/rtlcoder_synthetic_bug_report.md \
+  --report-json data/review/rtlcoder_synthetic_bug_report.json \
+  --max-source-rows 200 \
+  --variants-per-row 1 \
+  --seed 42 \
+  --json
+```
+
+These rows still remain local drafts only. The normalized RTLCoder tasks keep `source_rtl_role: reference_rtl`, the synthetic rows keep the original reference RTL in `artifacts.rtl_code`, and any synthetic candidate RTL is generated only by deterministic text mutation into `artifacts.before_rtl_code`. Neither path proves correctness or licensing.
+
 Place local public artifacts under `data/raw_public/` or another explicit local path, then create a manifest that records dataset name, canonical URL, source commit if known, per-example provenance, and license. Public availability is not equivalent to training permission or correctness: inspect licenses, duplicates, prompts, expected behavior, and artifacts.
 
 Example:
