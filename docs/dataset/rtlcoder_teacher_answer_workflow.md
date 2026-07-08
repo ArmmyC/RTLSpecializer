@@ -122,17 +122,13 @@ The merged rows remain:
 
 They preserve `system`, `user`, and `assistant` role order, where the user message contains the exact `rtl_task_v0.1` object and the assistant message contains the exact `rtl_answer_v0.1` object.
 
-## Step 6: Merge task and answer rows into draft chat rows
-
-The merge output is still draft chat data. It is not human-reviewed and it is not approved.
-
-## Step 7: Prepare a teacher-distill dataset extension later
+## Step 6: Prepare a teacher-distill dataset extension later
 
 The merged draft rows are still local draft data. They can later feed a teacher-distill dataset extension workflow, but they are still unreviewed and not approved.
 
 Keep everything under `data/review/` until a later human review and provenance check is complete.
 
-## Step 8: Keep everything unreviewed and not approved
+## Step 7: Keep everything unreviewed and not approved
 
 Throughout this flow:
 
@@ -141,6 +137,34 @@ Throughout this flow:
 - keep `promotion_allowed: false`
 - do not treat teacher answers as human truth
 - do not promote anything to golden
+
+## Scaled RTLCoder synthetic bug run
+
+The 500-row pilot remains preserved and should not be overwritten:
+
+- `data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl`
+- `data/review/rtlcoder_teacher_answer_batches/`
+- `data/review/rtlcoder_teacher_answer_draft_rows.jsonl`
+
+For the scaled draft run, use the larger synthetic bug input and export size 20 teacher batches:
+
+```bash
+python scripts/dataset/export_rtlcoder_teacher_answer_batches.py \
+  --input data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl \
+  --output-dir data/review/rtlcoder_teacher_answer_batches_1000 \
+  --batch-size 20 \
+  --force \
+  --json
+```
+
+This scaled flow assumes:
+
+- the raw import was expanded from 500 pilot rows to 3000 rows,
+- the normalized reference task set was regenerated from the 3000-row raw index,
+- the synthetic bug generator targeted 1000 rows with `--target-bug-rows 1000`,
+- all generated tasks, answers, validations, and merged rows remain unapproved draft data under `data/review/`.
+
+Only combine RTLCoder-derived rows with VerilogEval after the teacher answers have been generated, validated, and merged into draft teacher-distill rows.
 
 ## Warnings
 

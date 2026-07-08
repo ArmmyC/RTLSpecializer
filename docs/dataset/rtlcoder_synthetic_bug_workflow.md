@@ -145,6 +145,65 @@ python scripts/dataset/merge_rtlcoder_teacher_distill_rows.py \
 
 That merged output remains teacher-distilled draft data only and can later feed a teacher-distill dataset extension workflow.
 
+## Scaled RTLCoder synthetic bug run
+
+The 500-row pilot remains preserved:
+
+- `data/review/rtlcoder_raw_index_v0_1.jsonl`
+- `data/review/rtlcoder_rtl_task_v0_1_reference_draft.jsonl`
+- `data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl`
+- `data/review/rtlcoder_teacher_answer_draft_rows.jsonl`
+
+For a larger draft-only run, import and normalize 3000 raw rows, then target 1000 synthetic bug rows if enough safe mutation patterns exist:
+
+```bash
+python scripts/dataset/import_rtlcoder_dataset.py \
+  --input D:/ArmmyWorkspace/SiliconCraft/external_datasets/RTL-Coder/dataset/Resyn27k.json \
+  --output-index data/review/rtlcoder_raw_index_v0_1_3000.jsonl \
+  --output-report-md data/review/rtlcoder_import_report_3000.md \
+  --output-report-json data/review/rtlcoder_import_report_3000.json \
+  --limit 3000 \
+  --force \
+  --json
+
+python scripts/dataset/normalize_rtlcoder_raw_index.py \
+  --input data/review/rtlcoder_raw_index_v0_1_3000.jsonl \
+  --output data/review/rtlcoder_rtl_task_v0_1_reference_draft_3000.jsonl \
+  --report-md data/review/rtlcoder_rtl_task_normalization_report_3000.md \
+  --report-json data/review/rtlcoder_rtl_task_normalization_report_3000.json \
+  --max-rows 3000 \
+  --single-module-only \
+  --force \
+  --json
+
+python scripts/dataset/synthesize_rtl_bug_variants.py \
+  --input data/review/rtlcoder_rtl_task_v0_1_reference_draft_3000.jsonl \
+  --output data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl \
+  --report-md data/review/rtlcoder_synthetic_bug_report_1000.md \
+  --report-json data/review/rtlcoder_synthetic_bug_report_1000.json \
+  --max-source-rows 3000 \
+  --variants-per-row 1 \
+  --target-bug-rows 1000 \
+  --seed 42 \
+  --force \
+  --json
+```
+
+If fewer than 1000 safe text mutations are available, the synthesizer emits every safe row it can and reports the remaining shortfall deterministically.
+
+For scaled teacher-answer export, use batch size 20:
+
+```bash
+python scripts/dataset/export_rtlcoder_teacher_answer_batches.py \
+  --input data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl \
+  --output-dir data/review/rtlcoder_teacher_answer_batches_1000 \
+  --batch-size 20 \
+  --force \
+  --json
+```
+
+All scaled outputs remain under `data/review/`, remain unapproved draft data, and should only be combined with VerilogEval after teacher answers have been generated and validated.
+
 ## Warnings
 
 - RTLCoder rows are external and GPT-generated.

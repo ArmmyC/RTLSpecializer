@@ -291,3 +291,38 @@ def test_outputs_are_not_written_into_data_golden(tmp_path) -> None:
 
     assert code == 1
     assert any("data/golden" in error for error in result["errors"])
+
+
+def test_export_batch_size_20_produces_expected_batch_count(tmp_path) -> None:
+    tasks_path = tmp_path / "rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl"
+    rows = [_synthetic_bug_task(f"rtlcoder_mux_{index:04d}") for index in range(41)]
+    write_rows(tasks_path, rows)
+
+    result, code = export_rtlcoder_teacher_answer_batches(
+        tasks_path,
+        tmp_path / "rtlcoder_teacher_answer_batches_1000",
+        batch_size=20,
+    )
+
+    assert code == 0, result
+    assert len(result["batch_files"]) == 3
+    assert _load_json(tmp_path / "rtlcoder_teacher_answer_batches_1000" / "batch_001.json")["row_count"] == 20
+    assert _load_json(tmp_path / "rtlcoder_teacher_answer_batches_1000" / "batch_002.json")["row_count"] == 20
+    assert _load_json(tmp_path / "rtlcoder_teacher_answer_batches_1000" / "batch_003.json")["row_count"] == 1
+
+
+def test_scaled_batch_export_directory_does_not_overwrite_pilot_batches(tmp_path) -> None:
+    tasks_path = tmp_path / "rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl"
+    write_rows(tasks_path, [_synthetic_bug_task("rtlcoder_mux_0000")])
+    pilot_dir = tmp_path / "rtlcoder_teacher_answer_batches"
+    pilot_dir.mkdir(parents=True, exist_ok=True)
+    pilot_file = pilot_dir / "batch_001.json"
+    pilot_file.write_text("{\"pilot\":true}\n", encoding="utf-8")
+
+    result, code = export_rtlcoder_teacher_answer_batches(
+        tasks_path,
+        tmp_path / "rtlcoder_teacher_answer_batches_1000",
+    )
+
+    assert code == 0, result
+    assert pilot_file.read_text(encoding="utf-8") == "{\"pilot\":true}\n"

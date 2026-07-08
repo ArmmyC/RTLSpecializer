@@ -251,3 +251,132 @@ def test_synthetic_mutator_cli_json_output_is_parseable(tmp_path) -> None:
     payload = json.loads(completed.stdout)
     assert payload["ok"] is True
     assert payload["emitted_rows"] == 1
+
+
+def test_target_bug_rows_stops_at_exact_target_when_enough_rows_exist(tmp_path) -> None:
+    tasks = tmp_path / "tasks.jsonl"
+    rtl = (
+        "module mux2(input logic sel, input logic a, input logic b, output logic y);\n"
+        "  assign y = sel ? a : b;\n"
+        "endmodule\n"
+    )
+    write_rows(tasks, [
+        _reference_task("rtlcoder_resyn27k_000001_reference", rtl, design_family="mux"),
+        _reference_task("rtlcoder_resyn27k_000002_reference", rtl, design_family="mux"),
+        _reference_task("rtlcoder_resyn27k_000003_reference", rtl, design_family="mux"),
+    ])
+    output = tmp_path / "synthetic_1000.jsonl"
+    result, code = synthesize_rtl_bug_variants(
+        tasks,
+        output,
+        tmp_path / "report_1000.md",
+        tmp_path / "report_1000.json",
+        max_source_rows=3,
+        variants_per_row=1,
+        target_bug_rows=2,
+        seed=42,
+    )
+    assert code == 0, result
+    assert result["emitted_rows"] == 2
+    assert result["target_bug_rows"] == 2
+    assert result["target_bug_row_shortfall"] == 0
+    assert result["target_bug_rows_met"] is True
+    assert len(_load_jsonl(output)) == 2
+
+
+def test_target_bug_rows_reports_shortfall_when_not_enough_rows_exist(tmp_path) -> None:
+    tasks = tmp_path / "tasks.jsonl"
+    rtl = (
+        "module mux2(input logic sel, input logic a, input logic b, output logic y);\n"
+        "  assign y = sel ? a : b;\n"
+        "endmodule\n"
+    )
+    write_rows(tasks, [_reference_task("rtlcoder_resyn27k_000001_reference", rtl, design_family="mux")])
+    output = tmp_path / "synthetic_1000.jsonl"
+    report_json = tmp_path / "report_1000.json"
+    result, code = synthesize_rtl_bug_variants(
+        tasks,
+        output,
+        tmp_path / "report_1000.md",
+        report_json,
+        max_source_rows=1,
+        variants_per_row=1,
+        target_bug_rows=2,
+        seed=42,
+    )
+    assert code == 0, result
+    assert result["emitted_rows"] == 1
+    assert result["target_bug_row_shortfall"] == 1
+    assert result["target_bug_rows_met"] is False
+    report = json.loads(report_json.read_text(encoding="utf-8"))
+    assert report["target_bug_rows"] == 2
+    assert report["target_bug_row_shortfall"] == 1
+    assert report["target_bug_rows_met"] is False
+
+
+def test_target_bug_rows_remains_deterministic_with_same_seed(tmp_path) -> None:
+    tasks = tmp_path / "tasks.jsonl"
+    rtl = (
+        "module mux2(input logic sel, input logic a, input logic b, output logic y);\n"
+        "  assign y = sel ? a : b;\n"
+        "endmodule\n"
+    )
+    write_rows(tasks, [
+        _reference_task("rtlcoder_resyn27k_000001_reference", rtl, design_family="mux"),
+        _reference_task("rtlcoder_resyn27k_000002_reference", rtl, design_family="mux"),
+        _reference_task("rtlcoder_resyn27k_000003_reference", rtl, design_family="mux"),
+    ])
+    first = tmp_path / "first_1000.jsonl"
+    second = tmp_path / "second_1000.jsonl"
+    first_result, first_code = synthesize_rtl_bug_variants(
+        tasks,
+        first,
+        tmp_path / "first_1000.md",
+        tmp_path / "first_1000.json",
+        max_source_rows=3,
+        variants_per_row=1,
+        target_bug_rows=2,
+        seed=42,
+    )
+    second_result, second_code = synthesize_rtl_bug_variants(
+        tasks,
+        second,
+        tmp_path / "second_1000.md",
+        tmp_path / "second_1000.json",
+        max_source_rows=3,
+        variants_per_row=1,
+        target_bug_rows=2,
+        seed=42,
+    )
+    assert first_code == second_code == 0, (first_result, second_result)
+    assert first.read_text(encoding="utf-8") == second.read_text(encoding="utf-8")
+
+
+def test_scaled_synthetic_output_filenames_do_not_overwrite_pilot_files(tmp_path) -> None:
+    tasks = tmp_path / "tasks.jsonl"
+    pilot_output = tmp_path / "rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl"
+    pilot_report_md = tmp_path / "rtlcoder_synthetic_bug_report.md"
+    pilot_report_json = tmp_path / "rtlcoder_synthetic_bug_report.json"
+    pilot_output.write_text("pilot\n", encoding="utf-8")
+    pilot_report_md.write_text("pilot\n", encoding="utf-8")
+    pilot_report_json.write_text("{\"pilot\":true}\n", encoding="utf-8")
+    rtl = (
+        "module mux2(input logic sel, input logic a, input logic b, output logic y);\n"
+        "  assign y = sel ? a : b;\n"
+        "endmodule\n"
+    )
+    write_rows(tasks, [_reference_task("rtlcoder_resyn27k_000001_reference", rtl, design_family="mux")])
+    result, code = synthesize_rtl_bug_variants(
+        tasks,
+        tmp_path / "rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl",
+        tmp_path / "rtlcoder_synthetic_bug_report_1000.md",
+        tmp_path / "rtlcoder_synthetic_bug_report_1000.json",
+        max_source_rows=1,
+        variants_per_row=1,
+        target_bug_rows=1,
+        seed=42,
+    )
+    assert code == 0, result
+    assert pilot_output.read_text(encoding="utf-8") == "pilot\n"
+    assert pilot_report_md.read_text(encoding="utf-8") == "pilot\n"
+    assert pilot_report_json.read_text(encoding="utf-8") == "{\"pilot\":true}\n"

@@ -430,6 +430,7 @@ def synthesize_rtl_bug_variants(
     *,
     max_source_rows: int | None = None,
     variants_per_row: int = 1,
+    target_bug_rows: int | None = None,
     seed: int = 42,
     force: bool = False,
 ) -> tuple[dict[str, Any], int]:
@@ -438,27 +439,33 @@ def synthesize_rtl_bug_variants(
         errors.append("--max-source-rows must be at least 1 when provided")
     if variants_per_row < 1:
         errors.append("--variants-per-row must be at least 1")
+    if target_bug_rows is not None and target_bug_rows < 1:
+        errors.append("--target-bug-rows must be at least 1 when provided")
     if errors:
-        return _result(False, input_path, output_path, report_md, report_json, 0, 0, 0, max_source_rows, variants_per_row, seed, errors), 1
+        return _result(False, input_path, output_path, report_md, report_json, 0, 0, 0, 0, max_source_rows, variants_per_row, target_bug_rows, seed, errors), 1
 
     loaded, problems = load_jsonl(input_path)
     if problems:
         errors.extend(f"{input_path}:{problem.line or ''}: {problem.message}" for problem in problems)
-        return _result(False, input_path, output_path, report_md, report_json, 0, 0, 0, max_source_rows, variants_per_row, seed, errors), 1
+        return _result(False, input_path, output_path, report_md, report_json, 0, 0, 0, 0, max_source_rows, variants_per_row, target_bug_rows, seed, errors), 1
     if not loaded:
-        return _result(False, input_path, output_path, report_md, report_json, 0, 0, 0, max_source_rows, variants_per_row, seed, ["input file is empty"]), 1
+        return _result(False, input_path, output_path, report_md, report_json, 0, 0, 0, 0, max_source_rows, variants_per_row, target_bug_rows, seed, ["input file is empty"]), 1
 
     output_errors = _prepare_outputs(input_path, [output_path, report_md, report_json], force)
     if output_errors:
-        return _result(False, input_path, output_path, report_md, report_json, len(loaded), 0, 0, max_source_rows, variants_per_row, seed, output_errors), 1
+        return _result(False, input_path, output_path, report_md, report_json, len(loaded), 0, 0, 0, max_source_rows, variants_per_row, target_bug_rows, seed, output_errors), 1
 
     selected = loaded[:max_source_rows] if max_source_rows is not None else loaded
     emitted_rows: list[dict[str, Any]] = []
     skipped_rows: list[dict[str, Any]] = []
     bug_type_counts: Counter[str] = Counter()
     skip_reason_counts: Counter[str] = Counter()
+    processed_source_rows = 0
 
     for line_number, row in selected:
+        if target_bug_rows is not None and len(emitted_rows) >= target_bug_rows:
+            break
+        processed_source_rows += 1
         source_id = row.get("source_id")
         if not isinstance(source_id, str) or not source_id:
             source_id = f"line_{line_number}"
@@ -497,7 +504,14 @@ def synthesize_rtl_bug_variants(
             skipped_rows.append({"source_id": source_id, "line_number": line_number, "skip_reasons": reasons})
             continue
 
-        for mutation in _select_mutations(source_id, candidates, variants_per_row, seed):
+        selected_mutations = _select_mutations(source_id, candidates, variants_per_row, seed)
+        if target_bug_rows is not None:
+            remaining = target_bug_rows - len(emitted_rows)
+            if remaining <= 0:
+                break
+            selected_mutations = selected_mutations[:remaining]
+
+        for mutation in selected_mutations:
             mutated_row = deepcopy(row)
             mutated_row["created_by"] = CREATED_BY
             mutated_row["generated_by"] = CREATED_BY
@@ -533,6 +547,10 @@ def synthesize_rtl_bug_variants(
             )
             bug_type_counts.update([mutation.bug_type])
             emitted_rows.append(mutated_row)
+            if target_bug_rows is not None and len(emitted_rows) >= target_bug_rows:
+                break
+
+    shortfall = max((target_bug_rows or 0) - len(emitted_rows), 0)
 
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -542,11 +560,14 @@ def synthesize_rtl_bug_variants(
         "report_md": str(report_md),
         "report_json": str(report_json),
         "input_rows": len(loaded),
-        "processed_source_rows": len(selected),
+        "processed_source_rows": processed_source_rows,
         "emitted_rows": len(emitted_rows),
         "skipped_rows": len(skipped_rows),
         "max_source_rows": max_source_rows,
         "variants_per_row": variants_per_row,
+        "target_bug_rows": target_bug_rows,
+        "target_bug_row_shortfall": shortfall,
+        "target_bug_rows_met": target_bug_rows is None or shortfall == 0,
         "seed": seed,
         "bug_type_counts": dict(sorted(bug_type_counts.items())),
         "skip_reason_counts": dict(sorted(skip_reason_counts.items())),
@@ -556,10 +577,10 @@ def synthesize_rtl_bug_variants(
     report_md.write_text(_markdown_report(report), encoding="utf-8", newline="\n")
 
     if not emitted_rows:
-        return _result(False, input_path, output_path, report_md, report_json, len(loaded), len(emitted_rows), len(skipped_rows), max_source_rows, variants_per_row, seed, ["no synthetic bug rows were emitted"]), 1
+        return _result(False, input_path, output_path, report_md, report_json, len(loaded), len(emitted_rows), len(skipped_rows), processed_source_rows, max_source_rows, variants_per_row, target_bug_rows, seed, ["no synthetic bug rows were emitted"]), 1
 
     write_jsonl(output_path, emitted_rows)
-    return _result(True, input_path, output_path, report_md, report_json, len(loaded), len(emitted_rows), len(skipped_rows), max_source_rows, variants_per_row, seed, []), 0
+    return _result(True, input_path, output_path, report_md, report_json, len(loaded), len(emitted_rows), len(skipped_rows), processed_source_rows, max_source_rows, variants_per_row, target_bug_rows, seed, []), 0
 
 
 def _markdown_report(report: dict[str, Any]) -> str:
@@ -577,6 +598,8 @@ def _markdown_report(report: dict[str, Any]) -> str:
         f"- Skipped rows: {report['skipped_rows']}",
         f"- Max source rows: {report['max_source_rows']}",
         f"- Variants per row: {report['variants_per_row']}",
+        f"- Target bug rows: {report['target_bug_rows']}",
+        f"- Target shortfall: {report['target_bug_row_shortfall']}",
         f"- Seed: {report['seed']}",
         "",
         "## Bug type counts",
@@ -616,11 +639,14 @@ def _result(
     input_rows: int,
     emitted_rows: int,
     skipped_rows: int,
+    processed_source_rows: int,
     max_source_rows: int | None,
     variants_per_row: int,
+    target_bug_rows: int | None,
     seed: int,
     errors: list[str],
 ) -> dict[str, Any]:
+    shortfall = max((target_bug_rows or 0) - emitted_rows, 0)
     return {
         "ok": ok,
         "input": str(input_path),
@@ -630,8 +656,12 @@ def _result(
         "input_rows": input_rows,
         "emitted_rows": emitted_rows,
         "skipped_rows": skipped_rows,
+        "processed_source_rows": processed_source_rows,
         "max_source_rows": max_source_rows,
         "variants_per_row": variants_per_row,
+        "target_bug_rows": target_bug_rows,
+        "target_bug_row_shortfall": shortfall,
+        "target_bug_rows_met": target_bug_rows is None or shortfall == 0,
         "seed": seed,
         "errors": errors,
     }
@@ -645,8 +675,11 @@ def _print_text(result: dict[str, Any]) -> None:
     print(f"Input rows: {result['input_rows']}")
     print(f"Emitted rows: {result['emitted_rows']}")
     print(f"Skipped rows: {result['skipped_rows']}")
+    print(f"Processed source rows: {result['processed_source_rows']}")
     print(f"Max source rows: {result['max_source_rows']}")
     print(f"Variants per row: {result['variants_per_row']}")
+    print(f"Target bug rows: {result['target_bug_rows']}")
+    print(f"Target shortfall: {result['target_bug_row_shortfall']}")
     print(f"Seed: {result['seed']}")
     print(f"Report JSON: {result['report_json']}")
     print(f"Report Markdown: {result['report_md']}")
@@ -664,6 +697,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-json", required=True, type=Path)
     parser.add_argument("--max-source-rows", type=int)
     parser.add_argument("--variants-per-row", type=int, default=1)
+    parser.add_argument("--target-bug-rows", type=int)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--force", action="store_true", help="Replace only exact managed outputs created by this tool")
     parser.add_argument("--json", action="store_true")
@@ -675,6 +709,7 @@ def main(argv: list[str] | None = None) -> int:
         args.report_json,
         max_source_rows=args.max_source_rows,
         variants_per_row=args.variants_per_row,
+        target_bug_rows=args.target_bug_rows,
         seed=args.seed,
         force=args.force,
     )
