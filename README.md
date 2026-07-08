@@ -30,6 +30,8 @@ Raw VerilogEval source tasks can also be exported into small local JSON batches 
 
 Clean `rtl_task_v0.1` rows can be exported into small local teacher-answer batches for manual ChatGPT/Claude/larger-teacher generation of conservative `rtl_answer_v0.1`, then validated and merged into draft chat rows. See [docs/dataset/rtl_answer_teacher_generation_workflow.md](docs/dataset/rtl_answer_teacher_generation_workflow.md).
 
+Clean `rtl_task_v0.1` plus clean teacher `rtl_answer_v0.1` rows can also be packaged into a teacher-distilled pilot fine-tuning dataset with deterministic train/validation/test splits, manifest hashes, and an explicit unreviewed/not-golden dataset card. See [docs/dataset/teacher_distill_finetune_pilot_workflow.md](docs/dataset/teacher_distill_finetune_pilot_workflow.md).
+
 Human reviewers can structure a focused 60–90 minute pass with the [manual review session guide](docs/dataset/manual_review_session_guide.md) and its per-answer checklist.
 
 Manually edited review batches can first be triaged locally for duplicated answers, placeholder task artifacts, claim wording, and reset-language risks without changing any rows. See [docs/dataset/review_triage_workflow.md](docs/dataset/review_triage_workflow.md).

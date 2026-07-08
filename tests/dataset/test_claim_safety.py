@@ -38,6 +38,14 @@ def test_weaker_claim_language_is_allowed(tmp_path, valid_row) -> None:
     assert report.ok
 
 
+def test_missing_power_report_warning_is_allowed(tmp_path, valid_row) -> None:
+    valid_row["messages"][2]["content"]["limitations"] = [
+        "No synthesis, timing, toggle, activity, or power reports are supplied."
+    ]
+    report = validate_dataset_file(write_rows(tmp_path / "good.jsonl", [valid_row]))
+    assert report.ok
+
+
 def test_improvement_claim_rejects_unknown_or_failed_check(tmp_path, valid_row) -> None:
     _set_recommendation(valid_row, "Area is improved.")
     for status in ("unknown", "fail", "not_run"):

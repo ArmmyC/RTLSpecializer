@@ -35,7 +35,14 @@ def find_unsupported_claims(row: dict[str, Any], answer: dict[str, Any]) -> list
     issues: list[tuple[str, str]] = []
 
     strong_power = re.search(r"\b(reduces?|reduced|lower(?:s|ed)?|improves?|improved)\s+(?:the\s+)?power\b|\bpower\s+(?:(?:is|was|has been)\s+)?(?:reduced|lower|improved)", strong_text)
-    measured_power = re.search(r"\b(measured|measurement|report(?:ed)?)\b[^.]{0,60}\bpower\b|\bpower\b[^.]{0,60}\b(measured|measurement)\b", text)
+    measured_power = re.search(
+        r"\bmeasured\s+power\b"
+        r"|\breported\s+power\b"
+        r"|\bpower\s+measurement\b"
+        r"|\bpower\s+was\s+measured\b"
+        r"|\bpower\s+is\s+reported\b",
+        text,
+    )
     if strong_power and not _has_passing_check(checks, "power"):
         issues.append(("tool_checks.power", "unsupported power improvement claim without power evidence"))
     if measured_power and not artifacts.get("power_report"):

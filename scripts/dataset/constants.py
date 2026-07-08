@@ -27,13 +27,15 @@ CLAIM_LEVELS = {
     "insufficient_evidence", "not_applicable",
 }
 CLAIM_DOMAINS = {"correctness", "area", "activity", "power"}
-SPLITS = {"train", "val", "test", "unsplit"}
+SPLITS = {"train", "val", "validation", "test", "unsplit"}
+TRAINING_SPLITS = {"train", "val", "validation", "test"}
 SOURCES = {
     "handwritten_golden", "synthetic_rfid_style", "public_verilog_eval",
     "public_rtllm", "public_rtllm_2", "public_rtlfixer",
     "public_openllm_rtl", "teacher_generated", "llm_converted_public",
 }
-REVIEW_STATUSES = {"draft", "validated", "reviewed", "rejected"}
+REVIEW_STATUSES = {"draft", "validated", "reviewed", "rejected", "teacher_distilled_unreviewed"}
+TEACHER_DISTILL_REVIEW_STATUS = "teacher_distilled_unreviewed"
 TOOL_CHECKS = {"parse", "lint", "simulation", "equivalence", "synthesis", "toggle", "power"}
 TOOL_STATUSES = {"pass", "fail", "not_run", "unknown"}
 REQUIRED_OUTPUT = {
@@ -51,4 +53,3 @@ ARTIFACT_FIELDS = {
     "rtl_code", "before_rtl_code", "after_rtl_code", "testbench",
     "synthesis_report", "toggle_report", "lint_log",
 }
-

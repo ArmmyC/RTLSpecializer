@@ -114,3 +114,37 @@ The merge output is still draft data. It does not mark rows approved, validated,
 Run the usual human review, triage, readiness, and promotion workflow on draft rows. Promotion happens only later, after manual approval and readiness checks.
 
 Generated teacher batches, answer returns, validation reports, and draft rows should stay under ignored local-only directories such as `data/review/` unless a maintainer intentionally publishes a reviewed artifact.
+
+## Optional branch: teacher-distill pilot packaging
+
+If you intentionally want a small pilot fine-tuning dataset before another manual review pass, package the clean task JSONL plus clean teacher answer JSONL into an explicitly unreviewed teacher-distill dataset:
+
+```bash
+python scripts/dataset/prepare_teacher_distill_dataset.py \
+  --tasks data/review/verilog_eval_rtl_task_v0_1_156.jsonl \
+  --answers data/review/verilog_eval_rtl_answer_v0_1_156_clean.jsonl \
+  --output-dir data/distill/verilog_eval_teacher_distill_v0_1 \
+  --train-size 120 \
+  --validation-size 18 \
+  --test-size 18 \
+  --seed 42 \
+  --strict \
+  --json
+```
+
+Then validate the merged pilot rows:
+
+```bash
+python scripts/dataset/validate_dataset.py \
+  --input data/distill/verilog_eval_teacher_distill_v0_1/all.jsonl \
+  --strict
+```
+
+This branch is for pilot format/pipeline fine-tuning only:
+
+- It is teacher-distilled, not human-reviewed.
+- It is not golden.
+- It does not mark rows approved.
+- It should not be promoted or treated as final production truth without review.
+
+For the full pilot flow after packaging, including baseline-first comparison and later bug-focused data collection, see [teacher_distill_finetune_pilot_workflow.md](teacher_distill_finetune_pilot_workflow.md).

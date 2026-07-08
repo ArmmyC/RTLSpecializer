@@ -12,10 +12,11 @@ from .claim_safety import find_unsupported_claims
 from .constants import (
     ANSWER_SCHEMA_VERSION, ARTIFACT_FIELDS, CLAIM_DOMAINS, CLAIM_LEVELS,
     DATASET_VERSION, PROVENANCE_FIELDS, REQUIRED_OUTPUT, REVIEW_STATUSES,
-    SOURCES, SPLITS, TASK_SCHEMA_VERSION, TASK_TYPES, TOOL_CHECKS,
-    TOOL_STATUSES, TOP_LEVEL_FIELDS, USER_GOALS,
+    SOURCES, SPLITS, TASK_SCHEMA_VERSION, TASK_TYPES, TEACHER_DISTILL_REVIEW_STATUS,
+    TOOL_CHECKS, TOOL_STATUSES, TOP_LEVEL_FIELDS, TRAINING_SPLITS, USER_GOALS,
 )
 from .io_utils import load_jsonl
+from .rtl_answer_teacher_batches import _validate_answer_row
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,42 @@ def has_tool_evidence(row: dict[str, Any], tool: str) -> bool:
     return True
 
 
+def _is_teacher_distill_row(row: dict[str, Any]) -> bool:
+    return (
+        row.get("review_status") == TEACHER_DISTILL_REVIEW_STATUS
+        or row.get("dataset_stage") == "teacher_distill_pilot"
+    )
+
+
+def _teacher_distill_training_row_ok(row: dict[str, Any]) -> bool:
+    return (
+        row.get("review_status") == TEACHER_DISTILL_REVIEW_STATUS
+        and row.get("dataset_stage") == "teacher_distill_pilot"
+        and row.get("approval_status") == "not_approved"
+    )
+
+
+def _contains_answer_copy(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("schema_version") == ANSWER_SCHEMA_VERSION:
+            return True
+        answer_only_keys = {
+            "issue_summary",
+            "time_reasoning",
+            "space_reasoning",
+            "safe_optimization",
+            "functional_risk",
+            "verification_plan",
+            "claim_levels",
+        }
+        if len(answer_only_keys & value.keys()) >= 3:
+            return True
+        return any(_contains_answer_copy(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_answer_copy(item) for item in value)
+    return False
+
+
 def validate_dataset_file(path: Path, strict: bool = False) -> ValidationReport:
     loaded, read_problems = load_jsonl(path)
     errors = [ValidationMessage(str(path), item.message, item.line) for item in read_problems]
@@ -176,8 +213,13 @@ def validate_dataset_file(path: Path, strict: bool = False) -> ValidationReport:
         for field, allowed in (("split", SPLITS), ("source", SOURCES), ("task_family", TASK_TYPES), ("review_status", REVIEW_STATUSES)):
             if field in row and row.get(field) not in allowed:
                 error(field, f"invalid {field} {row.get(field)!r}")
-        if row.get("split") in {"train", "val", "test"} and row.get("review_status") not in {"validated", "reviewed"}:
-            error("review_status", "train, val, and test rows must be validated or reviewed")
+        if row.get("split") in TRAINING_SPLITS and not (
+            row.get("review_status") in {"validated", "reviewed"} or _teacher_distill_training_row_ok(row)
+        ):
+            error(
+                "review_status",
+                "train, val, validation, and test rows must be validated or reviewed, or be teacher_distilled_unreviewed pilot rows marked not_approved",
+            )
         if row.get("split") == "unsplit" and row.get("review_status") == "rejected":
             warning("review_status", "rejected unsplit row is not training-ready")
         for field in ("license", "design_family", "created_by"):
@@ -232,15 +274,18 @@ def validate_dataset_file(path: Path, strict: bool = False) -> ValidationReport:
             error("messages[2].content", "must be an object"); continue
 
         _validate_task(task, row, error)
-        _validate_answer(answer, task, row, error, warning)
-        _validate_golden_quality(row, task, answer, error)
+        if _is_teacher_distill_row(row):
+            _validate_teacher_distill_row(row, task, answer, error)
+        else:
+            _validate_answer(answer, task, row, error, warning)
+            _validate_golden_quality(row, task, answer, error)
         for field, message in find_unsupported_claims(row, answer):
             error(field, message)
 
         task_type = task.get("task_type")
         if task_type in TASK_TYPES:
             by_task[task_type] += 1
-        if row.get("split") in {"train", "val", "test"} and row.get("design_family"):
+        if row.get("split") in TRAINING_SPLITS and row.get("design_family") and not _is_teacher_distill_row(row):
             families_by_split[row["design_family"]].add(row["split"])
 
     for family, split_set in sorted(families_by_split.items()):
@@ -290,6 +335,43 @@ def _validate_golden_quality(row: dict[str, Any], task: dict[str, Any], answer: 
         block = location.get("block") if isinstance(location, dict) else None
         if block not in {"always_ff", "always_comb", "always", "assign", "case"}:
             error(f"messages[2].content.issue_summary[{index}].evidence.code_location.block", "must identify a meaningful RTL block")
+
+
+def _validate_teacher_distill_row(row: dict[str, Any], task: dict[str, Any], answer: dict[str, Any], error: Any) -> None:
+    if row.get("dataset_stage") != "teacher_distill_pilot":
+        error("dataset_stage", "teacher-distilled pilot rows must set dataset_stage to 'teacher_distill_pilot'")
+    if row.get("approval_status") != "not_approved":
+        error("approval_status", "teacher-distilled pilot rows must set approval_status to 'not_approved'")
+    if row.get("source") != "teacher_generated":
+        error("source", "teacher-distilled pilot rows must set source to 'teacher_generated'")
+    if row.get("source_family") != "public_verilog_eval":
+        error("source_family", "teacher-distilled pilot rows must set source_family to 'public_verilog_eval'")
+    if row.get("schema_pair") != f"{TASK_SCHEMA_VERSION}_to_{ANSWER_SCHEMA_VERSION}":
+        error("schema_pair", f"teacher-distilled pilot rows must set schema_pair to '{TASK_SCHEMA_VERSION}_to_{ANSWER_SCHEMA_VERSION}'")
+    if row.get("promotion_allowed") is not False:
+        error("promotion_allowed", "teacher-distilled pilot rows must keep promotion_allowed false")
+    if not isinstance(row.get("dataset_name"), str) or not row.get("dataset_name"):
+        error("dataset_name", "teacher-distilled pilot rows must set a non-empty dataset_name")
+    if not isinstance(row.get("split_seed"), int):
+        error("split_seed", "teacher-distilled pilot rows must keep integer split_seed metadata")
+    if isinstance(row.get("id"), str) and row["id"].startswith("golden_"):
+        error("id", "teacher-distilled pilot rows must not use golden row IDs")
+    if row.get("source") == "handwritten_golden":
+        error("source", "teacher-distilled pilot rows must not use handwritten_golden source")
+
+    task_source_id = task.get("source_id")
+    answer_source_id = answer.get("source_id")
+    top_source_id = row.get("source_id")
+    if not isinstance(task_source_id, str) or not task_source_id:
+        error("messages[1].content.source_id", "teacher-distilled pilot rows must preserve task source_id")
+    if answer_source_id != task_source_id:
+        error("messages[2].content.source_id", "assistant source_id must match user task source_id")
+    if top_source_id is not None and top_source_id != task_source_id:
+        error("source_id", "top-level source_id must match message source_id")
+    if _contains_answer_copy(task):
+        error("messages[1].content", "user task content must not contain rtl_answer_v0.1 content")
+    for detail in _validate_answer_row(answer, task, 1):
+        error("messages[2].content", detail)
 
 
 def _validate_task(task: dict[str, Any], row: dict[str, Any], error: Any) -> None:
