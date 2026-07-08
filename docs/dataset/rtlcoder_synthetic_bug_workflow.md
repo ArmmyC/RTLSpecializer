@@ -108,24 +108,26 @@ These rows are still draft inputs. A synthetic mutation is not proof that the ca
 
 ## Step 4: Export teacher-answer batches
 
-After you have normalized reference rows or synthetic buggy-candidate rows, export them for manual teacher-answer generation:
+After you have normalized reference rows or synthetic buggy-candidate rows, continue with the RTLCoder-specific teacher-answer workflow in [rtlcoder_teacher_answer_workflow.md](rtlcoder_teacher_answer_workflow.md).
+
+The default RTLCoder batch size is 10:
 
 ```bash
-python scripts/dataset/export_rtl_answer_teacher_batches.py \
+python scripts/dataset/export_rtlcoder_teacher_answer_batches.py \
   --input data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
   --output-dir data/review/rtlcoder_teacher_answer_batches \
-  --batch-size 5 \
+  --force \
   --json
 ```
 
 ## Step 5: Validate returned teacher answers
 
 ```bash
-python scripts/dataset/validate_rtl_answer_teacher_batch.py \
+python scripts/dataset/validate_rtlcoder_teacher_answers.py \
   --tasks data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
-  --answers returned_answers.json \
-  --output-md data/review/rtlcoder_teacher_answer_validation.md \
-  --output-json data/review/rtlcoder_teacher_answer_validation.json \
+  --answers data/review/rtlcoder_teacher_answer_returns/batch_001_answers.json \
+  --output-md data/review/rtlcoder_teacher_answer_returns/batch_001_validation.md \
+  --output-json data/review/rtlcoder_teacher_answer_returns/batch_001_validation.json \
   --strict \
   --json
 ```
@@ -133,15 +135,15 @@ python scripts/dataset/validate_rtl_answer_teacher_batch.py \
 ## Step 6: Merge clean task/answer rows for distill-style packaging
 
 ```bash
-python scripts/dataset/merge_rtl_task_answer_rows.py \
+python scripts/dataset/merge_rtlcoder_teacher_distill_rows.py \
   --tasks data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
-  --answers returned_answers.json \
+  --answers data/review/rtlcoder_teacher_answer_returns/all_answers.jsonl \
   --output data/review/rtlcoder_teacher_answer_draft_rows.jsonl \
   --strict \
   --json
 ```
 
-That merged output can later feed the teacher-distill dataset packaging workflow.
+That merged output remains teacher-distilled draft data only and can later feed a teacher-distill dataset extension workflow.
 
 ## Warnings
 
