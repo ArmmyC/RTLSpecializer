@@ -10,7 +10,7 @@ from typing import Any
 
 
 _IDENT = r"[A-Za-z_][A-Za-z0-9_$]*"
-_MODULE_RE = re.compile(r"\bmodule\s+(" + _IDENT + r")\b", re.IGNORECASE)
+_MODULE_RE = re.compile(r"^[ \t]*module\s+(" + _IDENT + r")\b", re.IGNORECASE | re.MULTILINE)
 _PORT_RE = re.compile(r"\b(?:input|output|inout)\b[^;)]*", re.IGNORECASE)
 _ASSIGN_RE = re.compile(r"\b(" + _IDENT + r")(?:\s*\[[^\]]+\])?\s*<=", re.IGNORECASE)
 _ALWAYS_COMB_RE = re.compile(r"\balways_comb\b|\balways\s*@\s*\*", re.IGNORECASE)
@@ -37,6 +37,13 @@ def _port_names(text: str) -> list[str]:
         segment = re.sub(r"\b(?:input|output|inout|wire|reg|logic|signed)\b", " ", segment, flags=re.IGNORECASE)
         names.extend(re.findall(_IDENT, segment))
     return _dedupe(names)
+
+
+def module_names(text: str) -> list[str]:
+    """Return module declarations in source order without parsing or elaborating RTL."""
+    if not isinstance(text, str):
+        return []
+    return _dedupe(_MODULE_RE.findall(text))
 
 
 def rtl_port_directions(text: str) -> dict[str, str]:
@@ -102,7 +109,7 @@ def summarize_rtl(artifacts: dict[str, str]) -> dict[str, Any]:
         value for key, value in artifacts.items()
         if key in {"rtl_code", "before_rtl_code", "after_rtl_code"} and isinstance(value, str)
     )
-    modules = _MODULE_RE.findall(rtl_text)
+    modules = module_names(rtl_text)
     ports = _port_names(rtl_text)
     registered = _dedupe(_ASSIGN_RE.findall(rtl_text))
     candidates = _dedupe(ports + registered)

@@ -10,5 +10,10 @@ data/.local_data/
 /data/reports/
 /data/releases/
 /data/distill/
+/data/eval/
 /data/eval/candidates/
 /data/eval/runs/
+/outputs/
+/runs/
+/checkpoints/
+/models/

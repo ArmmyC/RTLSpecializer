@@ -12,6 +12,8 @@ See [data/README.md](data/README.md) and [docs/dataset/dataset_guidelines.md](do
 
 Local public dataset drafts can be imported, reviewed, and promoted without downloads, EDA execution, or external LLM calls. See [docs/dataset/public_manifest_format.md](docs/dataset/public_manifest_format.md) and [docs/dataset/review_promotion_workflow.md](docs/dataset/review_promotion_workflow.md).
 
+The local RTLCoder `Resyn27k.json` file can also be inspected into a review-only raw index and Markdown/JSON import reports without promotion or correctness assumptions. See [docs/dataset/public_dataset_sources.md](docs/dataset/public_dataset_sources.md).
+
 Dataset releases assemble validated/reviewed rows into deterministic train/val/test artifacts with manifests, hashes, stats, and a dataset card. See [docs/dataset/release_workflow.md](docs/dataset/release_workflow.md).
 
 Local deterministic evaluation consumes release rows plus candidate answer JSONL and writes rubric scores, metrics, and reports without model calls. See [docs/eval/evaluation_harness.md](docs/eval/evaluation_harness.md).
@@ -31,6 +33,8 @@ Raw VerilogEval source tasks can also be exported into small local JSON batches 
 Clean `rtl_task_v0.1` rows can be exported into small local teacher-answer batches for manual ChatGPT/Claude/larger-teacher generation of conservative `rtl_answer_v0.1`, then validated and merged into draft chat rows. See [docs/dataset/rtl_answer_teacher_generation_workflow.md](docs/dataset/rtl_answer_teacher_generation_workflow.md).
 
 Clean `rtl_task_v0.1` plus clean teacher `rtl_answer_v0.1` rows can also be packaged into a teacher-distilled pilot fine-tuning dataset with deterministic train/validation/test splits, manifest hashes, and an explicit unreviewed/not-golden dataset card. See [docs/dataset/teacher_distill_finetune_pilot_workflow.md](docs/dataset/teacher_distill_finetune_pilot_workflow.md).
+
+For the next local-only step after dataset preparation, use the teacher-distill pilot baseline-vs-fine-tuned workflow in [docs/finetune/rtl_teacher_distill_pilot.md](docs/finetune/rtl_teacher_distill_pilot.md). It exports test prompts, scores baseline and fine-tuned outputs structurally, and compares claim-safety behavior without training inside this repository task.
 
 Human reviewers can structure a focused 60–90 minute pass with the [manual review session guide](docs/dataset/manual_review_session_guide.md) and its per-answer checklist.
 

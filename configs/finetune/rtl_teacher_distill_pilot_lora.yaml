@@ -1,0 +1,34 @@
+# Template config for a small teacher-distill pilot.
+# This file is intentionally framework-agnostic and must be adapted to the
+# specific trainer you use.
+
+base_model: "set-me-to-your-local-base-model"
+train_file: "data/distill/verilog_eval_teacher_distill_v0_1/train.jsonl"
+validation_file: "data/distill/verilog_eval_teacher_distill_v0_1/validation.jsonl"
+output_dir: "outputs/rtl_teacher_distill_pilot_lora"
+
+# Allowed values for this template: lora or qlora
+method: "lora"
+
+max_seq_length: 4096
+learning_rate: 2.0e-5
+epochs: 2
+batch_size: 1
+gradient_accumulation_steps: 16
+
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+target_modules:
+  - "<set-for-your-framework-and-model>"
+
+save_steps: 50
+eval_steps: 25
+seed: 42
+
+notes:
+  - "Tiny pilot only. The teacher-distilled dataset is unreviewed and not golden."
+  - "Use this run to test formatting, JSON structure, and claim-safety behavior first."
+  - "Prefer 1 to 3 epochs. Stop early if validation behavior degrades or memorization is obvious."
+  - "Do not treat any gain on this pilot as proof of RTL correctness."
+  - "Collect more bug-focused rows before making strong model-quality claims."

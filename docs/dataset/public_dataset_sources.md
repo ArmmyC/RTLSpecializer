@@ -9,6 +9,16 @@ Supported adapters:
 - `rtllm`: delegates to `<input>/manifest.jsonl` when present; otherwise fails with a manifest-format pointer.
 - `rtlfixer`: delegates to `<input>/manifest.jsonl` when present; otherwise fails with a manifest-format pointer.
 
+For local-only inspection of the external RTLCoder `Resyn27k.json` file without promoting anything, use:
+
+```bash
+python scripts/dataset/import_rtlcoder_dataset.py \
+  --input D:/ArmmyWorkspace/SiliconCraft/external_datasets/RTL-Coder/dataset/Resyn27k.json \
+  --json
+```
+
+This importer writes a raw review index plus Markdown/JSON reports under `data/review/`, marks each row as `external_rtlcoder_gpt_generated_unverified`, defaults to the first 500 rows for a pilot pass, and never promotes or assumes correctness.
+
 Place local public artifacts under `data/raw_public/` or another explicit local path, then create a manifest that records dataset name, canonical URL, source commit if known, per-example provenance, and license. Public availability is not equivalent to training permission or correctness: inspect licenses, duplicates, prompts, expected behavior, and artifacts.
 
 Example:
