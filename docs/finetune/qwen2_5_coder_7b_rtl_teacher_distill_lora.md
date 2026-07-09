@@ -54,6 +54,7 @@ python scripts/finetune/export_canonical_finetune_dataset.py \
 ```
 
 This export rewrites only the canonical training copy. It does not mutate the original `data/distill/...` files.
+Its `manifest.json` does not include a self SHA256 because embedding that hash would change the manifest bytes.
 
 Optionally re-run the checker on the canonical output:
 

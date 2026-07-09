@@ -86,11 +86,15 @@ def _canonicalize_row(
     *,
     split_name: str,
     row_index: int,
+    golden_dataset: bool,
     normalized_alias_counts: dict[str, Counter[str]],
 ) -> tuple[dict[str, Any] | None, bool, list[str]]:
     errors: list[str] = []
     updated = deepcopy(row)
     row_id = updated.get("id") if isinstance(updated.get("id"), str) else f"{split_name}:{row_index}"
+    if updated.get("approval_status") == "approved" and not golden_dataset:
+        errors.append(f"{split_name} row {row_id} is approved outside a golden dataset")
+        return None, False, errors
     messages = updated.get("messages")
     if not isinstance(messages, list) or len(messages) != 3:
         errors.append(f"{split_name} row {row_id} must contain exactly three messages")
@@ -150,6 +154,7 @@ def export_canonical_finetune_dataset(
     errors.extend(_validate_output_dir(output_dir, force=force))
     split_rows, load_errors = _load_split_rows(dataset_dir)
     errors.extend(load_errors)
+    golden_dataset = _is_golden_path(dataset_dir)
 
     normalized_alias_counts = {
         "user": Counter(),
@@ -168,6 +173,7 @@ def export_canonical_finetune_dataset(
                 row,
                 split_name=split_name,
                 row_index=row_index,
+                golden_dataset=golden_dataset,
                 normalized_alias_counts=normalized_alias_counts,
             )
             errors.extend(row_errors)
@@ -225,14 +231,18 @@ def export_canonical_finetune_dataset(
             }
             for split_name in ("train", "validation", "test")
         },
+        "output_files": {
+            split_name: {
+                "path": str(output_paths[split_name]),
+                "sha256": file_sha256(output_paths[split_name]),
+            }
+            for split_name in ("train", "validation", "test")
+        },
     }
-    _write_json(output_paths["manifest"], manifest)
-    manifest["output_files"] = {
-        split_name: {
-            "path": str(output_paths[split_name]),
-            "sha256": file_sha256(output_paths[split_name]),
-        }
-        for split_name in ("train", "validation", "test", "manifest")
+    manifest["output_files"]["manifest"] = {
+        "path": str(output_paths["manifest"]),
+        "sha256": None,
+        "note": "Manifest self-hash is omitted because embedding it would change the file bytes.",
     }
     _write_json(output_paths["manifest"], manifest)
 

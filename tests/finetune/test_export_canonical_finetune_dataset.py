@@ -66,9 +66,9 @@ def _row(source_id: str, split: str) -> dict:
     }
 
 
-def _write_dataset_dir(tmp_path: Path, *, rows_per_split: int = 2) -> Path:
-    dataset_dir = tmp_path / "distill_dataset"
-    dataset_dir.mkdir()
+def _write_dataset_dir(tmp_path: Path, *, rows_per_split: int = 2, dataset_dir: Path | None = None) -> Path:
+    dataset_dir = dataset_dir or (tmp_path / "distill_dataset")
+    dataset_dir.mkdir(parents=True)
     for split_name in ("train", "validation", "test"):
         rows = [_row(f"{split_name}_{index}", split_name) for index in range(rows_per_split)]
         path = dataset_dir / f"{split_name}.jsonl"
@@ -115,6 +115,22 @@ def test_exports_canonical_schema_versions_and_preserves_input(tmp_path) -> None
     assert exported_summary["schema_aliases"] == {"user": {}, "assistant": {}}
 
 
+def test_manifest_omits_self_hash_and_keeps_split_hashes(tmp_path) -> None:
+    dataset_dir = _write_dataset_dir(tmp_path)
+    output_dir = tmp_path / "canonical_dataset"
+
+    summary, code = export_canonical_finetune_dataset(dataset_dir, output_dir)
+
+    assert code == 0, summary
+    manifest_path = output_dir / "manifest.json"
+    assert manifest_path.is_file()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["output_files"]["manifest"]["sha256"] is None
+    assert "self-hash is omitted" in manifest["output_files"]["manifest"]["note"].lower()
+    for split_name in ("train", "validation", "test"):
+        assert manifest["output_files"][split_name]["sha256"]
+
+
 def test_fails_missing_split_file_without_writing_outputs(tmp_path) -> None:
     dataset_dir = _write_dataset_dir(tmp_path)
     (dataset_dir / "validation.jsonl").unlink()
@@ -125,6 +141,45 @@ def test_fails_missing_split_file_without_writing_outputs(tmp_path) -> None:
     assert code == 1
     assert any("missing split file" in error for error in summary["errors"])
     assert not output_dir.exists()
+
+
+def test_rejects_approved_rows_outside_golden_dataset(tmp_path) -> None:
+    dataset_dir = _write_dataset_dir(tmp_path)
+    train_rows = _read_jsonl(dataset_dir / "train.jsonl")
+    train_rows[0]["approval_status"] = "approved"
+    (dataset_dir / "train.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in train_rows),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "canonical_dataset"
+
+    summary, code = export_canonical_finetune_dataset(dataset_dir, output_dir)
+
+    assert code == 1
+    assert any("approved outside a golden dataset" in error for error in summary["errors"])
+    assert not output_dir.exists()
+
+
+def test_allows_approved_rows_only_when_input_dataset_is_under_golden_path(tmp_path) -> None:
+    dataset_dir = _write_dataset_dir(
+        tmp_path,
+        dataset_dir=tmp_path / "data" / "golden" / "fixture_dataset",
+    )
+    train_rows = _read_jsonl(dataset_dir / "train.jsonl")
+    train_rows[0]["approval_status"] = "approved"
+    (dataset_dir / "train.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in train_rows),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "canonical_dataset"
+
+    summary, code = export_canonical_finetune_dataset(dataset_dir, output_dir)
+
+    assert code == 0, summary
+    assert (output_dir / "train.jsonl").is_file()
+    exported_rows = _read_jsonl(output_dir / "train.jsonl")
+    assert exported_rows[0]["messages"][1]["content"]["schema_version"] == "rtl_task_v0.1"
+    assert exported_rows[0]["messages"][2]["content"]["schema_version"] == "rtl_answer_v0.1"
 
 
 def test_refuses_overwrite_without_force(tmp_path) -> None:
