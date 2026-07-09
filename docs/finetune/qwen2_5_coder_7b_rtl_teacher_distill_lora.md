@@ -81,7 +81,30 @@ Why this config:
 - `epochs: 1` limits early overfitting risk on the 1000-row set
 - LoRA targets include Qwen-style attention and MLP projection modules
 
-## 4. Option A: Axolotl-style LoRA command template
+## 4. Check the live training runtime first
+
+Use the repo check script inside the actual training runtime before starting LoRA:
+
+```bash
+python scripts/finetune/check_training_environment.py \
+  --dataset-dir outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical \
+  --expected-gpu-substring L40 \
+  --json
+```
+
+Expected:
+
+- all required packages import successfully
+- `torch.cuda_available = true`
+- at least one visible GPU name contains `L40`
+- the dataset directory is visible from the current runtime
+
+Important CPE note:
+
+- the `gpul40` node may not be able to read `~/RTLSpecializer` directly
+- if that happens, stage the repo subset and Python site-packages into `/tmp` on the GPU node first, the same way the existing `qwen25-coder-7b-instruct` service helpers do
+
+## 5. Option A: Axolotl-style LoRA command template
 
 This is a template only. Exact keys can vary slightly by Axolotl version.
 
@@ -92,77 +115,39 @@ accelerate launch -m axolotl.cli.train \
 
 Adjust batch size, accumulation, and data-format wiring to match the installed Axolotl release.
 
-## 5. Option B: TRL / SFTTrainer-style LoRA template
+## 6. Option B: concrete TRL / SFTTrainer repo script
 
-This is a framework-template example, not a required repo script:
+Dry-run first:
 
-```python
-from pathlib import Path
-import json
-import torch
-from datasets import load_dataset
-from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import SFTConfig, SFTTrainer
-
-base_model = "Qwen/Qwen2.5-Coder-7B-Instruct"
-dataset_dir = Path("outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical")
-output_dir = "outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora"
-
-tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
-
-model = AutoModelForCausalLM.from_pretrained(
-    base_model,
-    torch_dtype=torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16,
-)
-
-peft_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-    bias="none",
-    task_type="CAUSAL_LM",
-)
-
-def format_row(example):
-    messages = example["messages"]
-    return {
-        "text": tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-    }
-
-train_dataset = load_dataset("json", data_files=str(dataset_dir / "train.jsonl"))["train"].map(format_row)
-validation_dataset = load_dataset("json", data_files=str(dataset_dir / "validation.jsonl"))["train"].map(format_row)
-
-trainer = SFTTrainer(
-    model=model,
-    tokenizer=tokenizer,
-    train_dataset=train_dataset,
-    eval_dataset=validation_dataset,
-    peft_config=peft_config,
-    args=SFTConfig(
-        output_dir=output_dir,
-        max_seq_length=4096,
-        learning_rate=1e-4,
-        num_train_epochs=1,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=16,
-        bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
-        fp16=not (torch.cuda.is_available() and torch.cuda.is_bf16_supported()),
-        logging_steps=10,
-        save_steps=100,
-        eval_steps=100,
-        seed=42,
-    ),
-)
-
-trainer.train()
-trainer.save_model(output_dir)
+```bash
+python scripts/finetune/train_qwen2_5_coder_7b_lora.py \
+  --dataset-dir outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical \
+  --output-dir outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora \
+  --expected-gpu-substring L40 \
+  --dry-run \
+  --json
 ```
 
-## 6. QLoRA fallback only
+When you are ready to start the real run later, drop `--dry-run`:
+
+```bash
+python scripts/finetune/train_qwen2_5_coder_7b_lora.py \
+  --dataset-dir outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical \
+  --output-dir outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora \
+  --expected-gpu-substring L40 \
+  --json
+```
+
+The repo script does these preflight checks before model load:
+
+- the dataset passes `scripts/finetune/check_finetune_dataset.py`
+- schema aliases are zero, so the input is truly canonical
+- the output directory is empty unless `--overwrite-output-dir` or `--resume-from-checkpoint` is used
+- the runtime sees CUDA and a GPU whose name contains `L40`
+
+The trainer path uses TRL `SFTTrainer` with PEFT LoRA and stringifies the structured user/assistant message objects into canonical JSON text before applying the tokenizer chat template.
+
+## 7. QLoRA fallback only
 
 Use QLoRA only if one of these is true:
 
@@ -193,7 +178,7 @@ bnb_config = BitsAndBytesConfig(
 
 Do not treat QLoRA as the primary recommendation for this L40 pilot.
 
-## 7. Evaluate before and after
+## 8. Evaluate before and after
 
 Before training:
 
@@ -231,7 +216,7 @@ python scripts/eval/inspect_candidate_differences.py \
   --json
 ```
 
-## 8. Safety reminders
+## 9. Safety reminders
 
 - Do not overwrite existing eval runs.
 - Do not promote this dataset to golden.
