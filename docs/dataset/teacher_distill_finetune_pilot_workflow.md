@@ -32,8 +32,8 @@ clean rtl_task_v0.1 JSONL
 Expected clean inputs:
 
 ```text
-data/review/verilog_eval_rtl_task_v0_1_156.jsonl
-data/review/verilog_eval_rtl_answer_v0_1_156_clean.jsonl
+data/normalized/tasks/verilog_eval_rtl_task_v0_1_156.jsonl
+data/answers/assembled/verilog_eval_rtl_answer_v0_1_156_clean.jsonl
 ```
 
 The task file should contain clean `rtl_task_v0.1` rows.
@@ -50,12 +50,12 @@ For RTLCoder-derived inputs, "clean" still does not mean "verified." It means:
 
 ```bash
 python scripts/dataset/prepare_teacher_distill_dataset.py \
-  --tasks data/review/verilog_eval_rtl_task_v0_1_156.jsonl \
-  --answers data/review/verilog_eval_rtl_answer_v0_1_156_clean.jsonl \
+  --tasks data/normalized/tasks/verilog_eval_rtl_task_v0_1_156.jsonl \
+  --answers data/answers/assembled/verilog_eval_rtl_answer_v0_1_156_clean.jsonl \
   --output-dir data/distill/verilog_eval_teacher_distill_v0_1 \
-  --train-size 120 \
-  --validation-size 18 \
-  --test-size 18 \
+  --train-size 0.77 \
+  --val-size 0.115 \
+  --test-size 0.115 \
   --seed 42 \
   --strict \
   --json

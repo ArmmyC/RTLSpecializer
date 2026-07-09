@@ -22,15 +22,15 @@ clean rtl_task_v0.1 JSONL
 Input rows should already be normalized `rtl_task_v0.1` objects, for example:
 
 ```text
-data/review/verilog_eval_rtl_task_v0_1_156.jsonl
+data/normalized/tasks/verilog_eval_rtl_task_v0_1_156.jsonl
 ```
 
 Export deterministic local batches:
 
 ```bash
 python scripts/dataset/export_rtl_answer_teacher_batches.py \
-  --input data/review/verilog_eval_rtl_task_v0_1_156.jsonl \
-  --output-dir data/review/teacher_answer_batches \
+  --input data/normalized/tasks/verilog_eval_rtl_task_v0_1_156.jsonl \
+  --output-dir data/answers/teacher_returns/verilog_eval \
   --batch-size 5 \
   --force \
   --json
@@ -39,8 +39,8 @@ python scripts/dataset/export_rtl_answer_teacher_batches.py \
 This writes files such as:
 
 ```text
-data/review/teacher_answer_batches/batch_001.json
-data/review/teacher_answer_batches/batch_002.json
+data/answers/teacher_returns/verilog_eval/batch_001.json
+data/answers/teacher_returns/verilog_eval/batch_002.json
 ```
 
 The exporter preserves task content exactly. It does not rewrite prompts, RTL, testbenches, provenance, notes, assumptions, candidate/context metadata, or `tool_checks`.
@@ -69,17 +69,17 @@ Important row types:
 Save the returned answer JSON under a local-only path, for example:
 
 ```text
-data/review/teacher_answer_returns/batch_001_answers.json
+data/answers/teacher_returns/verilog_eval/batch_001_answers.json
 ```
 
 Validate it:
 
 ```bash
 python scripts/dataset/validate_rtl_answer_teacher_batch.py \
-  --tasks data/review/verilog_eval_rtl_task_v0_1_156.jsonl \
-  --answers data/review/teacher_answer_returns/batch_001_answers.json \
-  --output-md data/review/teacher_answer_returns/batch_001_validation.md \
-  --output-json data/review/teacher_answer_returns/batch_001_validation.json \
+  --tasks data/normalized/tasks/verilog_eval_rtl_task_v0_1_156.jsonl \
+  --answers data/answers/teacher_returns/verilog_eval/batch_001_answers.json \
+  --output-md data/reports/validation/batch_001_validation.md \
+  --output-json data/reports/validation/batch_001_validation.json \
   --strict \
   --json
 ```
@@ -94,9 +94,9 @@ After validation passes, merge the original tasks and returned answers into draf
 
 ```bash
 python scripts/dataset/merge_rtl_task_answer_rows.py \
-  --tasks data/review/verilog_eval_rtl_task_v0_1_156.jsonl \
-  --answers data/review/teacher_answer_returns/batch_001_answers.json \
-  --output data/review/teacher_answer_draft_rows_batch_001.jsonl \
+  --tasks data/normalized/tasks/verilog_eval_rtl_task_v0_1_156.jsonl \
+  --answers data/answers/teacher_returns/verilog_eval/batch_001_answers.json \
+  --output data/distill/verilog_eval_teacher_distill_v0_1/draft_rows_batch_001.jsonl \
   --strict \
   --json
 ```
@@ -113,7 +113,7 @@ The merge output is still draft data. It does not mark rows approved, validated,
 
 Run the usual human review, triage, readiness, and promotion workflow on draft rows. Promotion happens only later, after manual approval and readiness checks.
 
-Generated teacher batches, answer returns, validation reports, and draft rows should stay under ignored local-only directories such as `data/review/` unless a maintainer intentionally publishes a reviewed artifact.
+Generated teacher batches, answer returns, validation reports, and draft rows should stay under ignored local-only directories such as `data/answers/`, `data/distill/`, and `data/reports/` unless a maintainer intentionally publishes a reviewed artifact.
 
 ## Optional branch: teacher-distill pilot packaging
 
@@ -121,12 +121,12 @@ If you intentionally want a small pilot fine-tuning dataset before another manua
 
 ```bash
 python scripts/dataset/prepare_teacher_distill_dataset.py \
-  --tasks data/review/verilog_eval_rtl_task_v0_1_156.jsonl \
-  --answers data/review/verilog_eval_rtl_answer_v0_1_156_clean.jsonl \
+  --tasks data/normalized/tasks/verilog_eval_rtl_task_v0_1_156.jsonl \
+  --answers data/answers/assembled/verilog_eval_rtl_answer_v0_1_156_clean.jsonl \
   --output-dir data/distill/verilog_eval_teacher_distill_v0_1 \
-  --train-size 120 \
-  --validation-size 18 \
-  --test-size 18 \
+  --train-size 0.77 \
+  --val-size 0.115 \
+  --test-size 0.115 \
   --seed 42 \
   --strict \
   --json

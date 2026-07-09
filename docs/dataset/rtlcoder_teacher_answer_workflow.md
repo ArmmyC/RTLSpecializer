@@ -9,7 +9,7 @@ It does not call external APIs or LLMs from the repository, does not train, does
 Start from:
 
 ```text
-data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl
+data/normalized/tasks/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl
 ```
 
 Each row is expected to remain:
@@ -28,8 +28,8 @@ Use the RTLCoder wrapper if you want the RTLCoder default batch size of 10:
 
 ```bash
 python scripts/dataset/export_rtlcoder_teacher_answer_batches.py \
-  --input data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
-  --output-dir data/review/rtlcoder_teacher_answer_batches \
+  --input data/normalized/tasks/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
+  --output-dir data/answers/teacher_returns/rtlcoder_synthetic \
   --force \
   --json
 ```
@@ -38,8 +38,8 @@ Equivalent generic export:
 
 ```bash
 python scripts/dataset/export_rtl_answer_teacher_batches.py \
-  --input data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
-  --output-dir data/review/rtlcoder_teacher_answer_batches \
+  --input data/normalized/tasks/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
+  --output-dir data/answers/teacher_returns/rtlcoder_synthetic \
   --batch-size 10 \
   --force \
   --json
@@ -48,8 +48,8 @@ python scripts/dataset/export_rtl_answer_teacher_batches.py \
 Expected batch outputs:
 
 ```text
-data/review/rtlcoder_teacher_answer_batches/batch_001.json
-data/review/rtlcoder_teacher_answer_batches/batch_002.json
+data/answers/teacher_returns/rtlcoder_synthetic/batch_001.json
+data/answers/teacher_returns/rtlcoder_synthetic/batch_002.json
 ...
 ```
 
@@ -76,13 +76,13 @@ The teacher should use only the supplied task artifacts. It must not invent simu
 Save each returned batch under:
 
 ```text
-data/review/rtlcoder_teacher_answer_returns/
+data/answers/teacher_returns/rtlcoder_synthetic/
 ```
 
 Example:
 
 ```text
-data/review/rtlcoder_teacher_answer_returns/batch_001_answers.json
+data/answers/teacher_returns/rtlcoder_synthetic/batch_001_answers.json
 ```
 
 ## Step 4: Validate returned answers
@@ -91,10 +91,10 @@ Use the RTLCoder validation wrapper:
 
 ```bash
 python scripts/dataset/validate_rtlcoder_teacher_answers.py \
-  --tasks data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
-  --answers data/review/rtlcoder_teacher_answer_returns/batch_001_answers.json \
-  --output-md data/review/rtlcoder_teacher_answer_returns/batch_001_validation.md \
-  --output-json data/review/rtlcoder_teacher_answer_returns/batch_001_validation.json \
+  --tasks data/normalized/tasks/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
+  --answers data/answers/teacher_returns/rtlcoder_synthetic/batch_001_answers.json \
+  --output-md data/reports/validation/rtlcoder_batch_001_validation.md \
+  --output-json data/reports/validation/rtlcoder_batch_001_validation.json \
   --strict \
   --json
 ```
@@ -107,9 +107,9 @@ After validation passes, merge tasks and answers into teacher-distill-style draf
 
 ```bash
 python scripts/dataset/merge_rtlcoder_teacher_distill_rows.py \
-  --tasks data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
-  --answers data/review/rtlcoder_teacher_answer_returns/all_answers.jsonl \
-  --output data/review/rtlcoder_teacher_answer_draft_rows.jsonl \
+  --tasks data/normalized/tasks/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl \
+  --answers data/answers/assembled/rtlcoder_synthetic_rtl_answer_v0_1_assembled.jsonl \
+  --output data/distill/rtlcoder_synthetic_teacher_distill_v0_1/draft_rows.jsonl \
   --strict \
   --json
 ```
@@ -126,7 +126,7 @@ They preserve `system`, `user`, and `assistant` role order, where the user messa
 
 The merged draft rows are still local draft data. They can later feed a teacher-distill dataset extension workflow, but they are still unreviewed and not approved.
 
-Keep everything under `data/review/` until a later human review and provenance check is complete.
+Keep everything under ignored local workspace folders such as `data/answers/`, `data/distill/`, and `data/reports/` until a later human review and provenance check is complete.
 
 ## Step 7: Keep everything unreviewed and not approved
 
@@ -142,16 +142,16 @@ Throughout this flow:
 
 The 500-row pilot remains preserved and should not be overwritten:
 
-- `data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl`
-- `data/review/rtlcoder_teacher_answer_batches/`
-- `data/review/rtlcoder_teacher_answer_draft_rows.jsonl`
+- `data/normalized/tasks/rtlcoder_rtl_task_v0_1_synthetic_bug_draft.jsonl`
+- `data/answers/teacher_returns/rtlcoder_synthetic/`
+- `data/distill/rtlcoder_synthetic_teacher_distill_v0_1/draft_rows.jsonl`
 
 For the scaled draft run, use the larger synthetic bug input and export size 20 teacher batches:
 
 ```bash
 python scripts/dataset/export_rtlcoder_teacher_answer_batches.py \
-  --input data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl \
-  --output-dir data/review/rtlcoder_teacher_answer_batches_1000 \
+  --input data/normalized/tasks/rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl \
+  --output-dir data/answers/teacher_returns/rtlcoder_synthetic \
   --batch-size 20 \
   --force \
   --json
@@ -162,7 +162,7 @@ This scaled flow assumes:
 - the raw import was expanded from 500 pilot rows to 3000 rows,
 - the normalized reference task set was regenerated from the 3000-row raw index,
 - the synthetic bug generator targeted 1000 rows with `--target-bug-rows 1000`,
-- all generated tasks, answers, validations, and merged rows remain unapproved draft data under `data/review/`.
+- all generated tasks, answers, validations, and merged rows remain unapproved draft data under ignored local workspace folders.
 
 Only combine RTLCoder-derived rows with VerilogEval after the teacher answers have been generated, validated, and merged into draft teacher-distill rows.
 

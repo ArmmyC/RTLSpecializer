@@ -4,15 +4,14 @@ __pycache__/
 .local_data/
 data/.local_data/
 
-# Local/generated review workspaces
-/data/review/
-/data/drafts/
-/data/reports/
-/data/releases/
-/data/distill/
-/data/eval/
-/data/eval/candidates/
-/data/eval/runs/
+# Local/generated data workspaces
+/data/**
+!/data/
+!/data/**/
+!/data/**/.gitkeep
+!/data/README.md
+!/data/golden/
+!/data/golden/**
 /outputs/
 /runs/
 /checkpoints/

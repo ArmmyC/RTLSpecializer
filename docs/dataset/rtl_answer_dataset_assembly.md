@@ -2,10 +2,10 @@
 
 Use `scripts/dataset/assemble_repaired_rtl_answer_dataset.py` after the answer-file audit/repair workflow to build one clean JSONL answer file from many standalone `rtl_answer.v0.1` files.
 
-This step is needed because broad scans under `data/review/` often see overlapping sources at the same time:
+This step is needed because broad scans across legacy review directories often see overlapping sources at the same time:
 
 - original batch return files,
-- repaired copies under `data/review/repaired_rtl_answer_batches/`,
+- repaired copies under `data/answers/repaired/`,
 - previously combined clean files,
 - older pilot answer exports.
 
@@ -81,12 +81,12 @@ Assemble repaired RTLCoder synthetic-bug answers:
 
 ```bash
 python scripts/dataset/assemble_repaired_rtl_answer_dataset.py \
-  --answers-dir data/review/repaired_rtl_answer_batches \
+  --answers-dir data/answers/repaired \
   --answers-glob "*rtl_answer*v0_1*.json*" \
-  --tasks data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl \
-  --output data/review/rtlcoder_synthetic_rtl_answer_v0_1_assembled.jsonl \
-  --report-md data/review/rtlcoder_synthetic_rtl_answer_v0_1_assembly_report.md \
-  --report-json data/review/rtlcoder_synthetic_rtl_answer_v0_1_assembly_report.json \
+  --tasks data/normalized/tasks/rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl \
+  --output data/answers/assembled/rtlcoder_synthetic_rtl_answer_v0_1_assembled.jsonl \
+  --report-md data/reports/assembly/rtlcoder_synthetic_rtl_answer_v0_1_assembly_report.md \
+  --report-json data/reports/assembly/rtlcoder_synthetic_rtl_answer_v0_1_assembly_report.json \
   --strict \
   --json
 ```
@@ -95,12 +95,12 @@ Assemble only the repaired RTLCoder batch-return subtree:
 
 ```bash
 python scripts/dataset/assemble_repaired_rtl_answer_dataset.py \
-  --answers-dir data/review/repaired_rtl_answer_batches/rtlcoder_teacher_answer_returns_1000 \
+  --answers-dir data/answers/repaired/rtlcoder_synthetic \
   --answers-glob "*rtl_answer*v0_1*.json*" \
-  --tasks data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl \
-  --output data/review/rtlcoder_synthetic_rtl_answer_v0_1_assembled.jsonl \
-  --report-md data/review/rtlcoder_synthetic_rtl_answer_v0_1_assembly_report.md \
-  --report-json data/review/rtlcoder_synthetic_rtl_answer_v0_1_assembly_report.json \
+  --tasks data/normalized/tasks/rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl \
+  --output data/answers/assembled/rtlcoder_synthetic_rtl_answer_v0_1_assembled.jsonl \
+  --report-md data/reports/assembly/rtlcoder_synthetic_rtl_answer_v0_1_assembly_report.md \
+  --report-json data/reports/assembly/rtlcoder_synthetic_rtl_answer_v0_1_assembly_report.json \
   --json
 ```
 
@@ -130,8 +130,8 @@ Example with ratio split sizes:
 
 ```bash
 python scripts/dataset/prepare_teacher_distill_dataset.py \
-  --tasks data/review/rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl \
-  --answers data/review/rtlcoder_synthetic_rtl_answer_v0_1_assembled.jsonl \
+  --tasks data/normalized/tasks/rtlcoder_rtl_task_v0_1_synthetic_bug_draft_1000.jsonl \
+  --answers data/answers/assembled/rtlcoder_synthetic_rtl_answer_v0_1_assembled.jsonl \
   --output-dir data/distill/rtlcoder_synthetic_teacher_distill_v0_1 \
   --train-size 0.8 \
   --val-size 0.1 \

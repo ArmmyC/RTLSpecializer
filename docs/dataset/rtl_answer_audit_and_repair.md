@@ -69,10 +69,10 @@ Validate before repair:
 
 ```bash
 python scripts/dataset/validate_rtl_answer_files.py \
-  --input-dir data/review \
+  --input-dir data/answers/teacher_returns \
   --glob "*rtl_answer*v0_1*.json*" \
-  --output-md data/review/rtl_answer_validation_before_repair.md \
-  --output-json data/review/rtl_answer_validation_before_repair.json \
+  --output-md data/reports/validation/rtl_answer_validation_before_repair.md \
+  --output-json data/reports/validation/rtl_answer_validation_before_repair.json \
   --strict \
   --json
 ```
@@ -81,11 +81,11 @@ Repair into a separate output directory:
 
 ```bash
 python scripts/dataset/repair_rtl_answer_files.py \
-  --input-dir data/review \
+  --input-dir data/answers/teacher_returns \
   --glob "*rtl_answer*v0_1*.json*" \
-  --output-dir data/review/repaired_rtl_answer_batches \
-  --report-md data/review/repaired_rtl_answer_batches/repair_report.md \
-  --report-json data/review/repaired_rtl_answer_batches/repair_report.json \
+  --output-dir data/answers/repaired \
+  --report-md data/reports/repair/repair_report.md \
+  --report-json data/reports/repair/repair_report.json \
   --json
 ```
 
@@ -93,10 +93,10 @@ Validate patched files:
 
 ```bash
 python scripts/dataset/validate_rtl_answer_files.py \
-  --input-dir data/review/repaired_rtl_answer_batches \
+  --input-dir data/answers/repaired \
   --glob "*rtl_answer*v0_1*.json*" \
-  --output-md data/review/repaired_rtl_answer_batches/validation_after_repair.md \
-  --output-json data/review/repaired_rtl_answer_batches/validation_after_repair.json \
+  --output-md data/reports/validation/validation_after_repair.md \
+  --output-json data/reports/validation/validation_after_repair.json \
   --strict \
   --json
 ```
@@ -106,18 +106,18 @@ python scripts/dataset/validate_rtl_answer_files.py \
 Patched files and reports are written under:
 
 ```text
-data/review/repaired_rtl_answer_batches/
+data/answers/repaired/
 ```
 
 Recommended reports:
 
 ```text
-data/review/rtl_answer_validation_before_repair.md
-data/review/rtl_answer_validation_before_repair.json
-data/review/repaired_rtl_answer_batches/repair_report.md
-data/review/repaired_rtl_answer_batches/repair_report.json
-data/review/repaired_rtl_answer_batches/validation_after_repair.md
-data/review/repaired_rtl_answer_batches/validation_after_repair.json
+data/reports/validation/rtl_answer_validation_before_repair.md
+data/reports/validation/rtl_answer_validation_before_repair.json
+data/reports/repair/repair_report.md
+data/reports/repair/repair_report.json
+data/reports/validation/validation_after_repair.md
+data/reports/validation/validation_after_repair.json
 ```
 
 Repaired rows remain draft/synthetic teacher-distillation data. They are not golden, not approved, and not human-reviewed.
