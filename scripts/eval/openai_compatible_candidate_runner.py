@@ -38,6 +38,9 @@ class OpenAICompatibleRunnerConfig:
     raw_output_dir: Path | None = None
     retries: int = DEFAULT_RETRIES
     fail_fast: bool = False
+    schema_reminder: str | None = None
+    schema_reminder_file: Path | None = None
+    response_format_json: bool = False
 
 
 class ChatCompletionClient(Protocol):
@@ -49,6 +52,7 @@ class ChatCompletionClient(Protocol):
         temperature: float,
         max_tokens: int,
         timeout: float,
+        response_format_json: bool,
     ) -> str: ...
 
 
@@ -65,15 +69,16 @@ class OpenAICompatibleChatClient:
         temperature: float,
         max_tokens: int,
         timeout: float,
+        response_format_json: bool,
     ) -> str:
         endpoint = _completion_endpoint(self.base_url)
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }
+        payload = build_chat_payload(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format_json=response_format_json,
+        )
         http_request = request.Request(
             endpoint,
             data=json.dumps(payload).encode("utf-8"),
@@ -132,7 +137,47 @@ def _extract_chat_content(body: str) -> str:
     raise RuntimeError("chat completion response content must be a string or text parts")
 
 
-def build_request_messages(row: dict[str, Any]) -> list[dict[str, str]]:
+def build_chat_payload(
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float,
+    max_tokens: int,
+    response_format_json: bool = False,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    if response_format_json:
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
+def load_schema_reminder_text(
+    schema_reminder: str | None = None,
+    schema_reminder_file: Path | None = None,
+) -> str | None:
+    reminders: list[str] = []
+    if schema_reminder is not None and schema_reminder.strip():
+        reminders.append(schema_reminder.strip())
+    if schema_reminder_file is not None:
+        try:
+            file_text = schema_reminder_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise ValueError(f"could not read schema reminder file: {exc}") from exc
+        if not file_text.strip():
+            raise ValueError(f"schema reminder file is empty: {schema_reminder_file}")
+        reminders.append(file_text.strip())
+    if not reminders:
+        return None
+    return "\n\n".join(reminders)
+
+
+def build_request_messages(row: dict[str, Any], schema_reminder_text: str | None = None) -> list[dict[str, str]]:
     messages = row.get("messages")
     if not isinstance(messages, list) or len(messages) < 2:
         raise ValueError("dataset row must contain at least system and user messages")
@@ -149,6 +194,8 @@ def build_request_messages(row: dict[str, Any]) -> list[dict[str, str]]:
             serialized = content
         else:
             serialized = json.dumps(content, ensure_ascii=False, indent=2)
+        if index == 0 and schema_reminder_text is not None:
+            serialized = serialized.rstrip() + "\n\n" + schema_reminder_text.strip()
         request_messages.append({"role": role, "content": serialized})
     return request_messages
 
@@ -253,6 +300,8 @@ def run_openai_compatible_candidates(
         "parse_error_ids": [],
         "api_error_ids": [],
         "stopped_early": False,
+        "schema_reminder_enabled": False,
+        "response_format_json": config.response_format_json,
         "errors": [],
         "warnings": [],
     }
@@ -286,6 +335,16 @@ def run_openai_compatible_candidates(
         errors.append(f"output must be a file path, not a directory: {config.output}")
     if config.raw_output_dir is not None and config.raw_output_dir.exists() and not config.raw_output_dir.is_dir():
         errors.append(f"raw output directory must be a directory path: {config.raw_output_dir}")
+    try:
+        schema_reminder_text = load_schema_reminder_text(
+            config.schema_reminder,
+            config.schema_reminder_file,
+        )
+    except ValueError as exc:
+        errors.append(str(exc))
+        schema_reminder_text = None
+    else:
+        summary["schema_reminder_enabled"] = schema_reminder_text is not None
     if errors:
         return summary, 1
 
@@ -329,7 +388,7 @@ def run_openai_compatible_candidates(
     with config.output.open(mode, encoding="utf-8", newline="\n") as handle:
         for row in pending_rows:
             row_id = str(row["id"])
-            messages = build_request_messages(row)
+            messages = build_request_messages(row, schema_reminder_text=schema_reminder_text)
             raw_text, attempts, api_error = _request_candidate_text(
                 active_client,
                 model=config.model,
@@ -338,6 +397,7 @@ def run_openai_compatible_candidates(
                 max_tokens=config.max_tokens,
                 timeout=config.timeout,
                 retries=config.retries,
+                response_format_json=config.response_format_json,
             )
             raw_output_path: Path | None = None
             if raw_text is not None and config.raw_output_dir is not None:
@@ -396,6 +456,7 @@ def _request_candidate_text(
     max_tokens: int,
     timeout: float,
     retries: int,
+    response_format_json: bool,
 ) -> tuple[str | None, int, str | None]:
     if client is None:
         raise RuntimeError("chat completion client is required when rows are pending")
@@ -409,6 +470,7 @@ def _request_candidate_text(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 timeout=timeout,
+                response_format_json=response_format_json,
             )
         except (RuntimeError, OSError, TimeoutError) as exc:
             last_error = str(exc)

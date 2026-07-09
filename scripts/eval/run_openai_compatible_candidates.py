@@ -63,6 +63,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--raw-output-dir", type=Path)
     parser.add_argument("--retries", type=int, default=DEFAULT_RETRIES)
     parser.add_argument("--fail-fast", action="store_true")
+    parser.add_argument("--schema-reminder")
+    parser.add_argument("--schema-reminder-file", type=Path)
+    parser.add_argument("--response-format-json", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -80,6 +83,9 @@ def main(argv: list[str] | None = None) -> int:
         raw_output_dir=args.raw_output_dir,
         retries=args.retries,
         fail_fast=args.fail_fast,
+        schema_reminder=args.schema_reminder,
+        schema_reminder_file=args.schema_reminder_file,
+        response_format_json=args.response_format_json,
     ))
     if args.json:
         print(json.dumps(summary, indent=2))

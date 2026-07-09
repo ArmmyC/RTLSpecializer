@@ -9,11 +9,16 @@ import sys
 
 import pytest
 
+import scripts.eval.openai_compatible_candidate_runner as runner
 from scripts.dataset.io_utils import load_jsonl, write_jsonl
+from scripts.eval.evaluator import evaluate_answer
+from scripts.eval.make_baseline_candidates import make_baseline_answer
 from scripts.eval.openai_compatible_candidate_runner import (
     DEFAULT_API_KEY_ENV,
+    OpenAICompatibleChatClient,
     OpenAICompatibleRunnerConfig,
     build_request_messages,
+    load_schema_reminder_text,
     parse_candidate_answer_text,
     run_openai_compatible_candidates,
 )
@@ -76,6 +81,50 @@ def test_prompt_excludes_reference_answer_and_uses_only_system_and_user_messages
     assert marker not in combined
 
 
+def test_schema_reminder_is_appended_to_system_prompt(tmp_path, rows) -> None:
+    reminder = "RETURN THE EXACT RTL ANSWER SCHEMA."
+    client = CapturingClient([json.dumps(rows[0]["messages"][2]["content"])])
+    summary, code = run_openai_compatible_candidates(
+        _config(tmp_path, rows[:1], schema_reminder=reminder),
+        client,
+    )
+    system_prompt = client.calls[0]["messages"][0]["content"]
+    assert code == 0 and summary["ok"]
+    assert reminder in system_prompt
+
+
+def test_schema_reminder_does_not_include_reference_assistant_content(tmp_path, rows) -> None:
+    row = deepcopy(rows[0])
+    marker = "UNIQUE_REFERENCE_ONLY_MARKER"
+    row["messages"][2]["content"]["limitations"] = [marker]
+    reminder = "RETURN THE EXACT RTL ANSWER SCHEMA."
+    client = CapturingClient([json.dumps(row["messages"][2]["content"])])
+    summary, code = run_openai_compatible_candidates(
+        _config(tmp_path, [row], schema_reminder=reminder),
+        client,
+    )
+    system_prompt = client.calls[0]["messages"][0]["content"]
+    assert code == 0 and summary["ok"]
+    assert reminder in system_prompt
+    assert marker not in system_prompt
+
+
+def test_schema_reminder_file_loads_correctly(tmp_path, rows) -> None:
+    reminder_file = tmp_path / "schema_reminder.md"
+    reminder_text = "Return the exact rtl_answer_v0.1 object."
+    reminder_file.write_text(reminder_text, encoding="utf-8")
+    client = CapturingClient([json.dumps(rows[0]["messages"][2]["content"])])
+    summary, code = run_openai_compatible_candidates(
+        _config(tmp_path, rows[:1], schema_reminder_file=reminder_file),
+        client,
+    )
+    system_prompt = client.calls[0]["messages"][0]["content"]
+    assert code == 0 and summary["ok"]
+    assert reminder_text in system_prompt
+    assert summary["schema_reminder_enabled"] is True
+    assert load_schema_reminder_text(schema_reminder_file=reminder_file) == reminder_text
+
+
 def test_request_uses_only_system_and_user_messages(tmp_path, rows) -> None:
     client = CapturingClient([json.dumps(rows[0]["messages"][2]["content"])])
     summary, code = run_openai_compatible_candidates(_config(tmp_path, rows[:1]), client)
@@ -102,6 +151,60 @@ def test_text_surrounded_json_parse_works() -> None:
     answer, parse_error = parse_candidate_answer_text('response: {"schema_version":"rtl_answer_v0.1"} thanks')
     assert parse_error is None
     assert answer["schema_version"] == "rtl_answer_v0.1"
+
+
+class FakeHTTPResponse:
+    def __init__(self, body: str):
+        self._body = body.encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> "FakeHTTPResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+
+def test_response_format_json_adds_payload(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_urlopen(http_request, timeout):
+        seen["payload"] = json.loads(http_request.data.decode("utf-8"))
+        return FakeHTTPResponse('{"choices":[{"message":{"content":"{\\"ok\\":true}"}}]}')
+
+    monkeypatch.setattr(runner.request, "urlopen", fake_urlopen)
+    client = OpenAICompatibleChatClient("http://127.0.0.1:8000/v1", "fixture-secret")
+    client.complete(
+        model="fixture-model",
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.0,
+        max_tokens=32,
+        timeout=5.0,
+        response_format_json=True,
+    )
+    assert seen["payload"]["response_format"] == {"type": "json_object"}
+
+
+def test_no_response_format_is_sent_without_flag(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_urlopen(http_request, timeout):
+        seen["payload"] = json.loads(http_request.data.decode("utf-8"))
+        return FakeHTTPResponse('{"choices":[{"message":{"content":"{\\"ok\\":true}"}}]}')
+
+    monkeypatch.setattr(runner.request, "urlopen", fake_urlopen)
+    client = OpenAICompatibleChatClient("http://127.0.0.1:8000/v1", "fixture-secret")
+    client.complete(
+        model="fixture-model",
+        messages=[{"role": "user", "content": "hi"}],
+        temperature=0.0,
+        max_tokens=32,
+        timeout=5.0,
+        response_format_json=False,
+    )
+    assert "response_format" not in seen["payload"]
 
 
 def test_parse_failure_still_writes_candidate_row(tmp_path, rows) -> None:
@@ -175,6 +278,30 @@ def test_api_key_is_not_written_to_metadata_or_raw_output(tmp_path, rows, monkey
     assert secret not in output_text
     assert secret not in raw_text
     assert secret not in json.dumps(summary)
+
+
+def test_smoke_like_malformed_schema_candidate_still_evaluates_low(rows) -> None:
+    answer = {
+        "issue_summary": [{"issue": "Possible issue", "severity": "low", "evidence": {"reason": "short"}}],
+        "claim_levels": {
+            "correctness": "high",
+            "area": "low",
+            "activity": "low",
+            "power": "low",
+        },
+    }
+    result = evaluate_answer(rows[0], answer)
+    assert result.score <= 0.25
+    assert any("missing answer fields" in error for error in result.errors)
+    assert any("invalid claim_levels" in error for error in result.errors)
+
+
+def test_well_shaped_candidate_with_required_fields_evaluates_without_schema_errors(rows) -> None:
+    answer = make_baseline_answer(rows[0])
+    result = evaluate_answer(rows[0], answer)
+    assert not any("missing answer fields" in error for error in result.errors), result.errors
+    assert not any("invalid claim_levels" in error for error in result.errors), result.errors
+    assert not any("patch must be an object" in error for error in result.errors), result.errors
 
 
 def test_cli_json_output_is_parseable(tmp_path) -> None:
