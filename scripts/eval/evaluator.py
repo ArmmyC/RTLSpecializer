@@ -32,8 +32,9 @@ WEIGHTS = {
     "task_alignment": 0.05,
 }
 REQUIRED_ANSWER_FIELDS = {
-    "schema_version", "task_type", "issue_summary", "time_reasoning", "space_reasoning",
-    "safe_optimization", "functional_risk", "verification_plan", "claim_levels", "patch",
+    "schema_version", "source_id", "task_type", "issue_summary", "time_reasoning",
+    "space_reasoning", "safe_optimization", "functional_risk", "verification_plan",
+    "claim_levels", "evidence_used", "limitations", "patch",
 }
 GENERIC_TEXT = ("requires review", "draft seed", "baseline", "no optimization effect", "not verified during import")
 

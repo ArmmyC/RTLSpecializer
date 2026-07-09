@@ -57,6 +57,22 @@ The endpoint defaults to localhost. Non-local endpoints require explicit authori
 
 Localhost does not imply a trusted model service: its process and operator can read submitted prompts and RTL. API keys are supplied only through named environment variables, never literal configuration values. Review data exposure before using the non-local opt-in.
 
+## Generate hosted-model candidates from dataset messages
+
+The [OpenAI-compatible candidate runner](openai_compatible_candidate_runner.md) sends only the dataset `system` and `user` messages to a user-supplied `/v1/chat/completions` base URL, never the reference assistant answer:
+
+```bash
+python scripts/eval/run_openai_compatible_candidates.py \
+  --dataset data/distill/rtlcoder_synthetic_teacher_distill_v0_1/test.jsonl \
+  --output data/eval/runs/rtlcoder_synthetic_active_model_smoke/candidates.jsonl \
+  --base-url http://127.0.0.1:8000/v1 \
+  --model active-model \
+  --limit 3 \
+  --json
+```
+
+This runner keeps parse failures and API failures as low-scoring candidate rows instead of dropping them, supports `--resume`, and can save raw model text under `--raw-output-dir`. API keys still come only from named environment variables.
+
 For repeatable comparisons across multiple local models, use the [model benchmark suite](model_benchmark_suite.md). It generates or reuses per-model candidates, evaluates each candidate file with this harness, optionally includes `rule_baseline`, and aggregates scalar results into JSON, Markdown, and CSV summaries.
 
 ## Evaluate candidates

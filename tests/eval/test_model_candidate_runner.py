@@ -51,6 +51,14 @@ def _dataset(tmp_path: Path, rows: list[dict]) -> Path:
     return path
 
 
+def _valid_answer(row: dict) -> dict:
+    answer = deepcopy(row["messages"][2]["content"])
+    answer.setdefault("source_id", row.get("source_id", row["id"]))
+    answer.setdefault("evidence_used", ["tool_checks"])
+    answer.setdefault("limitations", ["No external tool evidence was added by this model-runner test helper."])
+    return answer
+
+
 def _config(tmp_path: Path, rows: list[dict], **changes) -> RunnerConfig:
     values = {
         "dataset": _dataset(tmp_path, rows),
@@ -323,7 +331,7 @@ def test_cli_dry_run_json_output_is_parseable(tmp_path) -> None:
 
 
 def test_optional_evaluation_integration(tmp_path, rows) -> None:
-    raw = json.dumps(rows[0]["messages"][2]["content"])
+    raw = json.dumps(_valid_answer(rows[0]))
     config = _config(
         tmp_path,
         rows[:1],

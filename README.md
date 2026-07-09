@@ -20,6 +20,8 @@ Local deterministic evaluation consumes release rows plus candidate answer JSONL
 
 Evaluator-ready candidates can also be generated from a local OpenAI-compatible chat endpoint, with localhost-only defaults, strict JSON parsing, resumable output, and a network-free dry-run mode. See [docs/eval/model_candidate_runner.md](docs/eval/model_candidate_runner.md).
 
+When a hosted OpenAI-compatible server should receive the dataset `system` and `user` messages directly, use [docs/eval/openai_compatible_candidate_runner.md](docs/eval/openai_compatible_candidate_runner.md). It reads the API key from an environment variable, excludes the reference assistant answer from prompts, preserves parse/API failures as candidate rows, and supports resumable smoke/full evaluation runs without fine-tuning.
+
 Run the network-free dry-run first. A localhost server and its operator can still read submitted RTL; non-local endpoints require explicit opt-in, and API key values must come from environment variables rather than configuration files. Generated candidate, raw, benchmark, and evaluation outputs remain local and should not be committed without deliberate review. Evaluator scores are heuristics, not proof of RTL correctness.
 
 Multiple local model configurations and the rule baseline can be run through one repeatable benchmark suite with JSON, Markdown, and CSV summaries. See [docs/eval/model_benchmark_suite.md](docs/eval/model_benchmark_suite.md).

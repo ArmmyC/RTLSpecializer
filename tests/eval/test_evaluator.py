@@ -22,8 +22,16 @@ def valid_row() -> dict:
     return json.loads(GOLDEN.read_text(encoding="utf-8").splitlines()[0])
 
 
+def _valid_answer(row: dict, answer: dict | None = None) -> dict:
+    value = deepcopy(answer or row["messages"][2]["content"])
+    value.setdefault("source_id", row.get("source_id", row["id"]))
+    value.setdefault("evidence_used", ["tool_checks"])
+    value.setdefault("limitations", ["No external tool evidence was added by this test helper."])
+    return value
+
+
 def _candidate(row: dict, answer: dict | None = None) -> dict:
-    return {"id": row["id"], "answer": deepcopy(answer or row["messages"][2]["content"]), "metadata": {"model": "test"}}
+    return {"id": row["id"], "answer": _valid_answer(row, answer), "metadata": {"model": "test"}}
 
 
 def _teacher_distill_row(tmp_path: Path) -> dict:
@@ -92,8 +100,20 @@ def test_structurally_invalid_candidate_scores_low(tmp_path, valid_row) -> None:
     assert result.errors
 
 
+def test_missing_source_id_evidence_used_or_limitations_lower_schema_score(valid_row) -> None:
+    answer = _valid_answer(valid_row)
+    for field in ("source_id", "evidence_used", "limitations"):
+        answer.pop(field, None)
+    result = evaluate_answer(valid_row, answer)
+    assert result.subscores["schema_and_required_fields"] < 0.20
+    assert any(
+        marker in " ".join(result.errors)
+        for marker in ("missing answer fields", "messages[2].content.source_id", "messages[2].content.evidence_used", "messages[2].content.limitations")
+    )
+
+
 def test_unsafe_power_claim_creates_safety_failure(valid_row) -> None:
-    answer = deepcopy(valid_row["messages"][2]["content"])
+    answer = _valid_answer(valid_row)
     answer["safe_optimization"]["expected_effect"] = "This reduces power."
     answer["claim_levels"]["power"] = "suggestion_only"
     result = evaluate_answer(valid_row, answer)
@@ -102,18 +122,18 @@ def test_unsafe_power_claim_creates_safety_failure(valid_row) -> None:
 
 
 def test_reference_candidate_scores_high(valid_row) -> None:
-    result = evaluate_answer(valid_row, valid_row["messages"][2]["content"])
+    result = evaluate_answer(valid_row, _valid_answer(valid_row))
     assert result.score >= 0.85, result
 
 
 def test_weak_baseline_scores_lower_than_reference(valid_row) -> None:
-    reference = evaluate_answer(valid_row, valid_row["messages"][2]["content"])
+    reference = evaluate_answer(valid_row, _valid_answer(valid_row))
     baseline = evaluate_answer(valid_row, make_baseline_answer(valid_row))
     assert baseline.score < reference.score
 
 
 def test_metrics_include_breakdowns(tmp_path, valid_row) -> None:
-    summary, code = evaluate_dataset([valid_row], {valid_row["id"]: {"answer": valid_row["messages"][2]["content"]}}, 1, tmp_path / "run", tmp_path / "dataset.jsonl", tmp_path / "candidates.jsonl")
+    summary, code = evaluate_dataset([valid_row], {valid_row["id"]: {"answer": _valid_answer(valid_row)}}, 1, tmp_path / "run", tmp_path / "dataset.jsonl", tmp_path / "candidates.jsonl")
     assert code == 0, summary
     metrics = json.loads((tmp_path / "run" / "metrics.json").read_text(encoding="utf-8"))
     assert valid_row["task_family"] in metrics["score_by_task_type"]

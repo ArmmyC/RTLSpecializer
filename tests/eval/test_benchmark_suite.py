@@ -15,6 +15,14 @@ from scripts.eval.benchmark_suite import SuiteOptions, _sort_results, run_benchm
 from tests.dataset.conftest import GOLDEN, ROOT
 
 
+def _valid_answer(row: dict) -> dict:
+    answer = json.loads(json.dumps(row["messages"][2]["content"]))
+    answer.setdefault("source_id", row.get("source_id", row["id"]))
+    answer.setdefault("evidence_used", ["tool_checks"])
+    answer.setdefault("limitations", ["No external tool evidence was added by this benchmark test helper."])
+    return answer
+
+
 def _config(tmp_path: Path, *, models: list[dict] | None = None, baseline: bool = False, **extra) -> Path:
     value = {
         "run_id": "fixture_suite",
@@ -149,7 +157,7 @@ def test_suite_calls_runner_for_each_model(tmp_path, monkeypatch) -> None:
         called.append(runner_config.model)
         write_jsonl(runner_config.output, [{
             "id": rows[0]["id"],
-            "answer": rows[0]["messages"][2]["content"],
+            "answer": _valid_answer(rows[0]),
             "metadata": {"model": runner_config.model},
         }])
         return {
@@ -283,7 +291,7 @@ def test_evaluate_only_uses_existing_candidates(tmp_path) -> None:
     candidate_dir.mkdir()
     row = json.loads(GOLDEN.read_text(encoding="utf-8").splitlines()[0])
     write_jsonl(candidate_dir / "fixture_suite__existing.jsonl", [{
-        "id": row["id"], "answer": row["messages"][2]["content"], "metadata": {"model": "existing"},
+        "id": row["id"], "answer": _valid_answer(row), "metadata": {"model": "existing"},
     }])
     summary, code = run_benchmark_suite(options)
     assert code == 0 and summary["results"][0]["matched_rows"] == 1
