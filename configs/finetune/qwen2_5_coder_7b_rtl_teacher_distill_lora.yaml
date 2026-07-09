@@ -3,7 +3,7 @@
 # Prefer regular LoRA first on L40 hardware. Use QLoRA only as a fallback.
 
 base_model: "Qwen/Qwen2.5-Coder-7B-Instruct"
-dataset_dir: "data/distill/rtlcoder_synthetic_teacher_distill_v0_1"
+dataset_dir: "outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical"
 train_file: "train.jsonl"
 validation_file: "validation.jsonl"
 output_dir: "outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora"
@@ -38,6 +38,7 @@ seed: 42
 notes:
   - "Primary recommendation: regular LoRA on L40-class hardware with no 4-bit quantization."
   - "This pilot dataset is teacher-distilled, unreviewed, not approved, and not golden."
+  - "Export a canonical fine-tune copy before training so messages[1] uses rtl_task_v0.1 and messages[2] uses rtl_answer_v0.1."
   - "Keep the active-model hosted baseline as comparison only unless it is exactly Qwen/Qwen2.5-Coder-7B-Instruct."
   - "Evaluate the exact small target base model before and after fine-tuning on the same held-out test split."
   - "Do not commit checkpoints, adapters, merged weights, or generated training artifacts."

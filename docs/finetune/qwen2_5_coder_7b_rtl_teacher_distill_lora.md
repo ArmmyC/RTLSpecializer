@@ -3,7 +3,8 @@
 This pilot targets:
 
 - base model: `Qwen/Qwen2.5-Coder-7B-Instruct`
-- dataset: `data/distill/rtlcoder_synthetic_teacher_distill_v0_1`
+- source distill dataset: `data/distill/rtlcoder_synthetic_teacher_distill_v0_1`
+- canonical training dataset: `outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical`
 - hardware: NVIDIA L40-class GPU
 - method: regular LoRA first, not QLoRA
 
@@ -16,9 +17,9 @@ Important constraints:
 
 If the currently hosted `active-model` baseline is not exactly `Qwen/Qwen2.5-Coder-7B-Instruct`, keep it only as a hosted baseline or teacher comparison. The before/after fine-tune comparison for this pilot should still use `Qwen/Qwen2.5-Coder-7B-Instruct`.
 
-## 1. Check the dataset first
+## 1. Check the source distill dataset first
 
-Run the local checker before training:
+Run the local checker before export/training:
 
 ```bash
 python scripts/finetune/check_finetune_dataset.py \
@@ -32,11 +33,37 @@ This verifies:
 
 - `train.jsonl`, `validation.jsonl`, and `test.jsonl` exist
 - each row keeps exact `system` / `user` / `assistant` message order
-- user rows are `rtl_task_v0.1`
+- user rows are accepted `rtl_task_v0.1` content, including known schema aliases
 - assistant rows are accepted `rtl_answer_v0.1` content, including known schema aliases
 - review and approval statuses remain pilot-safe
 
-## 2. Primary config
+The checker should keep reporting aliases if they are present in the source teacher-distill package. That is expected input behavior, not a training-ready guarantee.
+
+## 2. Export a canonical training copy
+
+Before training, export a canonical dataset copy so the actual training rows use:
+
+- `messages[1].content.schema_version = rtl_task_v0.1`
+- `messages[2].content.schema_version = rtl_answer_v0.1`
+
+```bash
+python scripts/finetune/export_canonical_finetune_dataset.py \
+  --dataset-dir data/distill/rtlcoder_synthetic_teacher_distill_v0_1 \
+  --output-dir outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical \
+  --json
+```
+
+This export rewrites only the canonical training copy. It does not mutate the original `data/distill/...` files.
+
+Optionally re-run the checker on the canonical output:
+
+```bash
+python scripts/finetune/check_finetune_dataset.py \
+  --dataset-dir outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical \
+  --json
+```
+
+## 3. Primary config
 
 Use:
 
@@ -48,11 +75,12 @@ Why this config:
 
 - regular LoRA is the primary recommendation for L40-class hardware
 - no 4-bit quantization by default
+- training data points to the canonical fine-tune export, not the raw teacher-distill package
 - `max_seq_length: 4096` is a safe pilot starting point
 - `epochs: 1` limits early overfitting risk on the 1000-row set
 - LoRA targets include Qwen-style attention and MLP projection modules
 
-## 3. Option A: Axolotl-style LoRA command template
+## 4. Option A: Axolotl-style LoRA command template
 
 This is a template only. Exact keys can vary slightly by Axolotl version.
 
@@ -63,7 +91,7 @@ accelerate launch -m axolotl.cli.train \
 
 Adjust batch size, accumulation, and data-format wiring to match the installed Axolotl release.
 
-## 4. Option B: TRL / SFTTrainer-style LoRA template
+## 5. Option B: TRL / SFTTrainer-style LoRA template
 
 This is a framework-template example, not a required repo script:
 
@@ -77,7 +105,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import SFTConfig, SFTTrainer
 
 base_model = "Qwen/Qwen2.5-Coder-7B-Instruct"
-dataset_dir = Path("data/distill/rtlcoder_synthetic_teacher_distill_v0_1")
+dataset_dir = Path("outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical")
 output_dir = "outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora"
 
 tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
@@ -133,7 +161,7 @@ trainer.train()
 trainer.save_model(output_dir)
 ```
 
-## 5. QLoRA fallback only
+## 6. QLoRA fallback only
 
 Use QLoRA only if one of these is true:
 
@@ -164,7 +192,7 @@ bnb_config = BitsAndBytesConfig(
 
 Do not treat QLoRA as the primary recommendation for this L40 pilot.
 
-## 6. Evaluate before and after
+## 7. Evaluate before and after
 
 Before training:
 
@@ -202,10 +230,11 @@ python scripts/eval/inspect_candidate_differences.py \
   --json
 ```
 
-## 7. Safety reminders
+## 8. Safety reminders
 
 - Do not overwrite existing eval runs.
 - Do not promote this dataset to golden.
 - Do not mark rows reviewed or approved.
 - Do not commit checkpoints, adapters, merged models, or weight files.
+- Do not train directly on alias-carrying source splits when the canonical export step has not been run.
 - Do not treat a strong score on this pilot as semantic proof of RTL quality.

@@ -21,6 +21,7 @@ clean rtl_task_v0.1 JSONL
   -> clean teacher rtl_answer_v0.1 JSONL
   -> prepare teacher-distill dataset
   -> deterministic train/validation/test split
+  -> export canonical fine-tune copy
   -> run baseline eval first
   -> run small LoRA/QLoRA pilot
   -> compare baseline vs fine-tuned model
@@ -96,22 +97,41 @@ The resulting rows remain explicitly:
 - `approval_status: not_approved`
 - `promotion_allowed: false`
 
-## Step 3: Run baseline evaluation first
+## Step 3: Export a canonical training copy
+
+Before training, export a canonical copy for the trainer so the actual training rows use canonical schema names even if the source teacher-distill package still contains accepted aliases:
+
+```bash
+python scripts/finetune/export_canonical_finetune_dataset.py \
+  --dataset-dir data/distill/verilog_eval_teacher_distill_v0_1 \
+  --output-dir outputs/finetune_datasets/verilog_eval_teacher_distill_v0_1_canonical \
+  --json
+```
+
+That export rewrites only:
+
+- `messages[1].content.schema_version -> rtl_task_v0.1`
+- `messages[2].content.schema_version -> rtl_answer_v0.1`
+
+It does not modify the original `data/distill/...` package.
+
+## Step 4: Run baseline evaluation first
 
 Before any fine-tuning pilot, run the deterministic baseline evaluation flow on the held-out split you plan to compare against later.
 
 The point of this step is not to prove correctness. It is to establish a reproducible baseline before changing model weights.
 
-## Step 4: Run a small LoRA/QLoRA pilot
+## Step 5: Run a small LoRA/QLoRA pilot
 
 Use the teacher-distill dataset only for a small pilot:
 
 - verify chat formatting and loader behavior,
 - confirm the train/validation/test packaging works end to end,
+- train on the canonical export rather than the raw alias-carrying source splits,
 - measure whether the fine-tuned model improves over the baseline on the held-out split,
 - avoid treating the teacher answers as reviewed truth.
 
-## Step 5: Compare baseline vs fine-tuned model
+## Step 6: Compare baseline vs fine-tuned model
 
 Compare:
 
@@ -122,7 +142,7 @@ Compare:
 
 Treat any apparent gains as provisional until reviewed data is available.
 
-## Step 6: Collect more bug-focused data later
+## Step 7: Collect more bug-focused data later
 
 The main limitation of this pilot dataset is that most rows are reference-only, with only a small number of prompt-embedded candidate bug rows.
 

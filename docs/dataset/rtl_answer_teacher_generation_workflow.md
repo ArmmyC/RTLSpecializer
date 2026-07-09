@@ -140,6 +140,15 @@ python scripts/dataset/validate_dataset.py \
   --strict
 ```
 
+Before any actual training run, export a canonical fine-tune copy so the training rows use canonical schema names even if the source teacher-distill package still carries accepted aliases:
+
+```bash
+python scripts/finetune/export_canonical_finetune_dataset.py \
+  --dataset-dir data/distill/verilog_eval_teacher_distill_v0_1 \
+  --output-dir outputs/finetune_datasets/verilog_eval_teacher_distill_v0_1_canonical \
+  --json
+```
+
 This branch is for pilot format/pipeline fine-tuning only:
 
 - It is teacher-distilled, not human-reviewed.

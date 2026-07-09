@@ -29,7 +29,23 @@ python scripts/dataset/prepare_teacher_distill_dataset.py \
   --json
 ```
 
-## Step 2: Export test prompts
+## Step 2: Export a canonical training copy
+
+Before any fine-tuning run, export a canonical copy for the trainer:
+
+```bash
+python scripts/finetune/export_canonical_finetune_dataset.py \
+  --dataset-dir data/distill/verilog_eval_teacher_distill_v0_1 \
+  --output-dir outputs/finetune_datasets/verilog_eval_teacher_distill_v0_1_canonical \
+  --json
+```
+
+This keeps the source teacher-distill package unchanged while ensuring the actual training rows use canonical schema names:
+
+- `messages[1].content.schema_version = rtl_task_v0.1`
+- `messages[2].content.schema_version = rtl_answer_v0.1`
+
+## Step 3: Export test prompts
 
 Export the held-out prompts without leaking the expected answer into the prompt payload:
 
@@ -49,7 +65,7 @@ The exported JSONL keeps:
 - expected `rtl_answer_v0.1` in a separate scoring field only,
 - prompt metadata needed for later scoring.
 
-## Step 3: Run a baseline model manually
+## Step 4: Run a baseline model manually
 
 Use any local/manual generation path you prefer:
 
@@ -70,7 +86,7 @@ Save predictions as JSONL:
 - a parsed JSON object, or
 - a raw string containing one `rtl_answer_v0.1` JSON object.
 
-## Step 4: Score the baseline
+## Step 5: Score the baseline
 
 ```bash
 python scripts/eval/score_rtl_answer_json.py \
@@ -93,7 +109,7 @@ The scorer emphasizes:
 
 Exact match to the teacher answer is report-only and not the main score.
 
-## Step 5: Run a small LoRA/QLoRA pilot manually
+## Step 6: Run a small LoRA/QLoRA pilot manually
 
 Start from the template:
 
@@ -106,9 +122,10 @@ The template is framework-agnostic. Adapt it to your trainer of choice and keep 
 - 1 to 3 epochs,
 - low learning rate,
 - small batch size,
+- train on the canonical export rather than the raw source distill package,
 - conservative expectations.
 
-## Step 6: Run the fine-tuned model on the same test prompts
+## Step 7: Run the fine-tuned model on the same test prompts
 
 Use the exact same `test_prompts.jsonl` file and save predictions to a second JSONL file:
 
@@ -116,7 +133,7 @@ Use the exact same `test_prompts.jsonl` file and save predictions to a second JS
 data/eval/rtl_teacher_distill_pilot/finetuned_predictions.jsonl
 ```
 
-## Step 7: Score the fine-tuned model
+## Step 8: Score the fine-tuned model
 
 ```bash
 python scripts/eval/score_rtl_answer_json.py \
@@ -128,7 +145,7 @@ python scripts/eval/score_rtl_answer_json.py \
   --json
 ```
 
-## Step 8: Compare baseline vs fine-tuned
+## Step 9: Compare baseline vs fine-tuned
 
 ```bash
 python scripts/eval/compare_rtl_eval_runs.py \
@@ -148,7 +165,7 @@ The comparison highlights:
 - source-level improvements,
 - source-level regressions.
 
-## Step 9: Decide what to do next
+## Step 10: Decide what to do next
 
 Use the comparison to decide whether to:
 
