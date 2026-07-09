@@ -1,0 +1,43 @@
+# LoRA pilot template for the 1000-row RTLCoder synthetic teacher-distill set.
+# This config is intentionally framework-agnostic and sized for L40-class GPUs.
+# Prefer regular LoRA first on L40 hardware. Use QLoRA only as a fallback.
+
+base_model: "Qwen/Qwen2.5-Coder-7B-Instruct"
+dataset_dir: "data/distill/rtlcoder_synthetic_teacher_distill_v0_1"
+train_file: "train.jsonl"
+validation_file: "validation.jsonl"
+output_dir: "outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora"
+
+method: "lora"
+hardware_target: "nvidia_l40_class_gpu"
+precision: "bf16_if_available_else_fp16"
+quantization: "none"
+
+max_seq_length: 4096
+learning_rate: 1.0e-4
+epochs: 1
+batch_size: 1
+gradient_accumulation_steps: 16
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+target_modules:
+  - "q_proj"
+  - "k_proj"
+  - "v_proj"
+  - "o_proj"
+  - "gate_proj"
+  - "up_proj"
+  - "down_proj"
+
+save_steps: 100
+eval_steps: 100
+seed: 42
+
+notes:
+  - "Primary recommendation: regular LoRA on L40-class hardware with no 4-bit quantization."
+  - "This pilot dataset is teacher-distilled, unreviewed, not approved, and not golden."
+  - "Keep the active-model hosted baseline as comparison only unless it is exactly Qwen/Qwen2.5-Coder-7B-Instruct."
+  - "Evaluate the exact small target base model before and after fine-tuning on the same held-out test split."
+  - "Do not commit checkpoints, adapters, merged weights, or generated training artifacts."

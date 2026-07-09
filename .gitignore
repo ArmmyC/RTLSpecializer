@@ -16,3 +16,12 @@ data/.local_data/
 /runs/
 /checkpoints/
 /models/
+/adapters/
+outputs/
+checkpoints/
+models/
+adapters/
+*.safetensors
+*.bin
+*.pt
+*.pth
