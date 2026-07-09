@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from scripts.dataset.prepare_teacher_distill_dataset import main as prepare_teacher_distill_main
 from scripts.dataset.constants import TEACHER_DISTILL_REVIEW_STATUS, TOOL_CHECKS
 from scripts.dataset.io_utils import load_jsonl
 from scripts.dataset.teacher_distill import (
@@ -332,6 +333,29 @@ def test_rows_are_marked_teacher_distilled_unreviewed_and_not_approved(tmp_path)
     row = _read_jsonl(output_dir / "all.jsonl")[0]
     assert row["review_status"] == TEACHER_DISTILL_REVIEW_STATUS
     assert row["approval_status"] == APPROVAL_STATUS
+
+
+def test_prepare_teacher_distill_cli_accepts_ratio_splits_and_val_size_alias(tmp_path) -> None:
+    tasks_path = tmp_path / "tasks.jsonl"
+    answers_path = tmp_path / "answers.jsonl"
+    output_dir = tmp_path / "output"
+    _write_jsonl(tasks_path, [_task(f"Prob{i:03d}") for i in range(10)])
+    _write_jsonl(answers_path, [_answer(f"Prob{i:03d}") for i in range(10)])
+
+    code = prepare_teacher_distill_main([
+        "--tasks", str(tasks_path),
+        "--answers", str(answers_path),
+        "--output-dir", str(output_dir),
+        "--train-size", "0.8",
+        "--val-size", "0.1",
+        "--test-size", "0.1",
+        "--json",
+    ])
+
+    assert code == 0
+    assert len(_read_jsonl(output_dir / "train.jsonl")) == 8
+    assert len(_read_jsonl(output_dir / "validation.jsonl")) == 1
+    assert len(_read_jsonl(output_dir / "test.jsonl")) == 1
 
 
 def test_generated_files_are_not_written_into_data_golden(tmp_path) -> None:

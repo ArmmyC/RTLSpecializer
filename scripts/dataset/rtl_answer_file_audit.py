@@ -324,6 +324,24 @@ def _load_tasks(tasks_path: Path | None) -> tuple[dict[str, dict[str, Any]], lis
     return tasks, errors
 
 
+def load_tasks_by_source(tasks_path: Path) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], list[str]]:
+    rows, problems = load_jsonl(tasks_path)
+    errors = [f"{tasks_path}:{problem.line or ''}: {problem.message}" for problem in problems]
+    ordered_rows: list[dict[str, Any]] = []
+    tasks: dict[str, dict[str, Any]] = {}
+    for line, row in rows:
+        source_id = row.get("source_id")
+        if not isinstance(source_id, str) or not source_id:
+            errors.append(f"{tasks_path}:{line}: task row missing source_id")
+            continue
+        if source_id in tasks:
+            errors.append(f"{tasks_path}:{line}: duplicate task source_id {source_id}")
+            continue
+        tasks[source_id] = row
+        ordered_rows.append(row)
+    return ordered_rows, tasks, errors
+
+
 def _task_has_tool_evidence(task: dict[str, Any] | None, tool: str) -> bool:
     if not isinstance(task, dict):
         return False
