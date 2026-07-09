@@ -25,3 +25,7 @@ adapters/
 *.bin
 *.pt
 *.pth
+*.tar
+*.tar.gz
+*.tgz
+*.zip

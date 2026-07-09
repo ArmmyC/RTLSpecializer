@@ -102,7 +102,29 @@ Expected:
 Important CPE note:
 
 - the `gpul40` node may not be able to read `~/RTLSpecializer` directly
-- if that happens, stage the repo subset and Python site-packages into `/tmp` on the GPU node first, the same way the existing `qwen25-coder-7b-instruct` service helpers do
+- use `scripts/finetune/stage_cpe_lora.sh` from the CPE login host; it streams the repo subset, canonical dataset, and Python site-packages into `/tmp` before starting any GPU-side command
+- the launcher defaults to the environment check plus trainer dry-run. It only stages the local base-model artifact and starts training when `--train` is explicitly supplied.
+
+From the CPE login host after extracting the transfer archive:
+
+```bash
+cd ~/RTLSpecializer
+bash scripts/finetune/stage_cpe_lora.sh
+```
+
+To reuse an existing allocation, such as a controlled L40 reservation, pass its job ID:
+
+```bash
+bash scripts/finetune/stage_cpe_lora.sh --job-id <job-id>
+```
+
+When the dry-run has been reviewed and you are ready for the controlled training attempt:
+
+```bash
+bash scripts/finetune/stage_cpe_lora.sh --train
+```
+
+The training mode refuses to overwrite an existing persistent adapter output. It stages the local Qwen model cache from `~/LLMModel/qwen25-coder-7b-instruct/models/Qwen__Qwen2.5-Coder-7B-Instruct` by default and restores only successful adapter artifacts to `outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora` on the CPE login host. Override that source with `--model-source-dir PATH` if needed.
 
 ## 5. Option A: Axolotl-style LoRA command template
 
