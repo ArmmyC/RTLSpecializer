@@ -668,15 +668,17 @@ def plan_data_workspace_cleanup(
         "skipped_for_manual_review_count": skipped_for_manual_review,
         "proposed_moves": proposed_moves,
     }
+    markdown = _cleanup_plan_markdown(result)
     if plan_json:
         _write_json(plan_json, result)
+    elif apply_high:
+        _write_json(DEFAULT_APPLIED_JSON, result)
     if plan_md:
         plan_md.parent.mkdir(parents=True, exist_ok=True)
-        plan_md.write_text(_cleanup_plan_markdown(result), encoding="utf-8", newline="\n")
-    if apply_high:
-        _write_json(DEFAULT_APPLIED_JSON, result)
+        plan_md.write_text(markdown, encoding="utf-8", newline="\n")
+    elif apply_high:
         DEFAULT_APPLIED_MD.parent.mkdir(parents=True, exist_ok=True)
-        DEFAULT_APPLIED_MD.write_text(_cleanup_plan_markdown(result), encoding="utf-8", newline="\n")
+        DEFAULT_APPLIED_MD.write_text(markdown, encoding="utf-8", newline="\n")
     return result, 0
 
 

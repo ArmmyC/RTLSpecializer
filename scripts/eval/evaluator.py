@@ -13,7 +13,7 @@ import tempfile
 from typing import Any
 
 from scripts.dataset.claim_safety import find_unsupported_claims
-from scripts.dataset.constants import ANSWER_SCHEMA_VERSION, CLAIM_DOMAINS, CLAIM_LEVELS
+from scripts.dataset.constants import ANSWER_SCHEMA_VERSION, ANSWER_SCHEMA_VERSIONS, CLAIM_DOMAINS, CLAIM_LEVELS
 from scripts.dataset.io_utils import load_jsonl, write_jsonl
 from scripts.dataset.validation import (
     extract_module_names,
@@ -137,7 +137,7 @@ def _schema_score(dataset_row: dict[str, Any], answer: Any, errors: list[str]) -
         points += 2
     else:
         errors.append(f"missing answer fields: {sorted(missing)}")
-    if answer.get("schema_version") == ANSWER_SCHEMA_VERSION:
+    if answer.get("schema_version") in ANSWER_SCHEMA_VERSIONS:
         points += 1
     else:
         errors.append("invalid schema_version")

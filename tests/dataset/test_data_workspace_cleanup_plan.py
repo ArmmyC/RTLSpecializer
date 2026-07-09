@@ -121,6 +121,38 @@ def test_cleanup_planner_does_not_move_low_or_medium_confidence_files_on_apply(t
     assert move["status"] == "planned_only"
 
 
+def test_cleanup_planner_apply_does_not_write_default_repo_reports_when_custom_paths_are_passed(tmp_path, monkeypatch) -> None:
+    from scripts.dataset import data_workspace as module
+
+    data_dir = tmp_path / "data"
+    _write_jsonl(data_dir / "review" / "tasks.jsonl", [_task("row_001")])
+    inventory_json = data_dir / "reports" / "data_workspace_inventory.json"
+    plan_md = data_dir / "reports" / "custom_cleanup_applied.md"
+    plan_json = data_dir / "reports" / "custom_cleanup_applied.json"
+    inventory, code = collect_data_workspace_inventory(data_dir=data_dir, output_json=inventory_json)
+    assert code == 0, inventory
+
+    default_md = tmp_path / "repo_default_cleanup_applied.md"
+    default_json = tmp_path / "repo_default_cleanup_applied.json"
+    monkeypatch.setattr(module, "DEFAULT_APPLIED_MD", default_md)
+    monkeypatch.setattr(module, "DEFAULT_APPLIED_JSON", default_json)
+
+    plan, code = plan_data_workspace_cleanup(
+        data_dir=data_dir,
+        inventory_json=inventory_json,
+        plan_md=plan_md,
+        plan_json=plan_json,
+        apply=True,
+        dry_run=False,
+    )
+
+    assert code == 0, plan
+    assert plan_md.exists()
+    assert plan_json.exists()
+    assert not default_md.exists()
+    assert not default_json.exists()
+
+
 def test_cleanup_planner_does_not_delete_files(tmp_path) -> None:
     data_dir = tmp_path / "data"
     task_path = data_dir / "review" / "tasks.jsonl"

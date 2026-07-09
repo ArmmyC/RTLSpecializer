@@ -13,7 +13,14 @@ import re
 from pathlib import Path
 from typing import Any
 
-from scripts.dataset.constants import ANSWER_SCHEMA_VERSION, CLAIM_LEVELS, TASK_SCHEMA_VERSION, TOOL_CHECKS
+from scripts.dataset.constants import (
+    ANSWER_SCHEMA_VERSION,
+    ANSWER_SCHEMA_VERSIONS,
+    CLAIM_LEVELS,
+    TASK_SCHEMA_VERSION,
+    TASK_SCHEMA_VERSIONS,
+    TOOL_CHECKS,
+)
 from scripts.dataset.io_utils import JsonlProblem, load_jsonl, write_jsonl
 
 
@@ -79,6 +86,12 @@ UNSUPPORTED_CLAIM_PATTERNS: dict[str, list[re.Pattern[str]]] = {
         re.compile(r"\bmet\s+timing\b", re.IGNORECASE),
     ],
 }
+VERIFIED_WORD_RE = re.compile(r"\bverified\b", re.IGNORECASE)
+NEGATED_VERIFIED_CONTEXT_RE = re.compile(
+    r"\b(?:no|not|never|cannot|can't|could\s+not|was\s+not|were\s+not|is\s+not|are\s+not)\b"
+    r"[\w\s,;:()/-]{0,120}\bverified\b",
+    re.IGNORECASE,
+)
 
 
 def _is_local_data_path(path: Path) -> bool:
@@ -129,7 +142,7 @@ def _rows_from_payload(payload: Any, *, label: str) -> tuple[list[dict[str, Any]
             rows = payload["answers"]
         elif isinstance(payload.get("rows"), list):
             rows = payload["rows"]
-        elif payload.get("schema_version") in {TASK_SCHEMA_VERSION, ANSWER_SCHEMA_VERSION}:
+        elif payload.get("schema_version") in (TASK_SCHEMA_VERSIONS | ANSWER_SCHEMA_VERSIONS):
             rows = [payload]
         else:
             return [], [f"{label} must be a JSON array, JSONL, an object with rows/answers, or one task/answer object"], expected_source_ids
@@ -153,7 +166,7 @@ def _load_task_rows(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
     rows, row_errors, _ = _rows_from_payload(payload, label="tasks")
     errors = list(row_errors)
     for index, row in enumerate(rows, 1):
-        if row.get("schema_version") != TASK_SCHEMA_VERSION:
+        if row.get("schema_version") not in TASK_SCHEMA_VERSIONS:
             errors.append(f"task row {index} must have schema_version {TASK_SCHEMA_VERSION!r}")
         source_id = row.get("source_id")
         if not isinstance(source_id, str) or not source_id:
@@ -388,15 +401,21 @@ def _find_unsupported_claims(answer: dict[str, Any], task: dict[str, Any]) -> li
             if pattern.search(text):
                 errors.append(f"unsupported {tool} claim without corresponding tool_checks evidence: {pattern.pattern}")
                 break
-    if re.search(r"\bverified\b", text, re.IGNORECASE) and not re.search(r"\b(?:not|never|no)\s+verified\b", text, re.IGNORECASE):
-        if not (_tool_has_evidence(task, "simulation") or _tool_has_evidence(task, "equivalence")):
-            errors.append("unsupported verified claim without simulation/equivalence evidence")
+    unsupported_verified = False
+    for match in VERIFIED_WORD_RE.finditer(text):
+        window = text[max(0, match.start() - 120):match.end()]
+        if NEGATED_VERIFIED_CONTEXT_RE.search(window):
+            continue
+        unsupported_verified = True
+        break
+    if unsupported_verified and not (_tool_has_evidence(task, "simulation") or _tool_has_evidence(task, "equivalence")):
+        errors.append("unsupported verified claim without simulation/equivalence evidence")
     return errors
 
 
 def _contains_task_copy(value: Any) -> bool:
     if isinstance(value, dict):
-        if value.get("schema_version") == TASK_SCHEMA_VERSION:
+        if value.get("schema_version") in TASK_SCHEMA_VERSIONS:
             return True
         task_only_keys = {"prompt", "artifacts", "design_context", "constraints", "required_output"}
         if len(task_only_keys & value.keys()) >= 3:
@@ -449,7 +468,7 @@ def _validate_answer_row(answer: dict[str, Any], task: dict[str, Any], index: in
     missing = sorted(ANSWER_REQUIRED_FIELDS - answer.keys())
     if missing:
         errors.append(f"{prefix} is missing required fields: {', '.join(missing)}")
-    if answer.get("schema_version") != ANSWER_SCHEMA_VERSION:
+    if answer.get("schema_version") not in ANSWER_SCHEMA_VERSIONS:
         errors.append(f"{prefix} must have schema_version {ANSWER_SCHEMA_VERSION!r}")
     if answer.get("task_type") != task.get("task_type"):
         errors.append(f"{prefix} task_type must match source task")

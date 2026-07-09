@@ -9,9 +9,12 @@ from pathlib import Path
 import pytest
 
 from scripts.dataset.io_utils import load_jsonl, write_jsonl
+from scripts.dataset.teacher_distill import prepare_teacher_distill_dataset
 from scripts.eval.evaluator import evaluate_answer, evaluate_dataset, load_candidate_answers
 from scripts.eval.make_baseline_candidates import make_baseline_answer, make_candidates
 from tests.dataset.conftest import GOLDEN, ROOT, write_rows
+from tests.dataset.test_prepare_teacher_distill_dataset import _answer as _distill_answer
+from tests.dataset.test_prepare_teacher_distill_dataset import _task as _distill_task
 
 
 @pytest.fixture
@@ -21,6 +24,38 @@ def valid_row() -> dict:
 
 def _candidate(row: dict, answer: dict | None = None) -> dict:
     return {"id": row["id"], "answer": deepcopy(answer or row["messages"][2]["content"]), "metadata": {"model": "test"}}
+
+
+def _teacher_distill_row(tmp_path: Path) -> dict:
+    source_id = "rtlcoder_resyn27k_000001_reference_synthetic_wrong_reset_polarity"
+    task = _distill_task(source_id, candidate=True)
+    task["source_dataset"] = "rtlcoder_resyn27k"
+    task["license"] = "unconfirmed_upstream_license"
+    task["provenance"]["origin"] = "external_rtlcoder_gpt_generated_unverified"
+    task["provenance"]["public_dataset_name"] = "RTLCoder Resyn27k"
+    task["provenance"]["public_dataset_url"] = None
+    task["synthetic_bug"] = True
+    answer = _distill_answer(source_id, candidate=True)
+    answer["schema_version"] = "rtl_answer.v0.1"
+    tasks_path = tmp_path / "tasks.jsonl"
+    answers_path = tmp_path / "answers.jsonl"
+    output_dir = tmp_path / "distill"
+    write_jsonl(tasks_path, [task])
+    write_jsonl(answers_path, [answer])
+    result, code = prepare_teacher_distill_dataset(
+        tasks_path=tasks_path,
+        answers_path=answers_path,
+        output_dir=output_dir,
+        train_size=0,
+        validation_size=0,
+        test_size=1,
+        seed=42,
+        strict=True,
+    )
+    assert code == 0, result
+    rows, problems = load_jsonl(output_dir / "test.jsonl")
+    assert not problems, [problem.message for problem in problems]
+    return rows[0][1]
 
 
 def test_candidate_loader_accepts_valid_jsonl(tmp_path, valid_row) -> None:
@@ -139,3 +174,21 @@ def test_baseline_cli_json_output_is_parseable(tmp_path, valid_row) -> None:
     payload = json.loads(completed.stdout)
     assert payload["ok"] is True
     assert payload["candidate_rows"] == 1
+
+
+def test_reference_candidate_accepts_dotted_answer_schema_in_teacher_distill_row(tmp_path) -> None:
+    row = _teacher_distill_row(tmp_path)
+    result = evaluate_answer(row, row["messages"][2]["content"])
+    assert not any("invalid schema_version" in error for error in result.errors), result
+    assert any("patch" in error for error in result.errors), result
+
+
+def test_baseline_answer_is_valid_for_teacher_distill_rtlcoder_row(tmp_path) -> None:
+    row = _teacher_distill_row(tmp_path)
+    answer = make_baseline_answer(row)
+    assert answer["source_id"] == row["source_id"]
+    assert "tool_checks" in answer["evidence_used"]
+    assert answer["limitations"]
+    result = evaluate_answer(row, answer)
+    assert not result.errors, result
+    assert not result.safety_failures, result

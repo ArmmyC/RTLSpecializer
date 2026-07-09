@@ -358,6 +358,28 @@ def test_prepare_teacher_distill_cli_accepts_ratio_splits_and_val_size_alias(tmp
     assert len(_read_jsonl(output_dir / "test.jsonl")) == 1
 
 
+def test_prepare_teacher_distill_accepts_dotted_answer_schema_for_rtlcoder_rows(tmp_path) -> None:
+    tasks, answers = _fixture_rows()
+    for task in tasks:
+        task["source_dataset"] = "rtlcoder_resyn27k"
+        task["license"] = "unconfirmed_upstream_license"
+        task["provenance"]["origin"] = "external_rtlcoder_gpt_generated_unverified"
+        task["provenance"]["public_dataset_name"] = "RTLCoder Resyn27k"
+        task["provenance"]["public_dataset_url"] = None
+        task["synthetic_bug"] = True
+    for answer in answers:
+        answer["schema_version"] = "rtl_answer.v0.1"
+
+    result, code, output_dir = _run_prepare(tmp_path, tasks, answers)
+
+    assert code == 0, result
+    assert result["dataset_name"] == "rtlcoder_synthetic_teacher_distill_v0_1"
+    row = _read_jsonl(output_dir / "all.jsonl")[0]
+    assert row["source_family"] == "external_rtlcoder_gpt_generated_unverified"
+    assert row["messages"][2]["content"]["schema_version"] == "rtl_answer.v0.1"
+    assert validate_dataset_file(output_dir / "all.jsonl", strict=True).ok
+
+
 def test_generated_files_are_not_written_into_data_golden(tmp_path) -> None:
     tasks, answers = _fixture_rows()
     tasks_path = tmp_path / "tasks.jsonl"

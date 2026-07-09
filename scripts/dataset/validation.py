@@ -10,9 +10,13 @@ from typing import Any
 
 from .claim_safety import find_unsupported_claims
 from .constants import (
-    ANSWER_SCHEMA_VERSION, ARTIFACT_FIELDS, CLAIM_DOMAINS, CLAIM_LEVELS,
+    ANSWER_SCHEMA_VERSION,
+    ANSWER_SCHEMA_VERSIONS,
+    ARTIFACT_FIELDS,
+    CLAIM_DOMAINS,
+    CLAIM_LEVELS,
     DATASET_VERSION, PROVENANCE_FIELDS, REQUIRED_OUTPUT, REVIEW_STATUSES,
-    SOURCES, SPLITS, TASK_SCHEMA_VERSION, TASK_TYPES, TEACHER_DISTILL_REVIEW_STATUS,
+    SOURCES, SPLITS, TASK_SCHEMA_VERSION, TASK_SCHEMA_VERSIONS, TASK_TYPES, TEACHER_DISTILL_REVIEW_STATUS,
     TOOL_CHECKS, TOOL_STATUSES, TOP_LEVEL_FIELDS, TRAINING_SPLITS, USER_GOALS,
 )
 from .io_utils import load_jsonl
@@ -165,7 +169,7 @@ def _teacher_distill_training_row_ok(row: dict[str, Any]) -> bool:
 
 def _contains_answer_copy(value: Any) -> bool:
     if isinstance(value, dict):
-        if value.get("schema_version") == ANSWER_SCHEMA_VERSION:
+        if value.get("schema_version") in ANSWER_SCHEMA_VERSIONS:
             return True
         answer_only_keys = {
             "issue_summary",
@@ -344,8 +348,20 @@ def _validate_teacher_distill_row(row: dict[str, Any], task: dict[str, Any], ans
         error("approval_status", "teacher-distilled pilot rows must set approval_status to 'not_approved'")
     if row.get("source") != "teacher_generated":
         error("source", "teacher-distilled pilot rows must set source to 'teacher_generated'")
-    if row.get("source_family") != "public_verilog_eval":
-        error("source_family", "teacher-distilled pilot rows must set source_family to 'public_verilog_eval'")
+    expected_source_families: set[str] = set()
+    source_dataset = task.get("source_dataset")
+    if isinstance(source_dataset, str) and source_dataset:
+        expected_source_families.add(source_dataset)
+    provenance = task.get("provenance")
+    origin = provenance.get("origin") if isinstance(provenance, dict) else None
+    if isinstance(origin, str) and origin:
+        expected_source_families.add(origin)
+    source_family = row.get("source_family")
+    if not isinstance(source_family, str) or not source_family:
+        error("source_family", "teacher-distilled pilot rows must set a non-empty source_family")
+    elif expected_source_families and source_family not in expected_source_families:
+        choices = ", ".join(sorted(expected_source_families))
+        error("source_family", f"teacher-distilled pilot rows must set source_family to match the task source metadata ({choices})")
     if row.get("schema_pair") != f"{TASK_SCHEMA_VERSION}_to_{ANSWER_SCHEMA_VERSION}":
         error("schema_pair", f"teacher-distilled pilot rows must set schema_pair to '{TASK_SCHEMA_VERSION}_to_{ANSWER_SCHEMA_VERSION}'")
     if row.get("promotion_allowed") is not False:
@@ -375,7 +391,7 @@ def _validate_teacher_distill_row(row: dict[str, Any], task: dict[str, Any], ans
 
 
 def _validate_task(task: dict[str, Any], row: dict[str, Any], error: Any) -> None:
-    if task.get("schema_version") != TASK_SCHEMA_VERSION:
+    if task.get("schema_version") not in TASK_SCHEMA_VERSIONS:
         error("messages[1].content.schema_version", f"must be {TASK_SCHEMA_VERSION!r}")
     if task.get("domain") != "digital_rtl":
         error("messages[1].content.domain", "must be 'digital_rtl'")
@@ -440,7 +456,7 @@ def _validate_answer(answer: dict[str, Any], task: dict[str, Any], row: dict[str
     }
     for field in sorted(required_fields - answer.keys()):
         error(f"messages[2].content.{field}", "missing required field")
-    if answer.get("schema_version") != ANSWER_SCHEMA_VERSION:
+    if answer.get("schema_version") not in ANSWER_SCHEMA_VERSIONS:
         error("messages[2].content.schema_version", f"must be {ANSWER_SCHEMA_VERSION!r}")
     if answer.get("task_type") != task.get("task_type"):
         error("messages[2].content.task_type", "must match user task_type")

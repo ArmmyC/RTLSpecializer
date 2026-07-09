@@ -241,6 +241,24 @@ def test_validator_rejects_unsupported_passed_simulation_claim(tmp_path) -> None
     assert any("simulation claim" in error for error in result["errors"])
 
 
+def test_validator_allows_negated_verified_wording_without_tool_claim(tmp_path) -> None:
+    tasks = tmp_path / "tasks.jsonl"
+    answers = tmp_path / "answers.json"
+    _write_jsonl(tasks, [_task(candidate=True)])
+    answer = _answer(
+        issue="The prompt-embedded candidate appears risky by text inspection."
+    )
+    answer["time_reasoning"]["latency_or_state_risk"] = (
+        "No latency, state reachability, or timing behavior was verified."
+    )
+    answers.write_text(json.dumps([answer]), encoding="utf-8")
+
+    result, code = validate_rtl_answer_teacher_batch(tasks, answers)
+
+    assert code == 0, result
+    assert not any("unsupported verified claim" in error for error in result["errors"])
+
+
 def test_validator_rejects_reference_only_candidate_bug_claim(tmp_path) -> None:
     tasks = tmp_path / "tasks.jsonl"
     answers = tmp_path / "answers.json"

@@ -7,6 +7,17 @@ import re
 from typing import Any
 
 
+VERIFIED_CORRECTNESS_RE = re.compile(
+    r"\b(correctness (?:is|was|has been) verified|verified correct|proven correct)\b",
+    re.IGNORECASE,
+)
+NEGATED_VERIFIED_CORRECTNESS_CONTEXT_RE = re.compile(
+    r"\b(?:no|not|never|cannot|can't|could\s+not|was\s+not|were\s+not|is\s+not|are\s+not|without)\b"
+    r"[\w\s,;:()/-]{0,160}\b(correctness (?:is|was|has been) verified|verified correct|proven correct)\b",
+    re.IGNORECASE,
+)
+
+
 def _answer_text(answer: dict[str, Any]) -> str:
     return json.dumps(answer, ensure_ascii=False).lower()
 
@@ -19,6 +30,15 @@ def _has_warning(answer: dict[str, Any], section: str, words: tuple[str, ...]) -
 def _has_passing_check(checks: dict[str, Any], tool: str) -> bool:
     check = checks.get(tool)
     return isinstance(check, dict) and check.get("status") == "pass"
+
+
+def _has_unnegated_verified_correctness_claim(text: str) -> bool:
+    for match in VERIFIED_CORRECTNESS_RE.finditer(text):
+        window = text[max(0, match.start() - 160):match.end()]
+        if NEGATED_VERIFIED_CORRECTNESS_CONTEXT_RE.search(window):
+            continue
+        return True
+    return False
 
 
 def find_unsupported_claims(row: dict[str, Any], answer: dict[str, Any]) -> list[tuple[str, str]]:
@@ -52,7 +72,7 @@ def find_unsupported_claims(row: dict[str, Any], answer: dict[str, Any]) -> list
         issues.append(("tool_checks.synthesis", "unsupported area improvement claim without synthesis evidence"))
     if re.search(r"\b(guaranteed lower activity|switching (?:is|was) (?:reduced|improved)|reduces? (?:switching|toggle) activity|toggle (?:is|was) improved)\b", strong_text) and not _has_passing_check(checks, "toggle"):
         issues.append(("tool_checks.toggle", "unsupported switching/toggle improvement claim without toggle evidence"))
-    if re.search(r"\b(correctness (?:is|was|has been) verified|verified correct|proven correct)\b", text) and not (_has_passing_check(checks, "simulation") or _has_passing_check(checks, "equivalence")):
+    if _has_unnegated_verified_correctness_claim(text) and not (_has_passing_check(checks, "simulation") or _has_passing_check(checks, "equivalence")):
         issues.append(("tool_checks.simulation", "unsupported verified correctness claim without simulation or equivalence evidence"))
 
     if re.search(r"\b(this |the )?patch is safe\b", text) and not answer.get("functional_risk"):

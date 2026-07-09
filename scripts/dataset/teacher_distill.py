@@ -12,8 +12,10 @@ from typing import Any
 from scripts.dataset.claim_safety import find_unsupported_claims
 from scripts.dataset.constants import (
     ANSWER_SCHEMA_VERSION,
+    ANSWER_SCHEMA_VERSIONS,
     DATASET_VERSION,
     TASK_SCHEMA_VERSION,
+    TASK_SCHEMA_VERSIONS,
     TEACHER_DISTILL_REVIEW_STATUS,
     TOOL_CHECKS,
 )
@@ -53,7 +55,7 @@ MANIFEST_SELF_HASH_NOTE = (
 
 def _contains_answer_copy(value: Any) -> bool:
     if isinstance(value, dict):
-        if value.get("schema_version") == ANSWER_SCHEMA_VERSION:
+        if value.get("schema_version") in ANSWER_SCHEMA_VERSIONS:
             return True
         answer_only_keys = {
             "issue_summary",
@@ -141,19 +143,69 @@ def _top_level_tool_checks(task: dict[str, Any]) -> dict[str, Any]:
     return _tool_checks_template()
 
 
-def _make_row(task: dict[str, Any], answer: dict[str, Any], split: str, seed: int) -> dict[str, Any]:
+def _derive_source_family(tasks: list[dict[str, Any]]) -> str:
+    origins = {
+        provenance.get("origin")
+        for task in tasks
+        if isinstance(task, dict)
+        for provenance in [task.get("provenance")]
+        if isinstance(provenance, dict) and isinstance(provenance.get("origin"), str) and provenance.get("origin")
+    }
+    source_datasets = {
+        task.get("source_dataset")
+        for task in tasks
+        if isinstance(task, dict) and isinstance(task.get("source_dataset"), str) and task.get("source_dataset")
+    }
+    if "external_rtlcoder_gpt_generated_unverified" in origins:
+        return "external_rtlcoder_gpt_generated_unverified"
+    if len(origins) == 1:
+        return next(iter(origins))
+    if len(source_datasets) == 1:
+        return next(iter(source_datasets))
+    if "public_verilog_eval" in source_datasets:
+        return "public_verilog_eval"
+    return SOURCE_FAMILY
+
+
+def _derive_dataset_name(tasks: list[dict[str, Any]], source_family: str) -> str:
+    has_synthetic_bug = any(task.get("synthetic_bug") is True for task in tasks if isinstance(task, dict))
+    source_datasets = {
+        task.get("source_dataset")
+        for task in tasks
+        if isinstance(task, dict) and isinstance(task.get("source_dataset"), str) and task.get("source_dataset")
+    }
+    if source_family == "external_rtlcoder_gpt_generated_unverified" or any(
+        isinstance(name, str) and name.lower().startswith("rtlcoder") for name in source_datasets
+    ):
+        return "rtlcoder_synthetic_teacher_distill_v0_1" if has_synthetic_bug else "rtlcoder_teacher_distill_v0_1"
+    if source_family == "public_verilog_eval":
+        return DATASET_NAME
+    slug = "".join(char if char.isalnum() else "_" for char in source_family.lower()).strip("_")
+    slug = slug or "teacher_distill"
+    return f"{slug}_teacher_distill_v0_1"
+
+
+def _make_row(
+    task: dict[str, Any],
+    answer: dict[str, Any],
+    split: str,
+    seed: int,
+    *,
+    dataset_name: str,
+    source_family: str,
+) -> dict[str, Any]:
     source_id = str(task.get("source_id"))
     return {
         "id": f"teacher_distill_{source_id}",
         "source_id": source_id,
-        "dataset_name": DATASET_NAME,
+        "dataset_name": dataset_name,
         "dataset_version": DATASET_VERSION,
         "dataset_stage": DATASET_STAGE,
         "schema_pair": SCHEMA_PAIR,
         "split": split,
         "split_seed": seed,
         "source": SOURCE_ENUM,
-        "source_family": SOURCE_FAMILY,
+        "source_family": source_family,
         "license": task.get("license"),
         "design_family": task.get("design_family"),
         "task_family": task.get("task_type"),
@@ -321,10 +373,10 @@ def _row_checks(rows: list[dict[str, Any]]) -> tuple[dict[str, Any], list[str]]:
             continue
         task = messages[1].get("content")
         answer = messages[2].get("content")
-        if not isinstance(task, dict) or task.get("schema_version") != TASK_SCHEMA_VERSION:
+        if not isinstance(task, dict) or task.get("schema_version") not in TASK_SCHEMA_VERSIONS:
             user_schema_failures += 1
             errors.append(f"row {source_id} user content must contain {TASK_SCHEMA_VERSION}")
-        if not isinstance(answer, dict) or answer.get("schema_version") != ANSWER_SCHEMA_VERSION:
+        if not isinstance(answer, dict) or answer.get("schema_version") not in ANSWER_SCHEMA_VERSIONS:
             assistant_schema_failures += 1
             errors.append(f"row {source_id} assistant content must contain {ANSWER_SCHEMA_VERSION}")
         if _contains_answer_copy(task):
@@ -440,12 +492,12 @@ def _validation_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _dataset_card(split_rows: dict[str, list[dict[str, Any]]], seed: int) -> str:
+def _dataset_card(dataset_name: str, split_rows: dict[str, list[dict[str, Any]]], seed: int) -> str:
     candidate_count = sum(
         1 for rows in split_rows.values() for row in rows
         if _has_candidate_source(row["messages"][1]["content"])
     )
-    return f"""# Dataset card: {DATASET_NAME}
+    return f"""# Dataset card: {dataset_name}
 
 ## Status
 
@@ -497,10 +549,11 @@ def _manifest(
     split_rows: dict[str, list[dict[str, Any]]],
     seed: int,
     output_hashes: dict[str, dict[str, Any]],
+    dataset_name: str,
 ) -> dict[str, Any]:
     all_rows = split_rows["train"] + split_rows["validation"] + split_rows["test"]
     return {
-        "dataset_name": DATASET_NAME,
+        "dataset_name": dataset_name,
         "dataset_version": DATASET_SEMVER,
         "created_by_script": "scripts/dataset/prepare_teacher_distill_dataset.py",
         "created_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
@@ -564,16 +617,25 @@ def prepare_teacher_distill_dataset(
     task_by_source, task_source_errors = _task_by_source(tasks)
     errors.extend(task_source_errors)
     answer_by_source = {str(answer.get("source_id")): answer for answer in answers if isinstance(answer.get("source_id"), str)}
+    source_family = _derive_source_family(tasks)
+    dataset_name = _derive_dataset_name(tasks, source_family)
     if errors:
-        return _result(False, output_dir, {}, {}, errors, warnings), 1
+        return _result(False, dataset_name, output_dir, {}, {}, errors, warnings), 1
 
     try:
         assignments = _split_assignments(task_by_source, train_size, validation_size, test_size, seed)
     except ValueError as exc:
-        return _result(False, output_dir, {}, {}, [str(exc)], warnings), 1
+        return _result(False, dataset_name, output_dir, {}, {}, [str(exc)], warnings), 1
 
     rows_by_source = {
-        source_id: _make_row(task, answer_by_source[source_id], split_name, seed)
+        source_id: _make_row(
+            task,
+            answer_by_source[source_id],
+            split_name,
+            seed,
+            dataset_name=dataset_name,
+            source_family=source_family,
+        )
         for split_name, source_ids in assignments.items()
         for source_id in source_ids
         for task in [task_by_source[source_id]]
@@ -614,19 +676,20 @@ def prepare_teacher_distill_dataset(
     )
     _write_json(output_paths["validation_report_json"], report)
     output_paths["validation_report_md"].write_text(_validation_markdown(report), encoding="utf-8")
-    output_paths["dataset_card"].write_text(_dataset_card(split_rows, seed), encoding="utf-8")
+    output_paths["dataset_card"].write_text(_dataset_card(dataset_name, split_rows, seed), encoding="utf-8")
 
     output_hashes = {
         key: {"path": str(path), "sha256": file_sha256(path), "rows": len(split_rows[key]) if key in split_rows else 1}
         for key, path in output_paths.items()
         if key != "manifest"
     }
-    manifest = _manifest(tasks_path, answers_path, output_dir, tasks, answers, split_rows, seed, output_hashes)
+    manifest = _manifest(tasks_path, answers_path, output_dir, tasks, answers, split_rows, seed, output_hashes, dataset_name)
     _write_json(output_paths["manifest"], manifest)
 
     ok = not errors and (not strict or not warnings)
     result = _result(
         ok,
+        dataset_name,
         output_dir,
         {name: len(rows) for name, rows in split_rows.items()},
         {key: str(path) for key, path in output_paths.items()},
@@ -639,6 +702,7 @@ def prepare_teacher_distill_dataset(
 
 def _result(
     ok: bool,
+    dataset_name: str,
     output_dir: Path,
     split_counts: dict[str, int],
     output_paths: dict[str, str],
@@ -647,7 +711,7 @@ def _result(
 ) -> dict[str, Any]:
     return {
         "ok": ok,
-        "dataset_name": DATASET_NAME,
+        "dataset_name": dataset_name,
         "dataset_stage": DATASET_STAGE,
         "review_status": TEACHER_DISTILL_REVIEW_STATUS,
         "approval_status": APPROVAL_STATUS,

@@ -32,6 +32,15 @@ def test_unsupported_verified_correctness_claim_fails(tmp_path, valid_row) -> No
     assert any("verified correctness" in item.message for item in report.errors)
 
 
+def test_negated_proven_correct_wording_is_allowed(tmp_path, valid_row) -> None:
+    _set_recommendation(
+        valid_row,
+        "The supplied upstream RTL is not treated as independently proven correct.",
+    )
+    report = validate_dataset_file(write_rows(tmp_path / "good.jsonl", [valid_row]))
+    assert report.ok
+
+
 def test_weaker_claim_language_is_allowed(tmp_path, valid_row) -> None:
     _set_recommendation(valid_row, "This may reduce switching activity and could reduce area after synthesis confirmation.")
     report = validate_dataset_file(write_rows(tmp_path / "good.jsonl", [valid_row]))
