@@ -28,15 +28,16 @@ def runtime_probe_python(remote: str) -> str:
 
 
 def compiler_probe_shell(remote: str) -> str:
-    selection = remote.index("\nselect_cuda_host_compiler\n")
-    start = remote.index("if ! {\n", selection)
-    end = remote.index("\nfi\n", start) + len("\nfi\n")
-    return remote[start:end].replace("\\$", "$")
+    guard = remote.index("compiler_probe_enabled=0")
+    start = remote.index("if ! {\n", guard)
+    end = remote.index("\n  fi\n", start) + len("\n  fi\n")
+    block = remote[start:end].replace("\n  fi\n", "\nfi\n")
+    return block.replace("\\$", "$")
 
 def test_launcher_is_valid_bash_and_has_fixed_lora_contract():
     assert subprocess.run(["bash","-n",str(SCRIPT)]).returncode==0
     text=SCRIPT.read_text()
-    for value in ("--run-eval","qwen2_5_coder_7b_lora_pilot","--enable-lora","--max-lora-rank 16","--lora-modules","--host 127.0.0.1","/v1/models"):
+    for value in ("--run-eval","--startup-only","qwen2_5_coder_7b_lora_pilot","--enable-lora","--max-lora-rank 16","--lora-modules","--attention-backend FLASH_ATTN","--host 127.0.0.1","/v1/models"):
         assert value in text
     assert "preflight only; pass --run-eval" in text
 
@@ -90,6 +91,7 @@ def test_remote_stdout_is_artifact_only_and_rejected_acceptance_is_archived(tmp_
                     "NVCC_CCBIN=%s",
                     "TMPDIR=%s",
                     "CUDA host compiler must be",
+                    "CUDA host compiler probe disabled",
                 )
             )
     assert "echo " not in remote
@@ -202,6 +204,9 @@ def test_runtime_probe_is_private_diagnostic_and_archived():
     assert 'probe.unlink()' in probe
     assert 'from flashinfer.jit import env as flashinfer_env' in probe
     assert 'flashinfer_env.FLASHINFER_WORKSPACE_DIR' in probe
+    assert '"VLLM_USE_FLASHINFER_SAMPLER"' in probe
+    assert '"VLLM_ALLREDUCE_USE_FLASHINFER"' in probe
+    assert 'if value != "0"' in probe
     assert "printf 'staged vLLM runtime probe failed\\n' >&2" in probe
     assert "tail -n 200 logs/vllm-runtime-probe.log >&2 || true" in probe
     assert "exit 1" in probe
@@ -215,8 +220,8 @@ def test_compiler_selection_and_probe_precede_vllm_and_are_archived():
     remote = remote_script()
     selection = shell_function(remote, "select_cuda_host_compiler")
 
-    assert 'command -v gcc-12 2>/dev/null || true' in selection
-    assert 'command -v g++-12 2>/dev/null || true' in selection
+    assert 'command -v gcc-12' not in text
+    assert 'command -v g++-12' not in text
     assert re.search(
         r'(?m)^  gcc_major="\\\$\("\\\$gcc_candidate" '
         r'-dumpfullversion -dumpversion \| cut -d\. -f1\)"$',
@@ -234,7 +239,12 @@ def test_compiler_selection_and_probe_precede_vllm_and_are_archived():
     assert "allow-unsupported-compiler" not in text
 
     tmpdir = remote.index('export TMPDIR="\\$stage/cache/tmp"')
-    select_call = remote.index("\nselect_cuda_host_compiler\n", tmpdir)
+    unset_compilers = remote.index("unset CC CXX NVCC_CCBIN CUDAHOSTCXX", tmpdir)
+    compiler_guard = remote.index(
+        'if [[ -n "\\${requested_host_gcc:-}" || -n "\\${requested_host_gxx:-}" ]]; then',
+        unset_compilers,
+    )
+    select_call = remote.index("\n  select_cuda_host_compiler\n", compiler_guard)
     compiler_probe = remote.index("if ! {\n", select_call)
     compiler_log = remote.index(
         "} > logs/cuda-host-compiler-probe.log 2>&1", compiler_probe
@@ -242,7 +252,8 @@ def test_compiler_selection_and_probe_precede_vllm_and_are_archived():
     runtime_probe = remote.index('if ! "\\$vllm_python" - <<\'PY\'', compiler_log)
     import_vllm = remote.index("import vllm", runtime_probe)
     serve = remote.index('"\\$vllm_python" -m vllm.entrypoints.cli.main serve')
-    assert tmpdir < select_call < compiler_probe < compiler_log < runtime_probe < import_vllm < serve
+    assert tmpdir < unset_compilers < compiler_guard < select_call < compiler_probe
+    assert compiler_probe < compiler_log < runtime_probe < import_vllm < serve
 
     probe = remote[compiler_probe:runtime_probe]
     assert 'nvcc --version' in probe
@@ -250,6 +261,11 @@ def test_compiler_selection_and_probe_precede_vllm_and_are_archived():
     assert '"\\$TMPDIR/compiler-probe"' in probe
     assert "printf 'CUDA host compiler probe failed\\n' >&2" in probe
     assert "tail -n 200 logs/cuda-host-compiler-probe.log >&2 || true" in probe
+    disabled_log = remote.index(
+        "CUDA host compiler probe disabled; FlashInfer paths are disabled.",
+        compiler_log,
+    )
+    assert compiler_log < disabled_log < runtime_probe
 
     archive_line = remote[remote.index("\ntar -cf -", serve) :].splitlines()[1]
     assert "logs/cuda-host-compiler-probe.log" in archive_line
@@ -284,7 +300,7 @@ def test_compiler_override_pairing_and_shell_quoting():
     assert restored == original
 
 
-def test_fake_gcc12_toolchain_passes_selection_and_cuda_probe(tmp_path):
+def test_explicit_fake_gcc12_toolchain_passes_selection_and_cuda_probe(tmp_path):
     remote = remote_script()
     selection = shell_function(remote, "select_cuda_host_compiler").replace(
         "\\$", "$"
@@ -328,8 +344,8 @@ chmod +x "$output"
     (stage / "cache/tmp").mkdir(parents=True)
     harness = f'''set -euo pipefail
 {selection}
-requested_host_gcc=""
-requested_host_gxx=""
+requested_host_gcc=$2/gcc-12
+requested_host_gxx=$2/g++-12
 stage=$1
 export PATH="$2:$PATH"
 export TRACE=$3
@@ -373,9 +389,8 @@ def test_missing_or_wrong_compiler_fails_before_vllm(tmp_path):
             "-c",
             f'''set -euo pipefail
 {selection}
-requested_host_gcc=""
-requested_host_gxx=""
-PATH=$1
+requested_host_gcc=$1/missing-gcc-12
+requested_host_gxx=$1/missing-g++-12
 if select_cuda_host_compiler; then printf 'vllm-started\n'; fi
 exit 1
 ''',
@@ -436,6 +451,8 @@ def test_stage_local_cache_environment_precedes_vllm_import_and_is_not_archived(
         'export TORCH_HOME="\\$stage/cache/torch"',
         'export TRITON_CACHE_DIR="\\$stage/cache/triton"',
         'export FLASHINFER_WORKSPACE_BASE="\\$stage/cache/flashinfer"',
+        'export VLLM_USE_FLASHINFER_SAMPLER="0"',
+        'export VLLM_ALLREDUCE_USE_FLASHINFER="0"',
     )
     positions = [remote.index(line, cache_mkdir) for line in exports]
     virtual_env = remote.index('export VIRTUAL_ENV="\\$stage/vllm-runtime"')
@@ -451,6 +468,7 @@ def test_stage_local_cache_environment_precedes_vllm_import_and_is_not_archived(
         "cache/torch",
         "cache/triton",
         "cache/flashinfer",
+        "cache/tmp",
     ):
         assert f'"\\$stage/{relative}"' in mkdir_block
 
@@ -463,6 +481,17 @@ def test_stage_local_cache_environment_precedes_vllm_import_and_is_not_archived(
     archive_line = remote[remote.index("\ntar -cf -", probe) :].splitlines()[1]
     assert "logs/vllm-runtime-probe.log" in archive_line
     assert not re.search(r"(?:^| )(?:home|cache)(?:/| |$)", archive_line)
+
+
+def test_stage_tmpdir_leaves_unix_socket_path_budget():
+    text = SCRIPT.read_text(encoding="utf-8")
+    assignment = re.search(r'^stage="([^"]*\$\$)"$', text, re.MULTILINE)
+    assert assignment
+    representative_pid = "999999"
+    stage = assignment.group(1).replace("$$", representative_pid)
+    socket_path = f"{stage}/cache/tmp/00000000-0000-0000-0000-000000000000"
+    assert len(socket_path.encode()) <= 107
+    assert "${USER" not in assignment.group(0)
 
 
 def test_cleanup_removes_stage_local_caches_without_keep(tmp_path):
@@ -527,6 +556,8 @@ export TRANSFORMERS_CACHE="$HF_HOME/transformers"
 export TORCH_HOME="$stage/cache/torch"
 export TRITON_CACHE_DIR="$stage/cache/triton"
 export FLASHINFER_WORKSPACE_BASE="$stage/cache/flashinfer"
+export VLLM_USE_FLASHINFER_SAMPLER="0"
+export VLLM_ALLREDUCE_USE_FLASHINFER="0"
 export PYTHONPATH="$stage"
 "$2" "$stage/probe.py"
 '''
@@ -564,6 +595,128 @@ export PYTHONPATH="$stage"
         resolved = Path(evidence[name]).resolve()
         assert resolved.is_relative_to(stage.resolve())
     assert not list(stage.rglob(".write-test"))
+
+
+def test_default_path_disables_flashinfer_and_skips_compiler_tools(tmp_path):
+    text = SCRIPT.read_text(encoding="utf-8")
+    remote = remote_script()
+    flashinfer_sampler = remote.index('export VLLM_USE_FLASHINFER_SAMPLER="0"')
+    flashinfer_allreduce = remote.index('export VLLM_ALLREDUCE_USE_FLASHINFER="0"')
+    runtime_probe = remote.index('if ! "\\$vllm_python" - <<\'PY\'')
+    serve = remote.index('"\\$vllm_python" -m vllm.entrypoints.cli.main serve')
+    assert flashinfer_sampler < flashinfer_allreduce < runtime_probe < serve
+    assert '--attention-backend FLASH_ATTN' in remote[serve:remote.index('vllm_pid=\\$!', serve)]
+    assert "allow-unsupported-compiler" not in text
+
+    tool = tmp_path / "nvcc"
+    trace = tmp_path / "trace"
+    tool.write_text(
+        '#!/bin/sh\nprintf "nvcc-called\\n" >> "$TRACE"\nexit 99\n',
+        encoding="utf-8",
+    )
+    tool.chmod(0o755)
+    harness = r'''set -euo pipefail
+requested_host_gcc=""
+requested_host_gxx=""
+unset CC CXX NVCC_CCBIN CUDAHOSTCXX
+compiler_probe_enabled=0
+if [[ -n "${requested_host_gcc:-}" || -n "${requested_host_gxx:-}" ]]; then
+  compiler_probe_enabled=1
+fi
+if [[ "$compiler_probe_enabled" = 1 ]]; then
+  nvcc --version
+else
+  printf 'disabled\n' > "$1"
+fi
+'''
+    environment = os.environ.copy()
+    environment["PATH"] = f"{tmp_path}:{environment['PATH']}"
+    environment["TRACE"] = str(trace)
+    result = subprocess.run(
+        ["bash", "-c", harness, "_", str(tmp_path / "probe.log")],
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not trace.exists()
+    assert (tmp_path / "probe.log").read_text(encoding="utf-8") == "disabled\n"
+
+
+def test_startup_only_requires_alias_then_stops_before_candidate_generation():
+    remote = remote_script()
+    alias_parse = remote.index("python3 - '$ALIAS' models.json")
+    exact_alias = remote.index("model.get('id') == alias", alias_parse)
+    alias_heredoc_end = remote.index("\nPY\n", exact_alias)
+    branch = remote.index('if [[ "\\$startup_only" = 1 ]]; then', alias_heredoc_end)
+    stop = remote.index("\n  stop_vllm\n", branch)
+    archive = remote.index("\n  tar -cf -", stop)
+    success_exit = remote.index("\n  exit 0\n", archive)
+    branch_end = remote.index("\nfi\n", success_exit)
+    candidates = remote.index(
+        "python3 scripts/eval/run_openai_compatible_candidates.py", branch_end
+    )
+    assert alias_parse < exact_alias < branch < stop < archive < success_exit < candidates
+
+    archive_line = remote[archive:success_exit].splitlines()[1]
+    assert "models.json" in archive_line
+    assert "logs/vllm-runtime-probe.log" in archive_line
+    assert "logs/finetune-cpe-lora-eval-vllm.log" in archive_line
+    assert "candidate" not in archive_line
+    stop_function = shell_function(remote, "stop_vllm")
+    assert 'kill "\\$vllm_pid"' in stop_function
+    assert 'wait "\\$vllm_pid"' in stop_function
+
+
+def test_startup_only_reaps_server_and_returns_only_startup_artifacts(tmp_path):
+    remote = remote_script()
+    stop = shell_function(remote, "stop_vllm").replace("\\$", "$")
+    branch_start = remote.index('if [[ "\\$startup_only" = 1 ]]; then')
+    branch_end = remote.index("\nfi\n", branch_start) + len("\nfi\n")
+    branch = remote[branch_start:branch_end].replace("\\$", "$")
+    stage = tmp_path / "stage"
+    (stage / "logs").mkdir(parents=True)
+    (stage / "models.json").write_text(
+        '{"data":[{"id":"qwen2_5_coder_7b_lora_pilot"}]}\n',
+        encoding="utf-8",
+    )
+    (stage / "logs/vllm-runtime-probe.log").write_text(
+        "VLLM_USE_FLASHINFER_SAMPLER: 0\n", encoding="utf-8"
+    )
+    harness = f'''set -euo pipefail
+{stop}
+cd "$1"
+startup_only=1
+(while :; do printf 'serving\n' >> logs/finetune-cpe-lora-eval-vllm.log; sleep 0.01; done) &
+vllm_pid=$!
+printf '%s\n' "$vllm_pid" > server.pid
+sleep 0.05
+{branch}
+touch candidate-generation-started
+'''
+    result = subprocess.run(
+        ["bash", "-c", harness, "_", str(stage)], capture_output=True
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    server_pid = int((stage / "server.pid").read_text(encoding="utf-8"))
+    try:
+        os.kill(server_pid, 0)
+    except ProcessLookupError:
+        pass
+    else:
+        raise AssertionError("startup-only server process was not reaped")
+    assert not (stage / "candidate-generation-started").exists()
+
+    artifact = tmp_path / "startup.tar"
+    artifact.write_bytes(result.stdout)
+    listing = subprocess.run(
+        ["tar", "-tf", str(artifact)], capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    assert listing == [
+        "models.json",
+        "logs/vllm-runtime-probe.log",
+        "logs/finetune-cpe-lora-eval-vllm.log",
+    ]
 
 
 def test_readiness_structurally_detects_crash_and_reports_bounded_timeout():

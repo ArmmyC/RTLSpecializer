@@ -58,20 +58,20 @@ create_staging_archive() {
 usage() { cat <<'EOF'
 Usage: stage_cpe_qwen2_5_coder_7b_lora_eval.sh [--run-eval] [options]
 Default mode validates inputs and planned paths only; it never calls srun or an endpoint.
-Options: --run-eval --job-id ID --keep-stage --source-root PATH --model-source-dir PATH
+Options: --run-eval --startup-only --job-id ID --keep-stage --source-root PATH --model-source-dir PATH
          --adapter-source-dir PATH --vllm-python PATH --host-gcc PATH --host-gxx PATH
          --port PORT
 EOF
 }
 
-run_eval=0; keep_stage=0; job_id=""; port=8011; host_gcc=""; host_gxx=""
+run_eval=0; startup_only=0; keep_stage=0; job_id=""; port=8011; host_gcc=""; host_gxx=""
 source_root="${CPE_RTLSPECIALIZER_ROOT:-$HOME/RTLSpecializer}"
 model_source="${CPE_QWEN_MODEL_DIR:-$HOME/LLMModel/qwen25-coder-7b-instruct/models/Qwen__Qwen2.5-Coder-7B-Instruct}"
 adapter_source=""
 vllm_python="${CPE_VLLM_PYTHON:-$HOME/LLMModel/qwen25-coder-7b-instruct/llm/bin/python3}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --run-eval) run_eval=1;; --keep-stage) keep_stage=1;;
+    --run-eval) run_eval=1;; --startup-only) startup_only=1;; --keep-stage) keep_stage=1;;
     --job-id|--source-root|--model-source-dir|--adapter-source-dir|--vllm-python|--host-gcc|--host-gxx|--port)
       [[ $# -ge 2 ]] || die "$1 requires a value"; option="$1"; value="$2"; shift 2
       case "$option" in --job-id)job_id="$value";;--source-root)source_root="$value";;--model-source-dir)model_source="$value";;--adapter-source-dir)adapter_source="$value";;--vllm-python)vllm_python="$value";;--host-gcc)host_gcc="$value";;--host-gxx)host_gxx="$value";;--port)port="$value";;esac
@@ -100,12 +100,12 @@ printf 'settings=temperature:0,max_tokens:2048,timeout:120,response_format_json:
 if [[ "$run_eval" != 1 ]]; then printf 'preflight only; pass --run-eval to allocate GPU and serve.\n'; exit 0; fi
 command -v srun >/dev/null 2>&1 || die "srun is required"
 
-stage="/tmp/rtlspecializer-lora-eval-${USER:-user}-$$"
+stage="/tmp/rtl-lora-eval-$$"
 host_gcc_remote="$(shell_quote "$host_gcc")"
 host_gxx_remote="$(shell_quote "$host_gxx")"
 remote=$(cat <<EOF
 set -euo pipefail
-stage='$stage'; keep='$keep_stage'; port='$port'; vllm_python="\$stage/vllm-runtime/bin/python3"
+stage='$stage'; keep='$keep_stage'; port='$port'; startup_only='$startup_only'; vllm_python="\$stage/vllm-runtime/bin/python3"
 requested_host_gcc=$host_gcc_remote
 requested_host_gxx=$host_gxx_remote
 stop_vllm() {
@@ -121,17 +121,12 @@ cleanup() {
 }
 select_cuda_host_compiler() {
   local gcc_candidate="" gxx_candidate="" gcc_major gxx_major
-  if [[ -n "\${requested_host_gcc:-}" || -n "\${requested_host_gxx:-}" ]]; then
-    [[ -n "\${requested_host_gcc:-}" && -n "\${requested_host_gxx:-}" ]] || {
-      printf 'both --host-gcc and --host-gxx must be supplied together\n' >&2
-      return 1
-    }
-    gcc_candidate="\$requested_host_gcc"
-    gxx_candidate="\$requested_host_gxx"
-  else
-    gcc_candidate="\$(command -v gcc-12 2>/dev/null || true)"
-    gxx_candidate="\$(command -v g++-12 2>/dev/null || true)"
-  fi
+  [[ -n "\${requested_host_gcc:-}" && -n "\${requested_host_gxx:-}" ]] || {
+    printf 'both --host-gcc and --host-gxx must be supplied together\n' >&2
+    return 1
+  }
+  gcc_candidate="\$requested_host_gcc"
+  gxx_candidate="\$requested_host_gxx"
   [[ -x "\$gcc_candidate" ]] || {
     printf 'supported GCC 12 compiler was not found\n' >&2
     return 1
@@ -162,7 +157,6 @@ mkdir -p \
   "\$stage/cache/torch" \
   "\$stage/cache/triton" \
   "\$stage/cache/flashinfer" \
-  "\$stage/cache/compiler" \
   "\$stage/cache/tmp"
 mkdir -p logs
 export TMPDIR="\$stage/cache/tmp"
@@ -174,12 +168,20 @@ export TRANSFORMERS_CACHE="\$HF_HOME/transformers"
 export TORCH_HOME="\$stage/cache/torch"
 export TRITON_CACHE_DIR="\$stage/cache/triton"
 export FLASHINFER_WORKSPACE_BASE="\$stage/cache/flashinfer"
+export VLLM_USE_FLASHINFER_SAMPLER="0"
+export VLLM_ALLREDUCE_USE_FLASHINFER="0"
 export VIRTUAL_ENV="\$stage/vllm-runtime"
 export PATH="\$VIRTUAL_ENV/bin:\$PATH"
 export PYTHONPATH="\$stage"
 export RTLSPEC_EVAL_API_KEY=local-lora-eval
-select_cuda_host_compiler
-if ! {
+unset CC CXX NVCC_CCBIN CUDAHOSTCXX
+compiler_probe_enabled=0
+if [[ -n "\${requested_host_gcc:-}" || -n "\${requested_host_gxx:-}" ]]; then
+  select_cuda_host_compiler
+  compiler_probe_enabled=1
+fi
+if [[ "\$compiler_probe_enabled" = 1 ]]; then
+  if ! {
   printf 'CC=%s\n' "\$CC"
   printf 'CXX=%s\n' "\$CXX"
   printf 'NVCC_CCBIN=%s\n' "\$NVCC_CCBIN"
@@ -196,11 +198,15 @@ int main() {
 CU
   nvcc -std=c++17 "\$TMPDIR/compiler-probe.cu" -o "\$TMPDIR/compiler-probe"
   "\$TMPDIR/compiler-probe"
-} > logs/cuda-host-compiler-probe.log 2>&1
-then
-  printf 'CUDA host compiler probe failed\n' >&2
-  tail -n 200 logs/cuda-host-compiler-probe.log >&2 || true
-  exit 1
+  } > logs/cuda-host-compiler-probe.log 2>&1
+  then
+    printf 'CUDA host compiler probe failed\n' >&2
+    tail -n 200 logs/cuda-host-compiler-probe.log >&2 || true
+    exit 1
+  fi
+else
+  printf 'CUDA host compiler probe disabled; FlashInfer paths are disabled.\n' \
+    > logs/cuda-host-compiler-probe.log
 fi
 if ! "\$vllm_python" - <<'PY' \
   > logs/vllm-runtime-probe.log 2>&1
@@ -233,6 +239,15 @@ for name in (
     probe.write_text("ok", encoding="utf-8")
     probe.unlink()
 
+for name in (
+    "VLLM_USE_FLASHINFER_SAMPLER",
+    "VLLM_ALLREDUCE_USE_FLASHINFER",
+):
+    value = os.environ.get(name)
+    print(f"{name}:", value)
+    if value != "0":
+        raise RuntimeError(f"{name} must be 0")
+
 from flashinfer.jit import env as flashinfer_env
 
 print("flashinfer_base_dir:", flashinfer_env.FLASHINFER_BASE_DIR)
@@ -251,6 +266,7 @@ fi
   --enable-lora \
   --max-lora-rank 16 \
   --lora-modules "$ALIAS=\$stage/adapter" \
+  --attention-backend FLASH_ATTN \
   --dtype bfloat16 \
   --max-model-len 16384 \
   --gpu-memory-utilization 0.90 \
@@ -285,6 +301,11 @@ payload = json.load(open(path, encoding='utf-8'))
 if not isinstance(payload.get('data'), list) or not any(isinstance(model, dict) and model.get('id') == alias for model in payload['data']):
     raise SystemExit(f'vLLM did not expose exact adapter alias: {alias}')
 PY
+if [[ "\$startup_only" = 1 ]]; then
+  stop_vllm
+  tar -cf - models.json logs/vllm-runtime-probe.log logs/finetune-cpe-lora-eval-vllm.log
+  exit 0
+fi
 python3 scripts/eval/run_openai_compatible_candidates.py --dataset '$DATASET' --output '$CANDIDATE' --base-url http://127.0.0.1:"\$port"/v1 --model '$ALIAS' --api-key-env RTLSPEC_EVAL_API_KEY --temperature 0 --max-tokens 2048 --timeout 120 --retries 1 --raw-output-dir '$RAW_OUTPUTS' --schema-reminder-file docs/eval/rtl_answer_schema_reminder.md --response-format-json --json | tee logs/finetune-cpe-lora-eval-run.log > logs/candidate-generation.json
 python3 - '$DATASET' '$CANDIDATE' logs/candidate-generation.json <<'PY'
 import json, sys
