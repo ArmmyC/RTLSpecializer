@@ -29,3 +29,7 @@ adapters/
 *.tar.gz
 *.tgz
 *.zip
+
+# Generated runtime and experiment evidence
+/logs/
+/models.json

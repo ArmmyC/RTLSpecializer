@@ -1,451 +1,0 @@
-Staging into /tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717 on the GPU node.
-One-step smoke training is enabled; artifacts will be restored under /storage/slurm/home/67070501002@cpe.kmutt.ac.th/RTLSpecializer/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke.
-=== Staged Runtime ===
-stage_root=/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717
-site_packages=/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/.venv_site_packages
-=== GPU Environment Check ===
-{
-  "ok": true,
-  "python": {
-    "version": "3.12.3",
-    "implementation": "CPython",
-    "executable": "/usr/bin/python3"
-  },
-  "host": {
-    "hostname": "gpu07.slurm.cpe.kmutt.ac.th",
-    "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39",
-    "working_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717"
-  },
-  "packages": {
-    "torch": "2.5.1+cu121",
-    "transformers": "5.13.0",
-    "datasets": "5.0.0",
-    "accelerate": "1.14.0",
-    "peft": "0.19.1",
-    "trl": "1.7.1",
-    "safetensors": "0.8.0"
-  },
-  "torch": {
-    "version": "2.5.1+cu121",
-    "cuda_available": true,
-    "bf16_supported": true,
-    "device_count": 1,
-    "devices": [
-      {
-        "index": 0,
-        "name": "NVIDIA L40",
-        "total_memory_gb": 44.39
-      }
-    ]
-  },
-  "dataset_dir": {
-    "path": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical",
-    "exists": true,
-    "is_dir": true
-  },
-  "errors": [],
-  "warnings": []
-}
-=== Trainer Dry Run ===
-{
-  "ok": true,
-  "mode": "dry_run",
-  "base_model": "Qwen/Qwen2.5-Coder-7B-Instruct",
-  "dataset_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical",
-  "output_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke",
-  "resume_from_checkpoint": null,
-  "settings": {
-    "max_length": 4096,
-    "learning_rate": 0.0001,
-    "epochs": 1.0,
-    "batch_size": 1,
-    "eval_batch_size": 1,
-    "gradient_accumulation_steps": 16,
-    "logging_steps": 10,
-    "save_steps": 100,
-    "eval_steps": 100,
-    "save_total_limit": 2,
-    "max_steps": -1,
-    "seed": 42,
-    "lora_r": 16,
-    "lora_alpha": 32,
-    "lora_dropout": 0.05,
-    "target_modules": [
-      "q_proj",
-      "k_proj",
-      "v_proj",
-      "o_proj",
-      "gate_proj",
-      "up_proj",
-      "down_proj"
-    ],
-    "expected_gpu_substring": "L40"
-  },
-  "preflight": {
-    "ok": true,
-    "dataset_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical",
-    "output_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke",
-    "resume_from_checkpoint": null,
-    "overwrite_output_dir": false,
-    "dataset_check": {
-      "ok": true,
-      "dataset_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical",
-      "splits": {
-        "train": {
-          "path": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical/train.jsonl",
-          "rows": 800,
-          "approx_char_lengths": {
-            "mean": 10301.47,
-            "max": 24216
-          }
-        },
-        "validation": {
-          "path": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical/validation.jsonl",
-          "rows": 100,
-          "approx_char_lengths": {
-            "mean": 10609.17,
-            "max": 19878
-          }
-        },
-        "test": {
-          "path": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical/test.jsonl",
-          "rows": 100,
-          "approx_char_lengths": {
-            "mean": 10521.67,
-            "max": 20180
-          }
-        }
-      },
-      "total_rows": 1000,
-      "approx_char_lengths": {
-        "mean": 10354.26,
-        "max": 24216
-      },
-      "missing_fields": {},
-      "schema_aliases": {
-        "user": {},
-        "assistant": {}
-      },
-      "source_distribution": {
-        "teacher_generated": 1000
-      },
-      "review_status_distribution": {
-        "teacher_distilled_unreviewed": 1000
-      },
-      "approval_status_distribution": {
-        "not_approved": 1000
-      },
-      "errors": [],
-      "warnings": []
-    },
-    "errors": [],
-    "warnings": []
-  },
-  "environment": null,
-  "trainable_parameters": null,
-  "artifacts": {},
-  "errors": [],
-  "warnings": []
-}
-=== LoRA Training ===
-[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
-Loading weights:   0%|          | 0/339 [00:00<?, ?it/s]Loading weights: 100%|██████████| 339/339 [00:00<00:00, 4543.90it/s]
-Generating train split: 0 examples [00:00, ? examples/s]Generating train split: 800 examples [00:00, 5130.95 examples/s]Generating train split: 800 examples [00:00, 4982.99 examples/s]
-Generating validation split: 0 examples [00:00, ? examples/s]Generating validation split: 100 examples [00:00, 3889.67 examples/s]
-Map:   0%|          | 0/800 [00:00<?, ? examples/s]Map:  37%|███▋      | 299/800 [00:00<00:00, 2924.11 examples/s]Map:  79%|███████▉  | 632/800 [00:00<00:00, 3153.00 examples/s]Map: 100%|██████████| 800/800 [00:00<00:00, 2860.14 examples/s]
-Map:   0%|          | 0/100 [00:00<?, ? examples/s]Map: 100%|██████████| 100/100 [00:00<00:00, 2610.74 examples/s]
-Adding EOS to train dataset:   0%|          | 0/800 [00:00<?, ? examples/s]Adding EOS to train dataset: 100%|██████████| 800/800 [00:00<00:00, 16002.91 examples/s]
-Tokenizing train dataset:   0%|          | 0/800 [00:00<?, ? examples/s]Tokenizing train dataset:   4%|▎         | 29/800 [00:00<00:02, 285.64 examples/s]Tokenizing train dataset:   7%|▋         | 58/800 [00:00<00:02, 280.79 examples/s]Tokenizing train dataset:  11%|█         | 88/800 [00:00<00:02, 283.47 examples/s]Tokenizing train dataset:  15%|█▌        | 120/800 [00:00<00:02, 293.45 examples/s]Tokenizing train dataset:  19%|█▉        | 152/800 [00:00<00:02, 297.71 examples/s]Tokenizing train dataset:  25%|██▍       | 197/800 [00:00<00:02, 294.47 examples/s]Tokenizing train dataset:  29%|██▉       | 230/800 [00:00<00:01, 299.04 examples/s]Tokenizing train dataset:  33%|███▎      | 262/800 [00:00<00:01, 304.36 examples/s]Tokenizing train dataset:  38%|███▊      | 306/800 [00:01<00:01, 293.69 examples/s]Tokenizing train dataset:  44%|████▍     | 351/800 [00:01<00:01, 290.78 examples/s]Tokenizing train dataset:  48%|████▊     | 381/800 [00:01<00:01, 291.36 examples/s]Tokenizing train dataset:  51%|█████▏    | 411/800 [00:01<00:01, 290.91 examples/s]Tokenizing train dataset:  55%|█████▌    | 442/800 [00:01<00:01, 293.45 examples/s]Tokenizing train dataset:  59%|█████▉    | 473/800 [00:01<00:01, 294.48 examples/s]Tokenizing train dataset:  64%|██████▍   | 514/800 [00:01<00:01, 279.79 examples/s]Tokenizing train dataset:  68%|██████▊   | 544/800 [00:01<00:00, 282.42 examples/s]Tokenizing train dataset:  73%|███████▎  | 586/800 [00:02<00:00, 279.95 examples/s]Tokenizing train dataset:  77%|███████▋  | 615/800 [00:02<00:00, 278.56 examples/s]Tokenizing train dataset:  81%|████████  | 647/800 [00:02<00:00, 288.53 examples/s]Tokenizing train dataset:  85%|████████▌ | 680/800 [00:02<00:00, 295.31 examples/s]Tokenizing train dataset:  91%|█████████ | 725/800 [00:02<00:00, 293.42 examples/s]Tokenizing train dataset:  96%|█████████▌| 769/800 [00:02<00:00, 290.24 examples/s]Tokenizing train dataset: 100%|██████████| 800/800 [00:03<00:00, 156.89 examples/s]Tokenizing train dataset: 100%|██████████| 800/800 [00:03<00:00, 256.79 examples/s]
-Building labels for train dataset:   0%|          | 0/800 [00:00<?, ? examples/s]Building labels for train dataset:  12%|█▏        | 99/800 [00:00<00:00, 978.84 examples/s]Building labels for train dataset:  31%|███       | 245/800 [00:00<00:00, 966.45 examples/s]Building labels for train dataset:  48%|████▊     | 386/800 [00:00<00:00, 945.64 examples/s]Building labels for train dataset:  60%|██████    | 482/800 [00:00<00:00, 947.67 examples/s]Building labels for train dataset:  76%|███████▌  | 606/800 [00:00<00:00, 892.56 examples/s]Building labels for train dataset:  93%|█████████▎| 742/800 [00:00<00:00, 894.54 examples/s]Building labels for train dataset: 100%|██████████| 800/800 [00:01<00:00, 611.95 examples/s]
-Adding EOS to eval dataset:   0%|          | 0/100 [00:00<?, ? examples/s]Adding EOS to eval dataset: 100%|██████████| 100/100 [00:00<00:00, 15707.24 examples/s]
-Tokenizing eval dataset:   0%|          | 0/100 [00:00<?, ? examples/s]Tokenizing eval dataset:  27%|██▋       | 27/100 [00:00<00:00, 255.74 examples/s]Tokenizing eval dataset:  56%|█████▌    | 56/100 [00:00<00:00, 263.10 examples/s]Tokenizing eval dataset:  85%|████████▌ | 85/100 [00:00<00:00, 268.94 examples/s]Tokenizing eval dataset: 100%|██████████| 100/100 [00:00<00:00, 235.09 examples/s]
-Building labels for eval dataset:   0%|          | 0/100 [00:00<?, ? examples/s]Building labels for eval dataset:  96%|█████████▌| 96/100 [00:00<00:00, 939.84 examples/s]Building labels for eval dataset: 100%|██████████| 100/100 [00:00<00:00, 596.98 examples/s]
-[transformers] The tokenizer has new PAD/BOS/EOS tokens that differ from the model config and generation config. The model config and generation config were aligned accordingly, being updated with the tokenizer's values. Updated tokens: {'bos_token_id': None, 'pad_token_id': 151643}.
-  0%|          | 0/1 [00:00<?, ?it/s]100%|██████████| 1/1 [00:25<00:00, 25.42s/it]
-  0%|          | 0/100 [00:00<?, ?it/s][A
-  2%|▏         | 2/100 [00:00<00:20,  4.69it/s][A
-  3%|▎         | 3/100 [00:00<00:30,  3.22it/s][A
-  4%|▍         | 4/100 [00:01<00:37,  2.53it/s][A
-  5%|▌         | 5/100 [00:01<00:36,  2.58it/s][A
-  6%|▌         | 6/100 [00:02<00:43,  2.16it/s][A
-  7%|▋         | 7/100 [00:02<00:41,  2.26it/s][A
-  8%|▊         | 8/100 [00:03<00:42,  2.18it/s][A
-  9%|▉         | 9/100 [00:03<00:40,  2.26it/s][A
- 10%|█         | 10/100 [00:04<00:50,  1.77it/s][A
- 11%|█         | 11/100 [00:05<00:51,  1.73it/s][A
- 12%|█▏        | 12/100 [00:05<00:46,  1.91it/s][A
- 13%|█▎        | 13/100 [00:06<00:44,  1.95it/s][A
- 14%|█▍        | 14/100 [00:06<00:52,  1.63it/s][A
- 15%|█▌        | 15/100 [00:07<00:49,  1.73it/s][A
- 16%|█▌        | 16/100 [00:07<00:44,  1.87it/s][A
- 17%|█▋        | 17/100 [00:08<00:40,  2.06it/s][A
- 18%|█▊        | 18/100 [00:08<00:42,  1.94it/s][A
- 19%|█▉        | 19/100 [00:09<00:43,  1.86it/s][A
- 20%|██        | 20/100 [00:09<00:40,  1.95it/s][A
- 21%|██        | 21/100 [00:10<00:39,  2.02it/s][A
- 22%|██▏       | 22/100 [00:10<00:36,  2.14it/s][A
- 23%|██▎       | 23/100 [00:11<00:43,  1.79it/s][A
- 24%|██▍       | 24/100 [00:11<00:39,  1.92it/s][A
- 25%|██▌       | 25/100 [00:12<00:39,  1.89it/s][A
- 26%|██▌       | 26/100 [00:12<00:37,  1.97it/s][A
- 27%|██▋       | 27/100 [00:13<00:41,  1.75it/s][A
- 28%|██▊       | 28/100 [00:13<00:37,  1.94it/s][A
- 29%|██▉       | 29/100 [00:14<00:39,  1.80it/s][A
- 30%|███       | 30/100 [00:14<00:34,  2.03it/s][A
- 31%|███       | 31/100 [00:15<00:34,  2.01it/s][A
- 32%|███▏      | 32/100 [00:15<00:31,  2.16it/s][A
- 33%|███▎      | 33/100 [00:16<00:30,  2.17it/s][A
- 34%|███▍      | 34/100 [00:16<00:29,  2.21it/s][A
- 35%|███▌      | 35/100 [00:17<00:28,  2.29it/s][A
- 36%|███▌      | 36/100 [00:17<00:27,  2.34it/s][A
- 37%|███▋      | 37/100 [00:18<00:28,  2.23it/s][A
- 38%|███▊      | 38/100 [00:18<00:28,  2.14it/s][A
- 39%|███▉      | 39/100 [00:19<00:30,  1.98it/s][A
- 40%|████      | 40/100 [00:19<00:34,  1.76it/s][A
- 41%|████      | 41/100 [00:20<00:38,  1.55it/s][A
- 42%|████▏     | 42/100 [00:21<00:37,  1.54it/s][A
- 43%|████▎     | 43/100 [00:21<00:34,  1.65it/s][A
- 44%|████▍     | 44/100 [00:22<00:31,  1.75it/s][A
- 45%|████▌     | 45/100 [00:22<00:28,  1.95it/s][A
- 46%|████▌     | 46/100 [00:23<00:31,  1.70it/s][A
- 47%|████▋     | 47/100 [00:23<00:27,  1.93it/s][A
- 48%|████▊     | 48/100 [00:24<00:27,  1.88it/s][A
- 49%|████▉     | 49/100 [00:24<00:25,  1.99it/s][A
- 50%|█████     | 50/100 [00:25<00:30,  1.65it/s][A
- 51%|█████     | 51/100 [00:26<00:33,  1.48it/s][A
- 52%|█████▏    | 52/100 [00:27<00:30,  1.57it/s][A
- 53%|█████▎    | 53/100 [00:27<00:28,  1.67it/s][A
- 54%|█████▍    | 54/100 [00:27<00:24,  1.88it/s][A
- 55%|█████▌    | 55/100 [00:28<00:21,  2.08it/s][A
- 56%|█████▌    | 56/100 [00:28<00:22,  1.96it/s][A
- 57%|█████▋    | 57/100 [00:29<00:21,  1.96it/s][A
- 58%|█████▊    | 58/100 [00:30<00:24,  1.68it/s][A
- 59%|█████▉    | 59/100 [00:30<00:26,  1.54it/s][A
- 60%|██████    | 60/100 [00:31<00:24,  1.60it/s][A
- 61%|██████    | 61/100 [00:31<00:22,  1.76it/s][A
- 62%|██████▏   | 62/100 [00:32<00:20,  1.82it/s][A
- 63%|██████▎   | 63/100 [00:33<00:21,  1.71it/s][A
- 64%|██████▍   | 64/100 [00:33<00:20,  1.73it/s][A
- 65%|██████▌   | 65/100 [00:34<00:19,  1.84it/s][A
- 66%|██████▌   | 66/100 [00:34<00:17,  2.00it/s][A
- 67%|██████▋   | 67/100 [00:35<00:18,  1.75it/s][A
- 68%|██████▊   | 68/100 [00:35<00:16,  1.94it/s][A
- 69%|██████▉   | 69/100 [00:36<00:17,  1.74it/s][A
- 70%|███████   | 70/100 [00:36<00:15,  1.97it/s][A
- 71%|███████   | 71/100 [00:37<00:14,  2.02it/s][A
- 72%|███████▏  | 72/100 [00:37<00:12,  2.20it/s][A
- 73%|███████▎  | 73/100 [00:38<00:12,  2.13it/s][A
- 74%|███████▍  | 74/100 [00:38<00:11,  2.30it/s][A
- 75%|███████▌  | 75/100 [00:39<00:11,  2.11it/s][A
- 76%|███████▌  | 76/100 [00:39<00:12,  1.88it/s][A
- 77%|███████▋  | 77/100 [00:40<00:11,  2.05it/s][A
- 78%|███████▊  | 78/100 [00:40<00:10,  2.12it/s][A
- 79%|███████▉  | 79/100 [00:41<00:12,  1.70it/s][A
- 80%|████████  | 80/100 [00:41<00:10,  1.93it/s][A
- 81%|████████  | 81/100 [00:42<00:08,  2.13it/s][A
- 82%|████████▏ | 82/100 [00:42<00:08,  2.14it/s][A
- 83%|████████▎ | 83/100 [00:42<00:07,  2.19it/s][A
- 84%|████████▍ | 84/100 [00:43<00:08,  1.82it/s][A
- 85%|████████▌ | 85/100 [00:44<00:09,  1.56it/s][A
- 86%|████████▌ | 86/100 [00:45<00:08,  1.63it/s][A
- 87%|████████▋ | 87/100 [00:45<00:07,  1.63it/s][A
- 88%|████████▊ | 88/100 [00:46<00:07,  1.52it/s][A
- 89%|████████▉ | 89/100 [00:46<00:06,  1.66it/s][A
- 90%|█████████ | 90/100 [00:47<00:05,  1.81it/s][A
- 91%|█████████ | 91/100 [00:47<00:04,  1.98it/s][A
- 92%|█████████▏| 92/100 [00:48<00:04,  1.93it/s][A
- 93%|█████████▎| 93/100 [00:48<00:03,  1.84it/s][A
- 94%|█████████▍| 94/100 [00:49<00:03,  1.83it/s][A
- 95%|█████████▌| 95/100 [00:50<00:02,  1.82it/s][A
- 96%|█████████▌| 96/100 [00:50<00:02,  1.80it/s][A
- 97%|█████████▋| 97/100 [00:51<00:01,  1.55it/s][A
- 98%|█████████▊| 98/100 [00:51<00:01,  1.74it/s][A
- 99%|█████████▉| 99/100 [00:52<00:00,  1.92it/s][A
-100%|██████████| 100/100 [00:52<00:00,  2.08it/s][A                                             
-                                                 [A100%|██████████| 1/1 [01:18<00:00, 25.42s/it]
-100%|██████████| 100/100 [00:52<00:00,  2.08it/s][A
-                                                 [A                                             100%|██████████| 1/1 [01:19<00:00, 25.42s/it]100%|██████████| 1/1 [01:19<00:00, 79.71s/it]
-{'eval_loss': '1.722', 'eval_runtime': '53.48', 'eval_samples_per_second': '1.87', 'eval_steps_per_second': '1.87', 'eval_entropy': '1.113', 'eval_num_tokens': '3.987e+04', 'eval_mean_token_accuracy': '0.6738', 'epoch': '0.02'}
-{'train_runtime': '79.71', 'train_samples_per_second': '0.201', 'train_steps_per_second': '0.013', 'train_loss': '1.711', 'epoch': '0.02'}
-***** train metrics *****
-  epoch                    =       0.02
-  total_flos               =  1584423GF
-  train_loss               =     1.7111
-  train_runtime            = 0:01:19.71
-  train_samples_per_second =      0.201
-  train_steps_per_second   =      0.013
-  0%|          | 0/100 [00:00<?, ?it/s]  2%|▏         | 2/100 [00:00<00:21,  4.59it/s]  3%|▎         | 3/100 [00:00<00:30,  3.18it/s]  4%|▍         | 4/100 [00:01<00:38,  2.48it/s]  5%|▌         | 5/100 [00:01<00:37,  2.52it/s]  6%|▌         | 6/100 [00:02<00:44,  2.12it/s]  7%|▋         | 7/100 [00:02<00:42,  2.21it/s]  8%|▊         | 8/100 [00:03<00:43,  2.14it/s]  9%|▉         | 9/100 [00:03<00:40,  2.23it/s] 10%|█         | 10/100 [00:04<00:51,  1.74it/s] 11%|█         | 11/100 [00:05<00:52,  1.70it/s] 12%|█▏        | 12/100 [00:05<00:47,  1.86it/s] 13%|█▎        | 13/100 [00:06<00:45,  1.91it/s] 14%|█▍        | 14/100 [00:07<00:53,  1.60it/s] 15%|█▌        | 15/100 [00:07<00:50,  1.69it/s] 16%|█▌        | 16/100 [00:07<00:45,  1.83it/s] 17%|█▋        | 17/100 [00:08<00:41,  2.01it/s] 18%|█▊        | 18/100 [00:08<00:43,  1.89it/s] 19%|█▉        | 19/100 [00:09<00:44,  1.82it/s] 20%|██        | 20/100 [00:10<00:41,  1.91it/s] 21%|██        | 21/100 [00:10<00:39,  1.99it/s] 22%|██▏       | 22/100 [00:10<00:36,  2.11it/s] 23%|██▎       | 23/100 [00:11<00:43,  1.76it/s] 24%|██▍       | 24/100 [00:12<00:40,  1.89it/s] 25%|██▌       | 25/100 [00:12<00:40,  1.86it/s] 26%|██▌       | 26/100 [00:13<00:38,  1.94it/s] 27%|██▋       | 27/100 [00:13<00:42,  1.71it/s] 28%|██▊       | 28/100 [00:14<00:37,  1.90it/s] 29%|██▉       | 29/100 [00:14<00:40,  1.76it/s] 30%|███       | 30/100 [00:15<00:35,  1.99it/s] 31%|███       | 31/100 [00:15<00:34,  1.97it/s] 32%|███▏      | 32/100 [00:16<00:32,  2.11it/s] 33%|███▎      | 33/100 [00:16<00:31,  2.12it/s] 34%|███▍      | 34/100 [00:17<00:30,  2.16it/s] 35%|███▌      | 35/100 [00:17<00:29,  2.22it/s] 36%|███▌      | 36/100 [00:17<00:27,  2.29it/s] 37%|███▋      | 37/100 [00:18<00:28,  2.18it/s] 38%|███▊      | 38/100 [00:18<00:29,  2.10it/s] 39%|███▉      | 39/100 [00:19<00:31,  1.93it/s] 40%|████      | 40/100 [00:20<00:34,  1.73it/s] 41%|████      | 41/100 [00:21<00:39,  1.51it/s] 42%|████▏     | 42/100 [00:21<00:38,  1.51it/s] 43%|████▎     | 43/100 [00:22<00:35,  1.62it/s] 44%|████▍     | 44/100 [00:22<00:32,  1.72it/s] 45%|████▌     | 45/100 [00:23<00:28,  1.91it/s] 46%|████▌     | 46/100 [00:23<00:32,  1.66it/s] 47%|████▋     | 47/100 [00:24<00:28,  1.88it/s] 48%|████▊     | 48/100 [00:24<00:28,  1.84it/s] 49%|████▉     | 49/100 [00:25<00:26,  1.95it/s] 50%|█████     | 50/100 [00:26<00:30,  1.61it/s] 51%|█████     | 51/100 [00:27<00:33,  1.45it/s] 52%|█████▏    | 52/100 [00:27<00:31,  1.54it/s] 53%|█████▎    | 53/100 [00:28<00:28,  1.64it/s] 54%|█████▍    | 54/100 [00:28<00:25,  1.83it/s] 55%|█████▌    | 55/100 [00:28<00:22,  2.04it/s] 56%|█████▌    | 56/100 [00:29<00:22,  1.93it/s] 57%|█████▋    | 57/100 [00:30<00:22,  1.93it/s] 58%|█████▊    | 58/100 [00:30<00:25,  1.66it/s] 59%|█████▉    | 59/100 [00:31<00:27,  1.52it/s] 60%|██████    | 60/100 [00:32<00:25,  1.58it/s] 61%|██████    | 61/100 [00:32<00:22,  1.73it/s] 62%|██████▏   | 62/100 [00:33<00:21,  1.79it/s] 63%|██████▎   | 63/100 [00:33<00:21,  1.69it/s] 64%|██████▍   | 64/100 [00:34<00:21,  1.71it/s] 65%|██████▌   | 65/100 [00:34<00:19,  1.81it/s] 66%|██████▌   | 66/100 [00:35<00:17,  1.96it/s] 67%|██████▋   | 67/100 [00:36<00:19,  1.72it/s] 68%|██████▊   | 68/100 [00:36<00:16,  1.90it/s] 69%|██████▉   | 69/100 [00:37<00:18,  1.71it/s] 70%|███████   | 70/100 [00:37<00:15,  1.93it/s] 71%|███████   | 71/100 [00:37<00:14,  1.98it/s] 72%|███████▏  | 72/100 [00:38<00:12,  2.16it/s] 73%|███████▎  | 73/100 [00:38<00:12,  2.09it/s] 74%|███████▍  | 74/100 [00:39<00:11,  2.26it/s] 75%|███████▌  | 75/100 [00:39<00:12,  2.08it/s] 76%|███████▌  | 76/100 [00:40<00:11,  2.05it/s] 77%|███████▋  | 77/100 [00:40<00:10,  2.18it/s] 78%|███████▊  | 78/100 [00:41<00:09,  2.20it/s] 79%|███████▉  | 79/100 [00:41<00:12,  1.73it/s] 80%|████████  | 80/100 [00:42<00:10,  1.96it/s] 81%|████████  | 81/100 [00:42<00:08,  2.14it/s] 82%|████████▏ | 82/100 [00:43<00:08,  2.14it/s] 83%|████████▎ | 83/100 [00:43<00:07,  2.18it/s] 84%|████████▍ | 84/100 [00:44<00:08,  1.80it/s] 85%|████████▌ | 85/100 [00:45<00:09,  1.54it/s] 86%|████████▌ | 86/100 [00:45<00:08,  1.61it/s] 87%|████████▋ | 87/100 [00:46<00:08,  1.61it/s] 88%|████████▊ | 88/100 [00:47<00:08,  1.50it/s] 89%|████████▉ | 89/100 [00:47<00:06,  1.64it/s] 90%|█████████ | 90/100 [00:48<00:05,  1.78it/s] 91%|█████████ | 91/100 [00:48<00:04,  1.95it/s] 92%|█████████▏| 92/100 [00:49<00:04,  1.91it/s] 93%|█████████▎| 93/100 [00:49<00:03,  1.82it/s] 94%|█████████▍| 94/100 [00:50<00:03,  1.82it/s] 95%|█████████▌| 95/100 [00:50<00:02,  1.80it/s] 96%|█████████▌| 96/100 [00:51<00:02,  1.78it/s] 97%|█████████▋| 97/100 [00:52<00:01,  1.53it/s] 98%|█████████▊| 98/100 [00:52<00:01,  1.73it/s] 99%|█████████▉| 99/100 [00:53<00:00,  1.90it/s]100%|██████████| 100/100 [00:53<00:00,  2.06it/s]100%|██████████| 100/100 [00:53<00:00,  1.87it/s]
-***** eval metrics *****
-  epoch                    =       0.02
-  eval_entropy             =     1.1129
-  eval_loss                =     1.7216
-  eval_mean_token_accuracy =     0.6738
-  eval_num_tokens          =    39874.0
-  eval_runtime             = 0:00:54.24
-  eval_samples_per_second  =      1.843
-  eval_steps_per_second    =      1.843
-{
-  "ok": true,
-  "mode": "train",
-  "base_model": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/models/Qwen__Qwen2.5-Coder-7B-Instruct",
-  "dataset_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical",
-  "output_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke",
-  "resume_from_checkpoint": null,
-  "settings": {
-    "max_length": 4096,
-    "learning_rate": 0.0001,
-    "epochs": 1.0,
-    "batch_size": 1,
-    "eval_batch_size": 1,
-    "gradient_accumulation_steps": 16,
-    "logging_steps": 10,
-    "save_steps": 100,
-    "eval_steps": 100,
-    "save_total_limit": 2,
-    "max_steps": 1,
-    "seed": 42,
-    "lora_r": 16,
-    "lora_alpha": 32,
-    "lora_dropout": 0.05,
-    "target_modules": [
-      "q_proj",
-      "k_proj",
-      "v_proj",
-      "o_proj",
-      "gate_proj",
-      "up_proj",
-      "down_proj"
-    ],
-    "expected_gpu_substring": "L40"
-  },
-  "preflight": {
-    "ok": true,
-    "dataset_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical",
-    "output_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke",
-    "resume_from_checkpoint": null,
-    "overwrite_output_dir": false,
-    "dataset_check": {
-      "ok": true,
-      "dataset_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical",
-      "splits": {
-        "train": {
-          "path": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical/train.jsonl",
-          "rows": 800,
-          "approx_char_lengths": {
-            "mean": 10301.47,
-            "max": 24216
-          }
-        },
-        "validation": {
-          "path": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical/validation.jsonl",
-          "rows": 100,
-          "approx_char_lengths": {
-            "mean": 10609.17,
-            "max": 19878
-          }
-        },
-        "test": {
-          "path": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical/test.jsonl",
-          "rows": 100,
-          "approx_char_lengths": {
-            "mean": 10521.67,
-            "max": 20180
-          }
-        }
-      },
-      "total_rows": 1000,
-      "approx_char_lengths": {
-        "mean": 10354.26,
-        "max": 24216
-      },
-      "missing_fields": {},
-      "schema_aliases": {
-        "user": {},
-        "assistant": {}
-      },
-      "source_distribution": {
-        "teacher_generated": 1000
-      },
-      "review_status_distribution": {
-        "teacher_distilled_unreviewed": 1000
-      },
-      "approval_status_distribution": {
-        "not_approved": 1000
-      },
-      "errors": [],
-      "warnings": []
-    },
-    "errors": [],
-    "warnings": []
-  },
-  "environment": {
-    "ok": true,
-    "python": {
-      "version": "3.12.3",
-      "implementation": "CPython",
-      "executable": "/usr/bin/python3"
-    },
-    "host": {
-      "hostname": "gpu07.slurm.cpe.kmutt.ac.th",
-      "platform": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39",
-      "working_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717"
-    },
-    "packages": {
-      "torch": "2.5.1+cu121",
-      "transformers": "5.13.0",
-      "datasets": "5.0.0",
-      "accelerate": "1.14.0",
-      "peft": "0.19.1",
-      "trl": "1.7.1",
-      "safetensors": "0.8.0"
-    },
-    "torch": {
-      "version": "2.5.1+cu121",
-      "cuda_available": true,
-      "bf16_supported": true,
-      "device_count": 1,
-      "devices": [
-        {
-          "index": 0,
-          "name": "NVIDIA L40",
-          "total_memory_gb": 44.39
-        }
-      ]
-    },
-    "dataset_dir": null,
-    "errors": [],
-    "warnings": []
-  },
-  "trainable_parameters": {
-    "total_parameters": 7655986688,
-    "trainable_parameters": 40370176,
-    "trainable_percentage": 0.5273
-  },
-  "artifacts": {
-    "model_dir": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke",
-    "train_metrics_json": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke/train_results.json",
-    "eval_metrics_json": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke/eval_results.json",
-    "trainer_state_json": "/tmp/rtlspecializer-lora-67070501002@cpe.kmutt.ac.th-20260710T042821Z-3285717/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke/trainer_state.json"
-  },
-  "errors": [],
-  "warnings": [],
-  "train_metrics": {
-    "train_runtime": 79.7119,
-    "train_samples_per_second": 0.201,
-    "train_steps_per_second": 0.013,
-    "total_flos": 1701261526960128.0,
-    "train_loss": 1.7111045122146606,
-    "epoch": 0.02
-  },
-  "eval_metrics": {
-    "eval_loss": 1.72161066532135,
-    "eval_runtime": 54.245,
-    "eval_samples_per_second": 1.843,
-    "eval_steps_per_second": 1.843,
-    "eval_entropy": 1.1128899049758911,
-    "eval_num_tokens": 39874.0,
-    "eval_mean_token_accuracy": 0.6737879532575607,
-    "epoch": 0.02
-  }
-}
-Training completed; adapter artifacts restored to /storage/slurm/home/67070501002@cpe.kmutt.ac.th/RTLSpecializer/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke.
