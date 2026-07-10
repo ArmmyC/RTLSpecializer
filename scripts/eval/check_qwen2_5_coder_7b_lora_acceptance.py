@@ -15,8 +15,13 @@ def load(path: Path) -> dict[str,Any]:
 
 def check(lora: dict[str,Any], base: dict[str,Any], diff: dict[str,Any], candidate: dict[str,Any]) -> dict[str,Any]:
     errors=[]; checks={}
-    name=diff.get("name_b")
-    analysis=(diff.get("duplicate_analysis") or {}).get(name,{}) if isinstance(name,str) else {}
+    name=diff.get("name_b"); base_name=diff.get("name_a")
+    duplicate_analysis=diff.get("duplicate_analysis")
+    if not isinstance(name,str) or not isinstance(base_name,str) or not isinstance(duplicate_analysis,dict):
+        return {"accepted":False,"checks":{},"base_reference":{},"lora_result":{},"deltas":{},"errors":["difference report is missing named duplicate analysis"],"warnings":[]}
+    analysis=duplicate_analysis.get(name); base_analysis=duplicate_analysis.get(base_name)
+    if not isinstance(analysis,dict) or not isinstance(base_analysis,dict):
+        return {"accepted":False,"checks":{},"base_reference":{},"lora_result":{},"deltas":{},"errors":["difference report is missing duplicate analysis for base or LoRA"],"warnings":[]}
     rows=diff.get("row_differences",[]) if isinstance(diff.get("row_differences"),list) else []
     mutation=sum(bool((row.get("mentions_mutation_type") or {}).get(name)) for row in rows)
     signal=sum(bool((row.get("mentions_mutated_signal_names") or {}).get(name)) for row in rows)
@@ -27,8 +32,8 @@ def check(lora: dict[str,Any], base: dict[str,Any], diff: dict[str,Any], candida
         checks[key]={"value":value,"required":threshold,"passed":ok}
         if not ok: errors.append(f"mandatory check failed: {key}")
     base_score=base.get("mean_score")
-    near_base=5
-    near_lora=len(analysis.get("near_duplicate_pairs",[])) if isinstance(analysis,dict) else None
+    near_base=len(base_analysis.get("near_duplicate_pairs",[])) if isinstance(base_analysis.get("near_duplicate_pairs"),list) else None
+    near_lora=len(analysis.get("near_duplicate_pairs",[])) if isinstance(analysis.get("near_duplicate_pairs"),list) else None
     return {"accepted":not errors,"checks":checks,"base_reference":{"base_mean_score":base_score,"base_near_duplicate_pairs":near_base},"lora_result":{"lora_mean_score":lora.get("mean_score"),"lora_near_duplicate_pairs":near_lora},"deltas":{"mean_score_delta_vs_base":round(lora.get("mean_score",0)-base_score,6) if isinstance(base_score,(int,float)) and isinstance(lora.get("mean_score"),(int,float)) else None,"near_duplicate_delta":near_lora-near_base if isinstance(near_lora,int) else None},"errors":errors,"warnings":["near-duplicate behavior is reported but is not an automatic failure"]}
 
 def main(argv=None):

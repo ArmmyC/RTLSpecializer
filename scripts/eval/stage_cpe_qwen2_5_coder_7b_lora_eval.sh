@@ -32,8 +32,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --run-eval) run_eval=1;; --keep-stage) keep_stage=1;;
     --job-id|--source-root|--model-source-dir|--adapter-source-dir|--vllm-python|--port)
-      [[ $# -ge 2 ]] || die "$1 requires a value"; value="$2"; shift
-      case "$1" in --job-id)job_id="$value";;--source-root)source_root="$value";;--model-source-dir)model_source="$value";;--adapter-source-dir)adapter_source="$value";;--vllm-python)vllm_python="$value";;--port)port="$value";;esac;;
+      [[ $# -ge 2 ]] || die "$1 requires a value"; option="$1"; value="$2"; shift 2
+      case "$option" in --job-id)job_id="$value";;--source-root)source_root="$value";;--model-source-dir)model_source="$value";;--adapter-source-dir)adapter_source="$value";;--vllm-python)vllm_python="$value";;--port)port="$value";;esac
+      continue;;
     -h|--help) usage; exit 0;; *) die "unknown option: $1";;
   esac; shift
 done
@@ -46,7 +47,7 @@ for path in "${required[@]}"; do [[ -e "$source_root/$path" ]] || die "required 
 [[ -d "$model_source" ]] || die "base model directory missing: $model_source"
 [[ -f "$adapter_source/adapter_model.safetensors" ]] || die "adapter missing: $adapter_source/adapter_model.safetensors"
 [[ -x "$vllm_python" ]] || die "vLLM interpreter missing: $vllm_python"
-for path in "$CANDIDATE" "$RAW_OUTPUTS" "$EVAL_RUN" "${REPORT_PREFIX}_comparison.json" "${REPORT_PREFIX}_acceptance.json"; do [[ ! -e "$source_root/$path" ]] || die "refusing existing managed output: $source_root/$path"; done
+for path in "$CANDIDATE" "$RAW_OUTPUTS" "$EVAL_RUN" "${REPORT_PREFIX}_comparison.json" "${REPORT_PREFIX}_comparison.md" "${REPORT_PREFIX}_vs_base_diff.json" "${REPORT_PREFIX}_vs_base_diff.md" "${REPORT_PREFIX}_acceptance.json" "${REPORT_PREFIX}_acceptance.md"; do [[ ! -e "$source_root/$path" ]] || die "refusing existing managed output: $source_root/$path"; done
 
 printf 'base_model=%s\nadapter=%s\nalias=%s\n' "$BASE_MODEL_ID" "$adapter_source" "$ALIAS"
 printf 'settings=temperature:0,max_tokens:2048,timeout:120,response_format_json:true\n'
@@ -63,7 +64,13 @@ mkdir -p "\$stage"; tar -xf - -C "\$stage"; cd "\$stage"; mkdir -p logs
 export PYTHONPATH="\$stage/vllm-site-packages:\$stage"; export RTLSPEC_EVAL_API_KEY=local-lora-eval
 "\$vllm_python" -m vllm.entrypoints.cli.main serve "\$stage/model" --host 127.0.0.1 --port "\$port" --served-model-name qwen2_5_coder_7b_base --enable-lora --max-lora-rank 16 --lora-modules $ALIAS="\$stage/adapter" --dtype bfloat16 --max-model-len 16384 --gpu-memory-utilization 0.90 --trust-remote-code > logs/finetune-cpe-lora-eval-vllm.log 2>&1 & vllm_pid=\$!
 for _ in \$(seq 1 120); do curl -fsS http://127.0.0.1:"\$port"/v1/models > models.json && break; sleep 2; done
-grep -Fq '$ALIAS' models.json || exit 1
+python3 - '$ALIAS' models.json <<'PY'
+import json, sys
+alias, path = sys.argv[1:]
+payload = json.load(open(path, encoding='utf-8'))
+if not isinstance(payload.get('data'), list) or not any(isinstance(model, dict) and model.get('id') == alias for model in payload['data']):
+    raise SystemExit(f'vLLM did not expose exact adapter alias: {alias}')
+PY
 python3 scripts/eval/run_openai_compatible_candidates.py --dataset '$DATASET' --output '$CANDIDATE' --base-url http://127.0.0.1:"\$port"/v1 --model '$ALIAS' --api-key-env RTLSPEC_EVAL_API_KEY --temperature 0 --max-tokens 2048 --timeout 120 --retries 1 --raw-output-dir '$RAW_OUTPUTS' --schema-reminder-file docs/eval/rtl_answer_schema_reminder.md --response-format-json --json | tee logs/finetune-cpe-lora-eval-run.log > logs/candidate-generation.json
 python3 - '$DATASET' '$CANDIDATE' logs/candidate-generation.json <<'PY'
 import json, sys
@@ -78,13 +85,21 @@ PY
 python3 scripts/eval/evaluate_answers.py --dataset '$DATASET' --candidates '$CANDIDATE' --output-dir '$EVAL_RUN' --strict --json
 python3 scripts/eval/compare_eval_runs.py --runs '$RULE_RUN' '$HOSTED_RUN' '$BASE_RUN' '$EVAL_RUN' --output-md '${REPORT_PREFIX}_comparison.md' --output-json '${REPORT_PREFIX}_comparison.json' --json
 python3 scripts/eval/inspect_candidate_differences.py --dataset '$DATASET' --candidates-a '$BASE_CANDIDATE' --name-a qwen2_5_coder_7b_base_schema --candidates-b '$CANDIDATE' --name-b qwen2_5_coder_7b_lora_pilot_schema --output-md '${REPORT_PREFIX}_vs_base_diff.md' --output-json '${REPORT_PREFIX}_vs_base_diff.json' --json
+set +e
 python3 scripts/eval/check_qwen2_5_coder_7b_lora_acceptance.py --lora-metrics '$EVAL_RUN/metrics.json' --base-metrics '$BASE_RUN/metrics.json' --difference-report '${REPORT_PREFIX}_vs_base_diff.json' --candidate-report logs/candidate-generation.json --output-md '${REPORT_PREFIX}_acceptance.md' --output-json '${REPORT_PREFIX}_acceptance.json' --json
+acceptance_status=\$?
+set -e
 tar -cf - '$CANDIDATE' '$RAW_OUTPUTS' '$EVAL_RUN' '${REPORT_PREFIX}_comparison.md' '${REPORT_PREFIX}_comparison.json' '${REPORT_PREFIX}_vs_base_diff.md' '${REPORT_PREFIX}_vs_base_diff.json' '${REPORT_PREFIX}_acceptance.md' '${REPORT_PREFIX}_acceptance.json' logs/finetune-cpe-lora-eval-vllm.log logs/finetune-cpe-lora-eval-run.log
+exit "\$acceptance_status"
 EOF
 )
 srun_args=(--job-name=rtlspecializer-lora-eval --chdir=/tmp)
 if [[ -n "$job_id" ]]; then srun_args+=(--jobid="$job_id" --overlap); else srun_args+=(--partition=gpul40 --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=01:00:00); fi
 artifact="$(mktemp "${TMPDIR:-/tmp}/rtlspecializer-lora-eval.XXXXXX.tar")"; trap 'rm -f -- "$artifact"' EXIT
 vllm_site_packages="$(cd "$(dirname "$vllm_python")/../lib/python3.12/site-packages" && pwd -P)"
+set +e
 tar -C "$source_root" -cf - scripts data docs -C "$adapter_source" --transform='s,^\./,adapter/,' . -C "$model_source" --transform='s,^\./,model/,' . -C "$vllm_site_packages" --transform='s,^\./,vllm-site-packages/,' . | srun "${srun_args[@]}" /bin/bash -lc "$remote" > "$artifact"
-tar -C "$source_root" -xf "$artifact"
+remote_status=$?
+set -e
+[[ -s "$artifact" ]] && tar -C "$source_root" -xf "$artifact"
+exit "$remote_status"

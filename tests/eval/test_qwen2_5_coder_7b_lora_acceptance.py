@@ -6,7 +6,7 @@ from scripts.eval.check_qwen2_5_coder_7b_lora_acceptance import check, load
 
 def _reports():
     metrics={"candidate_rows":100,"matched_rows":100,"missing_candidates":0,"extra_candidates":0,"safety_failures":0,"mean_score":0.9964}
-    diff={"name_b":"lora","duplicate_analysis":{"lora":{"exact_duplicate_groups":[],"near_duplicate_pairs":[]}},"row_differences":[{"mentions_mutation_type":{"lora":True},"mentions_mutated_signal_names":{"lora":True}} for _ in range(100)]}
+    diff={"name_a":"base","name_b":"lora","duplicate_analysis":{"base":{"exact_duplicate_groups":[],"near_duplicate_pairs":[{} for _ in range(5)]},"lora":{"exact_duplicate_groups":[],"near_duplicate_pairs":[]}},"row_differences":[{"mentions_mutation_type":{"lora":True},"mentions_mutated_signal_names":{"lora":True}} for _ in range(100)]}
     candidate={"parse_error_rows":0,"api_error_rows":0}
     return metrics, metrics.copy(), diff, candidate
 
@@ -31,6 +31,15 @@ def test_acceptance_fails_each_mandatory_gate():
 
 def test_missing_metric_fails_closed():
     lora,base,diff,candidate=_reports(); del lora["mean_score"]
+    assert check(lora,base,diff,candidate)["accepted"] is False
+
+def test_duplicate_counts_are_report_derived():
+    result=check(*_reports())
+    assert result["base_reference"]["base_near_duplicate_pairs"] == 5
+    assert result["deltas"]["near_duplicate_delta"] == -5
+
+def test_missing_duplicate_analysis_fails_closed():
+    lora,base,diff,candidate=_reports(); del diff["duplicate_analysis"]["base"]
     assert check(lora,base,diff,candidate)["accepted"] is False
 
 def test_missing_and_malformed_reports_fail_closed(tmp_path):
