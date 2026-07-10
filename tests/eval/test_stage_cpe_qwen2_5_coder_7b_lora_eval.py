@@ -130,13 +130,19 @@ def test_complete_runtime_is_derived_staged_and_selected_remotely():
     )
     assert derivation
 
-    staging_pipeline = re.search(
-        r'(?m)^tar -C "\$source_root" .* '
-        r'-C "\$vllm_runtime_source" '
-        r"--transform='s,\^\\\./,vllm-runtime/,' \. \| srun ",
-        text,
+    staging = shell_function(text, "create_staging_archive")
+    assert re.search(
+        r'(?m)^  runtime_parent="\$\(dirname "\$vllm_runtime_source"\)"$',
+        staging,
     )
-    assert staging_pipeline
+    assert re.search(
+        r'(?m)^  runtime_name="\$\(basename "\$vllm_runtime_source"\)"$',
+        staging,
+    )
+    assert '-C "$runtime_parent" "$runtime_name"' in staging
+    assert '--transform="s,^${runtime_pattern}$,vllm-runtime,"' in staging
+    assert '--transform="s,^${runtime_pattern}/,vllm-runtime/,"' in staging
+    assert "create_staging_archive | srun " in text
     assert "vllm-site-packages" not in text
 
     assignment = remote.index(
@@ -215,7 +221,7 @@ def test_outer_pipeline_preserves_status_and_extracts_before_returning_it():
 
     pipeline = re.search(
         r'(?ms)^set \+e\n'
-        r'(tar -C "\$source_root" .* \| srun .* > "\$artifact")\n'
+        r'(create_staging_archive \| srun .* > "\$artifact")\n'
         r'remote_status=\$\?\n'
         r'set -e\n'
         r'\[\[ -s "\$artifact" \]\] && tar -C "\$source_root" -xf "\$artifact"\n'
@@ -227,6 +233,78 @@ def test_outer_pipeline_preserves_status_and_extracts_before_returning_it():
     assert re.search(
         r"trap 'rm -f -- \"\$artifact\"' EXIT", text[: pipeline.start()]
     )
+
+
+def test_staging_archive_builds_three_distinct_prefixed_trees(tmp_path):
+    text = SCRIPT.read_text(encoding="utf-8")
+    escape_function = shell_function(text, "escape_tar_transform_regex")
+    staging_function = shell_function(text, "create_staging_archive")
+
+    source_root = tmp_path / "repo"
+    for name in ("scripts", "data", "docs"):
+        directory = source_root / name
+        directory.mkdir(parents=True)
+        (directory / "placeholder").write_text(name, encoding="utf-8")
+
+    adapter_source = tmp_path / "adapter.[source]"
+    adapter_source.mkdir()
+    (adapter_source / "adapter_model.safetensors").write_text(
+        "adapter", encoding="utf-8"
+    )
+    model_source = tmp_path / "model+(source)"
+    model_source.mkdir()
+    (model_source / "config.json").write_text("model", encoding="utf-8")
+    runtime_source = tmp_path / "runtime,$source"
+    (runtime_source / "bin").mkdir(parents=True)
+    runtime_python = runtime_source / "bin/python3"
+    runtime_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    runtime_python.chmod(0o755)
+    archive = tmp_path / "stage.tar"
+
+    harness = f'''set -euo pipefail
+{escape_function}
+{staging_function}
+source_root=$1
+adapter_source=$2
+model_source=$3
+vllm_runtime_source=$4
+create_staging_archive > "$5"
+'''
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            harness,
+            "_",
+            str(source_root),
+            str(adapter_source),
+            str(model_source),
+            str(runtime_source),
+            str(archive),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+    listing = set(
+        subprocess.run(
+            ["tar", "-tf", str(archive)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.splitlines()
+    )
+    assert {
+        "adapter/adapter_model.safetensors",
+        "model/config.json",
+        "vllm-runtime/bin/python3",
+    } <= listing
+    assert {
+        "adapter/config.json",
+        "adapter/bin/python3",
+        "model/bin/python3",
+    }.isdisjoint(listing)
 
 
 def test_stop_logic_reaps_writer_and_archives_stable_evidence(tmp_path):

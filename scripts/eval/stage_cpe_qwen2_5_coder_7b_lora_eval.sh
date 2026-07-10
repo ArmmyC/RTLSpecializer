@@ -15,6 +15,43 @@ RULE_RUN="data/eval/runs/rtlcoder_synthetic_rule_baseline"
 HOSTED_RUN="data/eval/runs/rtlcoder_synthetic_active_model_base_schema"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+escape_tar_transform_regex() {
+  local value="$1" char escaped="" i
+  for ((i = 0; i < ${#value}; i++)); do
+    char="${value:i:1}"
+    case "$char" in
+      '.'|'['|'*'|'^'|'$'|'\'|',')
+        escaped+="\\$char"
+        ;;
+      *) escaped+="$char" ;;
+    esac
+  done
+  printf '%s' "$escaped"
+}
+create_staging_archive() {
+  local adapter_parent adapter_name adapter_pattern
+  local model_parent model_name model_pattern
+  local runtime_parent runtime_name runtime_pattern
+  adapter_parent="$(dirname "$adapter_source")"
+  adapter_name="$(basename "$adapter_source")"
+  adapter_pattern="$(escape_tar_transform_regex "$adapter_name")"
+  model_parent="$(dirname "$model_source")"
+  model_name="$(basename "$model_source")"
+  model_pattern="$(escape_tar_transform_regex "$model_name")"
+  runtime_parent="$(dirname "$vllm_runtime_source")"
+  runtime_name="$(basename "$vllm_runtime_source")"
+  runtime_pattern="$(escape_tar_transform_regex "$runtime_name")"
+  tar -C "$source_root" -cf - scripts data docs \
+    -C "$adapter_parent" "$adapter_name" \
+    -C "$model_parent" "$model_name" \
+    -C "$runtime_parent" "$runtime_name" \
+    --transform="s,^${adapter_pattern}$,adapter," \
+    --transform="s,^${adapter_pattern}/,adapter/," \
+    --transform="s,^${model_pattern}$,model," \
+    --transform="s,^${model_pattern}/,model/," \
+    --transform="s,^${runtime_pattern}$,vllm-runtime," \
+    --transform="s,^${runtime_pattern}/,vllm-runtime/,"
+}
 usage() { cat <<'EOF'
 Usage: stage_cpe_qwen2_5_coder_7b_lora_eval.sh [--run-eval] [options]
 Default mode validates inputs and planned paths only; it never calls srun or an endpoint.
@@ -159,7 +196,7 @@ srun_args=(--job-name=rtlspecializer-lora-eval --chdir=/tmp)
 if [[ -n "$job_id" ]]; then srun_args+=(--jobid="$job_id" --overlap); else srun_args+=(--partition=gpul40 --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=01:00:00); fi
 artifact="$(mktemp "${TMPDIR:-/tmp}/rtlspecializer-lora-eval.XXXXXX.tar")"; trap 'rm -f -- "$artifact"' EXIT
 set +e
-tar -C "$source_root" -cf - scripts data docs -C "$adapter_source" --transform='s,^\./,adapter/,' . -C "$model_source" --transform='s,^\./,model/,' . -C "$vllm_runtime_source" --transform='s,^\./,vllm-runtime/,' . | srun "${srun_args[@]}" /bin/bash -lc "$remote" > "$artifact"
+create_staging_archive | srun "${srun_args[@]}" /bin/bash -lc "$remote" > "$artifact"
 remote_status=$?
 set -e
 [[ -s "$artifact" ]] && tar -C "$source_root" -xf "$artifact"
