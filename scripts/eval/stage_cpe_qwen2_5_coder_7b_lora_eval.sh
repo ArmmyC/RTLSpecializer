@@ -58,12 +58,26 @@ stage="/tmp/rtlspecializer-lora-eval-${USER:-user}-$$"
 remote=$(cat <<EOF
 set -euo pipefail
 stage='$stage'; keep='$keep_stage'; port='$port'; vllm_python=python3
-cleanup() { [[ -n "\${vllm_pid:-}" ]] && kill "\$vllm_pid" 2>/dev/null || true; [[ "\$keep" = 1 ]] || rm -rf -- "\$stage"; }
+stop_vllm() {
+  if [[ -n "\${vllm_pid:-}" ]]; then
+    kill "\$vllm_pid" 2>/dev/null || true
+    wait "\$vllm_pid" 2>/dev/null || true
+    vllm_pid=""
+  fi
+}
+cleanup() {
+  stop_vllm
+  [[ "\$keep" = 1 ]] || rm -rf -- "\$stage"
+}
 trap cleanup EXIT INT TERM
 mkdir -p "\$stage"; tar -xf - -C "\$stage"; cd "\$stage"; mkdir -p logs
 export PYTHONPATH="\$stage/vllm-site-packages:\$stage"; export RTLSPEC_EVAL_API_KEY=local-lora-eval
 "\$vllm_python" -m vllm.entrypoints.cli.main serve "\$stage/model" --host 127.0.0.1 --port "\$port" --served-model-name qwen2_5_coder_7b_base --enable-lora --max-lora-rank 16 --lora-modules $ALIAS="\$stage/adapter" --dtype bfloat16 --max-model-len 16384 --gpu-memory-utilization 0.90 --trust-remote-code > logs/finetune-cpe-lora-eval-vllm.log 2>&1 & vllm_pid=\$!
 for _ in \$(seq 1 120); do curl -fsS http://127.0.0.1:"\$port"/v1/models > models.json && break; sleep 2; done
+[[ -s models.json ]] || {
+  printf 'vLLM readiness timed out; see logs/finetune-cpe-lora-eval-vllm.log\n' >&2
+  exit 1
+}
 python3 - '$ALIAS' models.json <<'PY'
 import json, sys
 alias, path = sys.argv[1:]
@@ -89,7 +103,8 @@ set +e
 python3 scripts/eval/check_qwen2_5_coder_7b_lora_acceptance.py --lora-metrics '$EVAL_RUN/metrics.json' --base-metrics '$BASE_RUN/metrics.json' --difference-report '${REPORT_PREFIX}_vs_base_diff.json' --candidate-report logs/candidate-generation.json --output-md '${REPORT_PREFIX}_acceptance.md' --output-json '${REPORT_PREFIX}_acceptance.json' --json > logs/acceptance-command.json
 acceptance_status=\$?
 set -e
-tar -cf - '$CANDIDATE' '$RAW_OUTPUTS' '$EVAL_RUN' '${REPORT_PREFIX}_comparison.md' '${REPORT_PREFIX}_comparison.json' '${REPORT_PREFIX}_vs_base_diff.md' '${REPORT_PREFIX}_vs_base_diff.json' '${REPORT_PREFIX}_acceptance.md' '${REPORT_PREFIX}_acceptance.json' logs/finetune-cpe-lora-eval-vllm.log logs/finetune-cpe-lora-eval-run.log logs/evaluation-command.json logs/comparison-command.json logs/difference-command.json logs/acceptance-command.json
+stop_vllm
+tar -cf - '$CANDIDATE' '$RAW_OUTPUTS' '$EVAL_RUN' '${REPORT_PREFIX}_comparison.md' '${REPORT_PREFIX}_comparison.json' '${REPORT_PREFIX}_vs_base_diff.md' '${REPORT_PREFIX}_vs_base_diff.json' '${REPORT_PREFIX}_acceptance.md' '${REPORT_PREFIX}_acceptance.json' models.json logs/candidate-generation.json logs/finetune-cpe-lora-eval-vllm.log logs/finetune-cpe-lora-eval-run.log logs/evaluation-command.json logs/comparison-command.json logs/difference-command.json logs/acceptance-command.json
 exit "\$acceptance_status"
 EOF
 )
