@@ -42,6 +42,14 @@ def test_missing_duplicate_analysis_fails_closed():
     lora,base,diff,candidate=_reports(); del diff["duplicate_analysis"]["base"]
     assert check(lora,base,diff,candidate)["accepted"] is False
 
+@pytest.mark.parametrize("name", ["base", "lora"])
+@pytest.mark.parametrize("value", [None, "not-a-list"])
+def test_malformed_near_duplicate_counts_do_not_raise(name, value):
+    lora,base,diff,candidate=_reports()
+    diff["duplicate_analysis"][name]["near_duplicate_pairs"]=value
+    result=check(lora,base,diff,candidate)
+    assert result["deltas"]["near_duplicate_delta"] is None
+
 def test_missing_and_malformed_reports_fail_closed(tmp_path):
     with pytest.raises(ValueError): load(tmp_path / "missing.json")
     malformed=tmp_path / "bad.json"; malformed.write_text("{", encoding="utf-8")

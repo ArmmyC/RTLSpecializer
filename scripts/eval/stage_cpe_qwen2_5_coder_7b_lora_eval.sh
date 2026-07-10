@@ -82,14 +82,14 @@ summary = json.load(report)
 if len(rows) != 100 or len(ids) != len(set(ids)) or set(ids) != expected or summary.get('parse_error_rows') or summary.get('api_error_rows'):
     raise SystemExit('candidate generation did not satisfy strict stable-ID coverage')
 PY
-python3 scripts/eval/evaluate_answers.py --dataset '$DATASET' --candidates '$CANDIDATE' --output-dir '$EVAL_RUN' --strict --json
-python3 scripts/eval/compare_eval_runs.py --runs '$RULE_RUN' '$HOSTED_RUN' '$BASE_RUN' '$EVAL_RUN' --output-md '${REPORT_PREFIX}_comparison.md' --output-json '${REPORT_PREFIX}_comparison.json' --json
-python3 scripts/eval/inspect_candidate_differences.py --dataset '$DATASET' --candidates-a '$BASE_CANDIDATE' --name-a qwen2_5_coder_7b_base_schema --candidates-b '$CANDIDATE' --name-b qwen2_5_coder_7b_lora_pilot_schema --output-md '${REPORT_PREFIX}_vs_base_diff.md' --output-json '${REPORT_PREFIX}_vs_base_diff.json' --json
+python3 scripts/eval/evaluate_answers.py --dataset '$DATASET' --candidates '$CANDIDATE' --output-dir '$EVAL_RUN' --strict --json > logs/evaluation-command.json
+python3 scripts/eval/compare_eval_runs.py --runs '$RULE_RUN' '$HOSTED_RUN' '$BASE_RUN' '$EVAL_RUN' --output-md '${REPORT_PREFIX}_comparison.md' --output-json '${REPORT_PREFIX}_comparison.json' --json > logs/comparison-command.json
+python3 scripts/eval/inspect_candidate_differences.py --dataset '$DATASET' --candidates-a '$BASE_CANDIDATE' --name-a qwen2_5_coder_7b_base_schema --candidates-b '$CANDIDATE' --name-b qwen2_5_coder_7b_lora_pilot_schema --output-md '${REPORT_PREFIX}_vs_base_diff.md' --output-json '${REPORT_PREFIX}_vs_base_diff.json' --json > logs/difference-command.json
 set +e
-python3 scripts/eval/check_qwen2_5_coder_7b_lora_acceptance.py --lora-metrics '$EVAL_RUN/metrics.json' --base-metrics '$BASE_RUN/metrics.json' --difference-report '${REPORT_PREFIX}_vs_base_diff.json' --candidate-report logs/candidate-generation.json --output-md '${REPORT_PREFIX}_acceptance.md' --output-json '${REPORT_PREFIX}_acceptance.json' --json
+python3 scripts/eval/check_qwen2_5_coder_7b_lora_acceptance.py --lora-metrics '$EVAL_RUN/metrics.json' --base-metrics '$BASE_RUN/metrics.json' --difference-report '${REPORT_PREFIX}_vs_base_diff.json' --candidate-report logs/candidate-generation.json --output-md '${REPORT_PREFIX}_acceptance.md' --output-json '${REPORT_PREFIX}_acceptance.json' --json > logs/acceptance-command.json
 acceptance_status=\$?
 set -e
-tar -cf - '$CANDIDATE' '$RAW_OUTPUTS' '$EVAL_RUN' '${REPORT_PREFIX}_comparison.md' '${REPORT_PREFIX}_comparison.json' '${REPORT_PREFIX}_vs_base_diff.md' '${REPORT_PREFIX}_vs_base_diff.json' '${REPORT_PREFIX}_acceptance.md' '${REPORT_PREFIX}_acceptance.json' logs/finetune-cpe-lora-eval-vllm.log logs/finetune-cpe-lora-eval-run.log
+tar -cf - '$CANDIDATE' '$RAW_OUTPUTS' '$EVAL_RUN' '${REPORT_PREFIX}_comparison.md' '${REPORT_PREFIX}_comparison.json' '${REPORT_PREFIX}_vs_base_diff.md' '${REPORT_PREFIX}_vs_base_diff.json' '${REPORT_PREFIX}_acceptance.md' '${REPORT_PREFIX}_acceptance.json' logs/finetune-cpe-lora-eval-vllm.log logs/finetune-cpe-lora-eval-run.log logs/evaluation-command.json logs/comparison-command.json logs/difference-command.json logs/acceptance-command.json
 exit "\$acceptance_status"
 EOF
 )
