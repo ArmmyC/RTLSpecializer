@@ -177,7 +177,7 @@ The repo script does these preflight checks before model load:
 - the output directory is empty unless `--overwrite-output-dir` or `--resume-from-checkpoint` is used
 - the runtime sees CUDA and a GPU whose name contains `L40`
 
-The trainer path uses TRL `SFTTrainer` with PEFT LoRA and stringifies the structured user/assistant message objects into canonical JSON text before applying the tokenizer chat template.
+The trainer path renders each structured user/assistant message object into canonical JSON text before applying the tokenizer chat template. It then removes the original `messages` column and supplies TRL a plain `text` dataset, preventing TRL from treating structured message content as strings itself.
 
 ## 7. QLoRA fallback only
 

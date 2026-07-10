@@ -41,6 +41,7 @@ def test_launcher_defaults_to_checks_and_requires_explicit_train() -> None:
     assert 'SMOKE_OUTPUT_RELATIVE_DIR="outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke"' in contents
     assert '--max-steps "$max_steps"' in contents
     assert 'requested_time="01:00:00"' in contents
+    assert 'STAGE_ROOT_TO_CLEANUP="$stage_root"' in contents
     assert 'check_training_environment.py' in contents
     assert '--dry-run' in contents
     assert 'HF_HUB_OFFLINE=1' in contents
@@ -58,6 +59,7 @@ def test_launcher_stages_runtime_dataset_and_model_for_training() -> None:
     assert 'site_package_transform="s,^$site_package_relative_path,.venv_site_packages,"' in contents
     assert 'MODEL_STAGE_RELATIVE_DIR="models/Qwen__Qwen2.5-Coder-7B-Instruct"' in contents
     assert 'tar -C "$source_root" -cf -' in contents
+    assert 'scripts/dataset' in contents
     assert "mkdir -p -- '$stage_root'; tar -xf - -C '$stage_root'" in contents
     assert 'tar -C "$source_root" -xf "$artifact_archive"' in contents
 
@@ -70,6 +72,16 @@ def test_dry_run_payload_normalizes_site_packages_path(tmp_path) -> None:
     shutil.copy2(
         REPOSITORY_ROOT / "scripts/finetune/check_training_environment.py",
         finetune_dir / "check_training_environment.py",
+    )
+    dataset_support_dir = source_root / "scripts" / "dataset"
+    dataset_support_dir.mkdir()
+    shutil.copy2(
+        REPOSITORY_ROOT / "scripts/dataset/__init__.py",
+        dataset_support_dir / "__init__.py",
+    )
+    shutil.copy2(
+        REPOSITORY_ROOT / "scripts/dataset/constants.py",
+        dataset_support_dir / "constants.py",
     )
 
     dataset_dir = source_root / "outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical"
@@ -105,6 +117,7 @@ def test_dry_run_payload_normalizes_site_packages_path(tmp_path) -> None:
     assert result.returncode == 0, result.stderr
     staged_paths = captured_payload.read_text(encoding="utf-8")
     assert "scripts/finetune/stage_cpe_lora.sh" in staged_paths
+    assert "scripts/dataset/constants.py" in staged_paths
     assert "outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical/train.jsonl" in staged_paths
     assert ".venv_site_packages/torch/__init__.py" in staged_paths
     assert ".venv/lib/python3.12/site-packages/torch/__init__.py" not in staged_paths

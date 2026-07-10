@@ -65,6 +65,15 @@ def _parse_max_steps(value: str) -> int:
     return parsed
 
 
+def _render_dataset(dataset: Any, tokenizer: Any) -> Any:
+    """Remove structured messages after rendering so TRL treats rows as plain text."""
+
+    return dataset.map(
+        lambda example: {"text": format_example_for_chat_template(example, tokenizer)},
+        remove_columns=dataset.column_names,
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
@@ -184,9 +193,8 @@ def train_qwen2_5_coder_7b_lora(args: argparse.Namespace) -> tuple[dict[str, Any
     )
     train_dataset = dataset["train"]
     validation_dataset = dataset["validation"]
-
-    def formatting_func(example: dict[str, Any]) -> str:
-        return format_example_for_chat_template(example, tokenizer)
+    train_dataset = _render_dataset(train_dataset, tokenizer)
+    validation_dataset = _render_dataset(validation_dataset, tokenizer)
 
     peft_config = runtime["LoraConfig"](
         r=args.lora_r,
@@ -216,6 +224,7 @@ def train_qwen2_5_coder_7b_lora(args: argparse.Namespace) -> tuple[dict[str, Any
         report_to="none",
         seed=args.seed,
         max_length=args.max_length,
+        dataset_text_field="text",
         packing=False,
         trust_remote_code=True,
     )
@@ -226,7 +235,6 @@ def train_qwen2_5_coder_7b_lora(args: argparse.Namespace) -> tuple[dict[str, Any
         eval_dataset=validation_dataset,
         processing_class=tokenizer,
         peft_config=peft_config,
-        formatting_func=formatting_func,
     )
 
     summary["trainable_parameters"] = _trainable_parameter_summary(trainer.model)

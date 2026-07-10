@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from scripts.finetune.train_qwen2_5_coder_7b_lora import _build_parser, train_qwen2_5_coder_7b_lora
+from scripts.finetune.train_qwen2_5_coder_7b_lora import _build_parser, _render_dataset, train_qwen2_5_coder_7b_lora
 
 
 def _write_dataset_dir(tmp_path: Path) -> Path:
@@ -157,3 +157,24 @@ def test_max_steps_parser_accepts_one_step_and_rejects_zero() -> None:
         assert exc.code == 2
     else:
         raise AssertionError("--max-steps 0 must fail")
+
+
+def test_render_dataset_replaces_structured_messages_with_text() -> None:
+    class _Dataset:
+        column_names = ["messages", "metadata"]
+
+        def map(self, function, *, remove_columns):
+            self.remove_columns = remove_columns
+            self.rendered = function({"messages": [{"role": "user", "content": {"value": 1}}]})
+            return self
+
+    class _Tokenizer:
+        def apply_chat_template(self, messages, *, tokenize, add_generation_prompt):
+            assert messages == [{"role": "user", "content": '{"value":1}'}]
+            return "rendered"
+
+    dataset = _Dataset()
+    rendered = _render_dataset(dataset, _Tokenizer())
+    assert rendered is dataset
+    assert dataset.remove_columns == ["messages", "metadata"]
+    assert dataset.rendered == {"text": "rendered"}

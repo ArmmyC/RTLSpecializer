@@ -46,7 +46,8 @@ run_staged() {
   local output_dir="$stage_root/$output_relative_dir"
 
   if [[ "$keep_stage" != "1" ]]; then
-    trap 'rm -rf -- "$stage_root"' EXIT
+    STAGE_ROOT_TO_CLEANUP="$stage_root"
+    trap 'rm -rf -- "$STAGE_ROOT_TO_CLEANUP"' EXIT
   fi
 
   export HOME="$stage_root/home"
@@ -253,6 +254,7 @@ if [[ "$run_training" == "1" ]]; then
   tar -C "$source_root" -cf - \
     --transform="$site_package_transform" \
     scripts/finetune \
+    scripts/dataset \
     "$DATASET_RELATIVE_DIR" \
     "$site_package_relative_path" \
     -C "$model_source_dir" \
@@ -265,6 +267,7 @@ else
   tar -C "$source_root" -cf - \
     --transform="$site_package_transform" \
     scripts/finetune \
+    scripts/dataset \
     "$DATASET_RELATIVE_DIR" \
     "$site_package_relative_path" \
     | srun "${srun_args[@]}" /bin/bash -lc \
