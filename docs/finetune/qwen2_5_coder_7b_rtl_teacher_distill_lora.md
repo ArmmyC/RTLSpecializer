@@ -121,10 +121,18 @@ bash scripts/finetune/stage_cpe_lora.sh --job-id <job-id>
 When the dry-run has been reviewed and you are ready for the controlled training attempt:
 
 ```bash
+bash scripts/finetune/stage_cpe_lora.sh --smoke-train
+```
+
+`--smoke-train` loads the actual local Qwen model, attaches LoRA, builds TRL's `SFTTrainer`, performs one optimizer step, saves its artifacts, and restores them under `outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke`. It is the required compatibility check before a full run.
+
+For the full run only after the smoke artifacts and logs are reviewed:
+
+```bash
 bash scripts/finetune/stage_cpe_lora.sh --train
 ```
 
-The training mode refuses to overwrite an existing persistent adapter output. It stages the local Qwen model cache from `~/LLMModel/qwen25-coder-7b-instruct/models/Qwen__Qwen2.5-Coder-7B-Instruct` by default and restores only successful adapter artifacts to `outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora` on the CPE login host. Override that source with `--model-source-dir PATH` if needed.
+`--train --max-steps N` runs an explicitly limited number of real optimization steps, but writes into the full-run adapter path. Prefer `--smoke-train` for the one-step check so the full output remains empty. Both training modes refuse to overwrite an existing persistent adapter output. The launcher stages the local Qwen model cache from `~/LLMModel/qwen25-coder-7b-instruct/models/Qwen__Qwen2.5-Coder-7B-Instruct` by default. Override that source with `--model-source-dir PATH` if needed.
 
 ## 5. Option A: Axolotl-style LoRA command template
 
@@ -159,6 +167,8 @@ python scripts/finetune/train_qwen2_5_coder_7b_lora.py \
   --expected-gpu-substring L40 \
   --json
 ```
+
+To limit a direct trainer invocation to one real update step, add `--max-steps 1`. Unlike `--dry-run`, this loads the model and executes the full training path.
 
 The repo script does these preflight checks before model load:
 

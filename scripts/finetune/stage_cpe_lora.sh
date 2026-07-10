@@ -4,6 +4,7 @@ set -euo pipefail
 
 DATASET_RELATIVE_DIR="outputs/finetune_datasets/rtlcoder_synthetic_teacher_distill_v0_1_canonical"
 OUTPUT_RELATIVE_DIR="outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora"
+SMOKE_OUTPUT_RELATIVE_DIR="outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke"
 MODEL_STAGE_RELATIVE_DIR="models/Qwen__Qwen2.5-Coder-7B-Instruct"
 
 die() {
@@ -20,14 +21,17 @@ and Python site-packages into /tmp on an L40 node before running checks there.
 
 Options:
   --train                 After checks and dry-run, stage the local base model and train.
+  --smoke-train           Run one real training step and save separate smoke artifacts.
+  --max-steps N           Use N positive training steps with --train; default uses epochs.
   --job-id ID             Reuse an existing Slurm allocation with srun --overlap.
   --source-root PATH      CPE checkout/archive extraction root (default: ~/RTLSpecializer).
   --model-source-dir PATH Local Qwen model directory on the CPE login host.
   --keep-stage            Keep the /tmp stage directory after the GPU command exits.
   -h, --help              Show this help text.
 
-Without --train the launcher only runs the GPU environment check and trainer
-dry-run. --train refuses to overwrite an existing persistent adapter output.
+Without --train or --smoke-train the launcher only runs the GPU environment
+check and trainer dry-run. Both training modes refuse to overwrite their
+persistent adapter output.
 EOF
 }
 
@@ -35,9 +39,11 @@ run_staged() {
   local stage_root="$1"
   local run_training="$2"
   local keep_stage="$3"
+  local output_relative_dir="$4"
+  local max_steps="$5"
   local site_packages="$stage_root/.venv_site_packages"
   local dataset_dir="$stage_root/$DATASET_RELATIVE_DIR"
-  local output_dir="$stage_root/$OUTPUT_RELATIVE_DIR"
+  local output_dir="$stage_root/$output_relative_dir"
 
   if [[ "$keep_stage" != "1" ]]; then
     trap 'rm -rf -- "$stage_root"' EXIT
@@ -85,15 +91,16 @@ run_staged() {
     --dataset-dir "$dataset_dir" \
     --output-dir "$output_dir" \
     --expected-gpu-substring L40 \
+    --max-steps "$max_steps" \
     --json >&2
 
   # stdout is reserved for this archive so the login host can persist it safely.
-  tar -C "$stage_root" -cf - "$OUTPUT_RELATIVE_DIR"
+  tar -C "$stage_root" -cf - "$output_relative_dir"
 }
 
 if [[ "${1:-}" == "--run-staged" ]]; then
   shift
-  [[ "$#" -eq 3 ]] || die "internal staged invocation requires stage root and mode flags"
+  [[ "$#" -eq 5 ]] || die "internal staged invocation requires stage root and mode flags"
   run_staged "$@"
   exit 0
 fi
@@ -103,11 +110,23 @@ model_source_dir="${CPE_QWEN_MODEL_DIR:-$HOME/LLMModel/qwen25-coder-7b-instruct/
 job_id=""
 run_training=0
 keep_stage=0
+smoke_train=0
+max_steps=-1
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --train)
       run_training=1
+      ;;
+    --smoke-train)
+      run_training=1
+      smoke_train=1
+      ;;
+    --max-steps)
+      [[ "$#" -ge 2 ]] || die "--max-steps requires a value"
+      [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "--max-steps must be a positive integer"
+      max_steps="$2"
+      shift
       ;;
     --job-id)
       [[ "$#" -ge 2 ]] || die "--job-id requires a value"
@@ -138,6 +157,20 @@ while [[ "$#" -gt 0 ]]; do
   shift
 done
 
+if [[ "$smoke_train" == "1" ]]; then
+  if [[ "$max_steps" != "-1" && "$max_steps" != "1" ]]; then
+    die "--smoke-train always uses exactly one training step"
+  fi
+  max_steps=1
+  output_relative_dir="$SMOKE_OUTPUT_RELATIVE_DIR"
+elif [[ "$run_training" == "1" ]]; then
+  output_relative_dir="$OUTPUT_RELATIVE_DIR"
+elif [[ "$max_steps" != "-1" ]]; then
+  die "--max-steps requires --train; use --smoke-train for the one-step compatibility check"
+else
+  output_relative_dir="$OUTPUT_RELATIVE_DIR"
+fi
+
 command -v srun >/dev/null 2>&1 || die "srun is required; run this launcher on the CPE login host"
 source_root="$(cd "$source_root" && pwd -P)" || die "source root not found: $source_root"
 [[ -d "$source_root/$DATASET_RELATIVE_DIR" ]] || die "canonical dataset not found under: $source_root/$DATASET_RELATIVE_DIR"
@@ -152,7 +185,7 @@ site_package_transform="s,^$site_package_relative_path,.venv_site_packages,"
 
 if [[ "$run_training" == "1" ]]; then
   [[ -d "$model_source_dir" ]] || die "base model directory not found: $model_source_dir"
-  persistent_output_dir="$source_root/$OUTPUT_RELATIVE_DIR"
+  persistent_output_dir="$source_root/$output_relative_dir"
   if [[ -e "$persistent_output_dir" || -L "$persistent_output_dir" ]]; then
     if [[ -L "$persistent_output_dir" ]] || [[ ! -d "$persistent_output_dir" ]]; then
       die "adapter output must be an absent directory or an empty real directory: $persistent_output_dir"
@@ -172,19 +205,27 @@ cleanup_local() {
 trap cleanup_local EXIT
 
 srun_args=(
-  --job-name=rtlspecializer-lora-stage
   --chdir=/tmp
 )
+if [[ "$smoke_train" == "1" ]]; then
+  srun_args+=(--job-name=rtlspecializer-lora-smoke)
+else
+  srun_args+=(--job-name=rtlspecializer-lora-stage)
+fi
 if [[ -n "$job_id" ]]; then
   srun_args+=(--jobid="$job_id" --overlap)
 else
   if [[ "$run_training" == "1" ]]; then
+    requested_time="12:00:00"
+    if [[ "$smoke_train" == "1" ]]; then
+      requested_time="01:00:00"
+    fi
     srun_args+=(
       --partition=gpul40
       --gres=gpu:1
       --cpus-per-task=8
       --mem=64G
-      --time=12:00:00
+      --time="$requested_time"
     )
   else
     srun_args+=(
@@ -199,7 +240,11 @@ fi
 
 printf 'Staging into %s on the GPU node.\n' "$stage_root"
 if [[ "$run_training" == "1" ]]; then
-  printf 'Training is enabled; completed adapter artifacts will be restored under %s.\n' "$source_root/$OUTPUT_RELATIVE_DIR"
+  if [[ "$smoke_train" == "1" ]]; then
+    printf 'One-step smoke training is enabled; artifacts will be restored under %s.\n' "$source_root/$output_relative_dir"
+  else
+    printf 'Training is enabled; completed adapter artifacts will be restored under %s.\n' "$source_root/$output_relative_dir"
+  fi
 else
   printf 'Training is disabled; only environment check and dry-run will execute.\n'
 fi
@@ -214,7 +259,7 @@ if [[ "$run_training" == "1" ]]; then
     --transform="s,^\\./,$MODEL_STAGE_RELATIVE_DIR/," \
     . \
     | srun "${srun_args[@]}" /bin/bash -lc \
-      "rm -rf -- '$stage_root'; mkdir -p -- '$stage_root'; tar -xf - -C '$stage_root'; exec bash '$stage_root/scripts/finetune/stage_cpe_lora.sh' --run-staged '$stage_root' '$run_training' '$keep_stage'" \
+      "rm -rf -- '$stage_root'; mkdir -p -- '$stage_root'; tar -xf - -C '$stage_root'; exec bash '$stage_root/scripts/finetune/stage_cpe_lora.sh' --run-staged '$stage_root' '$run_training' '$keep_stage' '$output_relative_dir' '$max_steps'" \
       >"$artifact_archive"
 else
   tar -C "$source_root" -cf - \
@@ -223,13 +268,13 @@ else
     "$DATASET_RELATIVE_DIR" \
     "$site_package_relative_path" \
     | srun "${srun_args[@]}" /bin/bash -lc \
-      "rm -rf -- '$stage_root'; mkdir -p -- '$stage_root'; tar -xf - -C '$stage_root'; exec bash '$stage_root/scripts/finetune/stage_cpe_lora.sh' --run-staged '$stage_root' '$run_training' '$keep_stage'" \
+      "rm -rf -- '$stage_root'; mkdir -p -- '$stage_root'; tar -xf - -C '$stage_root'; exec bash '$stage_root/scripts/finetune/stage_cpe_lora.sh' --run-staged '$stage_root' '$run_training' '$keep_stage' '$output_relative_dir' '$max_steps'" \
       >"$artifact_archive"
 fi
 
 if [[ "$run_training" == "1" ]]; then
   tar -C "$source_root" -xf "$artifact_archive"
-  printf 'Training completed; adapter artifacts restored to %s.\n' "$source_root/$OUTPUT_RELATIVE_DIR"
+  printf 'Training completed; adapter artifacts restored to %s.\n' "$source_root/$output_relative_dir"
 else
   [[ ! -s "$artifact_archive" ]] || die "dry-run unexpectedly returned artifact data"
   printf 'CPE environment check and trainer dry-run completed.\n'

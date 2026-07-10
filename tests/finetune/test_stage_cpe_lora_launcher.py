@@ -29,6 +29,7 @@ def test_launcher_help_does_not_require_cpe_commands() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "--train" in result.stdout
+    assert "--smoke-train" in result.stdout
     assert "--job-id ID" in result.stdout
 
 
@@ -36,6 +37,10 @@ def test_launcher_defaults_to_checks_and_requires_explicit_train() -> None:
     contents = LAUNCHER.read_text(encoding="utf-8")
     assert 'run_training=0' in contents
     assert '--train)\n      run_training=1' in contents
+    assert '--smoke-train)\n      run_training=1\n      smoke_train=1' in contents
+    assert 'SMOKE_OUTPUT_RELATIVE_DIR="outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora_smoke"' in contents
+    assert '--max-steps "$max_steps"' in contents
+    assert 'requested_time="01:00:00"' in contents
     assert 'check_training_environment.py' in contents
     assert '--dry-run' in contents
     assert 'HF_HUB_OFFLINE=1' in contents
@@ -43,7 +48,7 @@ def test_launcher_defaults_to_checks_and_requires_explicit_train() -> None:
     assert 'refusing to overwrite existing adapter output' in contents
     assert 'adapter output must be an absent directory or an empty real directory' in contents
     assert '--time=00:15:00' in contents
-    assert '--time=12:00:00' in contents
+    assert 'requested_time="12:00:00"' in contents
 
 
 def test_launcher_stages_runtime_dataset_and_model_for_training() -> None:

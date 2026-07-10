@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from scripts.finetune.train_qwen2_5_coder_7b_lora import train_qwen2_5_coder_7b_lora
+from scripts.finetune.train_qwen2_5_coder_7b_lora import _build_parser, train_qwen2_5_coder_7b_lora
 
 
 def _write_dataset_dir(tmp_path: Path) -> Path:
@@ -93,6 +93,7 @@ def test_dry_run_returns_plan_without_runtime_imports(tmp_path) -> None:
         save_steps=100,
         eval_steps=100,
         save_total_limit=2,
+        max_steps=-1,
         seed=42,
         lora_r=16,
         lora_alpha=32,
@@ -106,6 +107,7 @@ def test_dry_run_returns_plan_without_runtime_imports(tmp_path) -> None:
     assert summary["ok"] is True
     assert summary["mode"] == "dry_run"
     assert summary["environment"] is None
+    assert summary["settings"]["max_steps"] == -1
     assert summary["preflight"]["dataset_check"]["total_rows"] == 3
 
 
@@ -130,6 +132,7 @@ def test_dry_run_propagates_preflight_errors(tmp_path) -> None:
         save_steps=100,
         eval_steps=100,
         save_total_limit=2,
+        max_steps=-1,
         seed=42,
         lora_r=16,
         lora_alpha=32,
@@ -142,3 +145,15 @@ def test_dry_run_propagates_preflight_errors(tmp_path) -> None:
     assert code == 1
     assert summary["ok"] is False
     assert any("--output-dir already exists and is not empty" in error for error in summary["errors"])
+
+
+def test_max_steps_parser_accepts_one_step_and_rejects_zero() -> None:
+    parser = _build_parser()
+    assert parser.parse_args(["--max-steps", "1"]).max_steps == 1
+
+    try:
+        parser.parse_args(["--max-steps", "0"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("--max-steps 0 must fail")

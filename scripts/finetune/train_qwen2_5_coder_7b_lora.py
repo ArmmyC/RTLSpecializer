@@ -58,6 +58,13 @@ def _trainable_parameter_summary(model: Any) -> dict[str, Any]:
     }
 
 
+def _parse_max_steps(value: str) -> int:
+    parsed = int(value)
+    if parsed == 0 or parsed < -1:
+        raise argparse.ArgumentTypeError("--max-steps must be -1 or a positive integer")
+    return parsed
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-model", default=DEFAULT_BASE_MODEL)
@@ -75,6 +82,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--save-steps", type=int, default=100)
     parser.add_argument("--eval-steps", type=int, default=100)
     parser.add_argument("--save-total-limit", type=int, default=2)
+    parser.add_argument(
+        "--max-steps",
+        type=_parse_max_steps,
+        default=-1,
+        help="Override epochs with an exact positive update-step count; -1 uses --epochs.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--lora-r", type=int, default=16)
     parser.add_argument("--lora-alpha", type=int, default=32)
@@ -110,6 +123,7 @@ def train_qwen2_5_coder_7b_lora(args: argparse.Namespace) -> tuple[dict[str, Any
             "save_steps": args.save_steps,
             "eval_steps": args.eval_steps,
             "save_total_limit": args.save_total_limit,
+            "max_steps": args.max_steps,
             "seed": args.seed,
             "lora_r": args.lora_r,
             "lora_alpha": args.lora_alpha,
@@ -195,6 +209,7 @@ def train_qwen2_5_coder_7b_lora(args: argparse.Namespace) -> tuple[dict[str, Any
         eval_strategy="steps",
         save_strategy="steps",
         save_total_limit=args.save_total_limit,
+        max_steps=args.max_steps,
         bf16=use_bf16,
         fp16=not use_bf16,
         gradient_checkpointing=True,
