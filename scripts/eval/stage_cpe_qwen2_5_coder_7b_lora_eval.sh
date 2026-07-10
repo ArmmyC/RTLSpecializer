@@ -47,6 +47,8 @@ for path in "${required[@]}"; do [[ -e "$source_root/$path" ]] || die "required 
 [[ -d "$model_source" ]] || die "base model directory missing: $model_source"
 [[ -f "$adapter_source/adapter_model.safetensors" ]] || die "adapter missing: $adapter_source/adapter_model.safetensors"
 [[ -x "$vllm_python" ]] || die "vLLM interpreter missing: $vllm_python"
+vllm_runtime_source="$(cd "$(dirname "$vllm_python")/.." && pwd -P)"
+[[ -x "$vllm_runtime_source/bin/python3" ]] || die "vLLM runtime interpreter missing: $vllm_runtime_source/bin/python3"
 for path in "$CANDIDATE" "$RAW_OUTPUTS" "$EVAL_RUN" "${REPORT_PREFIX}_comparison.json" "${REPORT_PREFIX}_comparison.md" "${REPORT_PREFIX}_vs_base_diff.json" "${REPORT_PREFIX}_vs_base_diff.md" "${REPORT_PREFIX}_acceptance.json" "${REPORT_PREFIX}_acceptance.md"; do [[ ! -e "$source_root/$path" ]] || die "refusing existing managed output: $source_root/$path"; done
 
 printf 'base_model=%s\nadapter=%s\nalias=%s\n' "$BASE_MODEL_ID" "$adapter_source" "$ALIAS"
@@ -57,7 +59,7 @@ command -v srun >/dev/null 2>&1 || die "srun is required"
 stage="/tmp/rtlspecializer-lora-eval-${USER:-user}-$$"
 remote=$(cat <<EOF
 set -euo pipefail
-stage='$stage'; keep='$keep_stage'; port='$port'; vllm_python=python3
+stage='$stage'; keep='$keep_stage'; port='$port'; vllm_python="\$stage/vllm-runtime/bin/python3"
 stop_vllm() {
   if [[ -n "\${vllm_pid:-}" ]]; then
     kill "\$vllm_pid" 2>/dev/null || true
@@ -71,13 +73,58 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 mkdir -p "\$stage"; tar -xf - -C "\$stage"; cd "\$stage"; mkdir -p logs
-export PYTHONPATH="\$stage/vllm-site-packages:\$stage"; export RTLSPEC_EVAL_API_KEY=local-lora-eval
-"\$vllm_python" -m vllm.entrypoints.cli.main serve "\$stage/model" --host 127.0.0.1 --port "\$port" --served-model-name qwen2_5_coder_7b_base --enable-lora --max-lora-rank 16 --lora-modules $ALIAS="\$stage/adapter" --dtype bfloat16 --max-model-len 16384 --gpu-memory-utilization 0.90 --trust-remote-code > logs/finetune-cpe-lora-eval-vllm.log 2>&1 & vllm_pid=\$!
-for _ in \$(seq 1 120); do curl -fsS http://127.0.0.1:"\$port"/v1/models > models.json && break; sleep 2; done
-[[ -s models.json ]] || {
-  printf 'vLLM readiness timed out; see logs/finetune-cpe-lora-eval-vllm.log\n' >&2
+export VIRTUAL_ENV="\$stage/vllm-runtime"
+export PATH="\$VIRTUAL_ENV/bin:\$PATH"
+export PYTHONPATH="\$stage"
+export RTLSPEC_EVAL_API_KEY=local-lora-eval
+if ! "\$vllm_python" - <<'PY' \
+  > logs/vllm-runtime-probe.log 2>&1
+import sys
+import vllm
+
+print("python_executable:", sys.executable)
+print("python_version:", sys.version)
+print("vllm_version:", vllm.__version__)
+PY
+then
+  printf 'staged vLLM runtime probe failed\n' >&2
+  tail -n 200 logs/vllm-runtime-probe.log >&2 || true
   exit 1
-}
+fi
+"\$vllm_python" -m vllm.entrypoints.cli.main serve "\$stage/model" \
+  --host 127.0.0.1 \
+  --port "\$port" \
+  --served-model-name qwen2_5_coder_7b_base \
+  --enable-lora \
+  --max-lora-rank 16 \
+  --lora-modules "$ALIAS=\$stage/adapter" \
+  --dtype bfloat16 \
+  --max-model-len 16384 \
+  --gpu-memory-utilization 0.90 \
+  --trust-remote-code \
+  > logs/finetune-cpe-lora-eval-vllm.log 2>&1 &
+vllm_pid=\$!
+ready=0
+for _ in \$(seq 1 120); do
+  if curl -fsS "http://127.0.0.1:\$port/v1/models" > models.json 2>/dev/null; then
+    ready=1
+    break
+  fi
+  if ! kill -0 "\$vllm_pid" 2>/dev/null; then
+    wait "\$vllm_pid" 2>/dev/null || true
+    vllm_pid=""
+    printf 'vLLM exited before becoming ready\n' >&2
+    tail -n 200 logs/finetune-cpe-lora-eval-vllm.log >&2 || true
+    exit 1
+  fi
+  sleep 2
+done
+if [[ "\$ready" != 1 ]]; then
+  printf 'vLLM readiness timed out\n' >&2
+  tail -n 200 logs/finetune-cpe-lora-eval-vllm.log >&2 || true
+  exit 1
+fi
+[[ -s models.json ]] || { printf 'vLLM readiness response was empty\n' >&2; exit 1; }
 python3 - '$ALIAS' models.json <<'PY'
 import json, sys
 alias, path = sys.argv[1:]
@@ -104,16 +151,15 @@ python3 scripts/eval/check_qwen2_5_coder_7b_lora_acceptance.py --lora-metrics '$
 acceptance_status=\$?
 set -e
 stop_vllm
-tar -cf - '$CANDIDATE' '$RAW_OUTPUTS' '$EVAL_RUN' '${REPORT_PREFIX}_comparison.md' '${REPORT_PREFIX}_comparison.json' '${REPORT_PREFIX}_vs_base_diff.md' '${REPORT_PREFIX}_vs_base_diff.json' '${REPORT_PREFIX}_acceptance.md' '${REPORT_PREFIX}_acceptance.json' models.json logs/candidate-generation.json logs/finetune-cpe-lora-eval-vllm.log logs/finetune-cpe-lora-eval-run.log logs/evaluation-command.json logs/comparison-command.json logs/difference-command.json logs/acceptance-command.json
+tar -cf - '$CANDIDATE' '$RAW_OUTPUTS' '$EVAL_RUN' '${REPORT_PREFIX}_comparison.md' '${REPORT_PREFIX}_comparison.json' '${REPORT_PREFIX}_vs_base_diff.md' '${REPORT_PREFIX}_vs_base_diff.json' '${REPORT_PREFIX}_acceptance.md' '${REPORT_PREFIX}_acceptance.json' models.json logs/vllm-runtime-probe.log logs/candidate-generation.json logs/finetune-cpe-lora-eval-vllm.log logs/finetune-cpe-lora-eval-run.log logs/evaluation-command.json logs/comparison-command.json logs/difference-command.json logs/acceptance-command.json
 exit "\$acceptance_status"
 EOF
 )
 srun_args=(--job-name=rtlspecializer-lora-eval --chdir=/tmp)
 if [[ -n "$job_id" ]]; then srun_args+=(--jobid="$job_id" --overlap); else srun_args+=(--partition=gpul40 --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=01:00:00); fi
 artifact="$(mktemp "${TMPDIR:-/tmp}/rtlspecializer-lora-eval.XXXXXX.tar")"; trap 'rm -f -- "$artifact"' EXIT
-vllm_site_packages="$(cd "$(dirname "$vllm_python")/../lib/python3.12/site-packages" && pwd -P)"
 set +e
-tar -C "$source_root" -cf - scripts data docs -C "$adapter_source" --transform='s,^\./,adapter/,' . -C "$model_source" --transform='s,^\./,model/,' . -C "$vllm_site_packages" --transform='s,^\./,vllm-site-packages/,' . | srun "${srun_args[@]}" /bin/bash -lc "$remote" > "$artifact"
+tar -C "$source_root" -cf - scripts data docs -C "$adapter_source" --transform='s,^\./,adapter/,' . -C "$model_source" --transform='s,^\./,model/,' . -C "$vllm_runtime_source" --transform='s,^\./,vllm-runtime/,' . | srun "${srun_args[@]}" /bin/bash -lc "$remote" > "$artifact"
 remote_status=$?
 set -e
 [[ -s "$artifact" ]] && tar -C "$source_root" -xf "$artifact"

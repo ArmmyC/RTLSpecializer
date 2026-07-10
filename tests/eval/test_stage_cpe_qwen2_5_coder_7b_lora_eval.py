@@ -1,6 +1,7 @@
 from pathlib import Path
 import re
 import subprocess
+import time
 
 ROOT=Path(__file__).resolve().parents[2]
 SCRIPT=ROOT/"scripts/eval/stage_cpe_qwen2_5_coder_7b_lora_eval.sh"
@@ -46,7 +47,8 @@ def test_preflight_applies_value_overrides_without_srun(tmp_path):
         path=root/relative; path.parent.mkdir(parents=True, exist_ok=True); path.write_text("", encoding="utf-8")
     model=tmp_path/"model"; model.mkdir()
     adapter=tmp_path/"adapter"; adapter.mkdir(); (adapter/"adapter_model.safetensors").write_text("",encoding="utf-8")
-    vllm=tmp_path/"python3"; vllm.write_text("#!/bin/sh\n",encoding="utf-8"); vllm.chmod(0o755)
+    runtime=tmp_path/"runtime"; (runtime/"bin").mkdir(parents=True)
+    vllm=runtime/"bin/python3"; vllm.write_text("#!/bin/sh\n",encoding="utf-8"); vllm.chmod(0o755)
     result=subprocess.run(["bash",str(SCRIPT),"--source-root",str(root),"--model-source-dir",str(model),"--adapter-source-dir",str(adapter),"--vllm-python",str(vllm),"--port","8123"],capture_output=True,text=True)
     assert result.returncode == 0, result.stderr
     assert f"adapter={adapter}" in result.stdout
@@ -99,20 +101,111 @@ def test_remote_stops_vllm_after_acceptance_and_before_archiving_evidence():
     tar_command = remote[archive:final_exit]
     archived_paths = set(re.findall(r"(?:^| )('(?:[^']*)'|[^ '\n]+)", tar_command))
     assert "models.json" in archived_paths
+    assert "logs/vllm-runtime-probe.log" in archived_paths
     assert "logs/candidate-generation.json" in archived_paths
 
 
 def test_readiness_requires_nonempty_models_json_before_exact_alias_check():
     remote = remote_script()
-    readiness_loop = remote.index("/v1/models > models.json")
+    readiness_loop = remote.index("/v1/models\" > models.json")
     nonempty_guard = remote.index("[[ -s models.json ]]", readiness_loop)
     json_parse = remote.index("python3 - '$ALIAS' models.json", nonempty_guard)
     alias_check = remote.index("model.get('id') == alias", json_parse)
 
     assert readiness_loop < nonempty_guard < json_parse < alias_check
     guard = remote[nonempty_guard:json_parse]
-    assert "vLLM readiness timed out; see logs/finetune-cpe-lora-eval-vllm.log" in guard
+    assert "vLLM readiness response was empty" in guard
     assert "exit 1" in guard
+
+
+def test_complete_runtime_is_derived_staged_and_selected_remotely():
+    text = SCRIPT.read_text(encoding="utf-8")
+    remote = remote_script()
+
+    derivation = re.search(
+        r'vllm_runtime_source="\$\(cd "\$\(dirname "\$vllm_python"\)/\.\." && pwd -P\)"\n'
+        r'\[\[ -x "\$vllm_runtime_source/bin/python3" \]\] \|\| '
+        r'die "vLLM runtime interpreter missing: \$vllm_runtime_source/bin/python3"',
+        text,
+    )
+    assert derivation
+
+    staging_pipeline = re.search(
+        r'(?m)^tar -C "\$source_root" .* '
+        r'-C "\$vllm_runtime_source" '
+        r"--transform='s,\^\\\./,vllm-runtime/,' \. \| srun ",
+        text,
+    )
+    assert staging_pipeline
+    assert "vllm-site-packages" not in text
+
+    assignment = remote.index(
+        'vllm_python="\\$stage/vllm-runtime/bin/python3"'
+    )
+    virtual_env = remote.index('export VIRTUAL_ENV="\\$stage/vllm-runtime"')
+    path_export = remote.index('export PATH="\\$VIRTUAL_ENV/bin:\\$PATH"')
+    pythonpath = remote.index('export PYTHONPATH="\\$stage"')
+    probe = remote.index('if ! "\\$vllm_python" - <<\'PY\'')
+    serve = remote.index(
+        '"\\$vllm_python" -m vllm.entrypoints.cli.main serve'
+    )
+    assert assignment < virtual_env < path_export < pythonpath < probe < serve
+
+
+def test_runtime_probe_is_private_diagnostic_and_archived():
+    remote = remote_script()
+    probe_start = remote.index('if ! "\\$vllm_python" - <<\'PY\'')
+    probe_end = remote.index("\nfi\n", probe_start) + len("\nfi\n")
+    probe = remote[probe_start:probe_end]
+
+    assert re.search(
+        r'if ! "\\\$vllm_python" - <<\'PY\' \\\n'
+        r'  > logs/vllm-runtime-probe\.log 2>&1',
+        probe,
+    )
+    assert 'import vllm' in probe
+    assert 'vllm.__version__' in probe
+    assert "printf 'staged vLLM runtime probe failed\\n' >&2" in probe
+    assert "tail -n 200 logs/vllm-runtime-probe.log >&2 || true" in probe
+    assert "exit 1" in probe
+
+    archive = remote[remote.index("\ntar -cf -") :]
+    assert "logs/vllm-runtime-probe.log" in archive.splitlines()[1]
+
+
+def test_readiness_structurally_detects_crash_and_reports_bounded_timeout():
+    remote = remote_script()
+    loop_start = remote.index("ready=0\n")
+    loop_end = remote.index("\n[[ -s models.json ]]", loop_start)
+    readiness = remote[loop_start:loop_end]
+
+    assert readiness.startswith("ready=0\nfor _ in \\$(seq 1 120); do\n")
+    curl = re.search(
+        r'if curl -fsS "http://127\.0\.0\.1:\\\$port/v1/models" '
+        r'> models\.json 2>/dev/null; then\n'
+        r'    ready=1\n    break\n  fi',
+        readiness,
+    )
+    assert curl
+
+    crash_check = readiness.index('if ! kill -0 "\\$vllm_pid" 2>/dev/null; then')
+    crash_wait = readiness.index('wait "\\$vllm_pid" 2>/dev/null || true', crash_check)
+    clear_pid = readiness.index('vllm_pid=""', crash_wait)
+    crash_error = readiness.index("printf 'vLLM exited before becoming ready\\n' >&2", clear_pid)
+    crash_tail = readiness.index(
+        "tail -n 200 logs/finetune-cpe-lora-eval-vllm.log >&2 || true",
+        crash_error,
+    )
+    crash_exit = readiness.index("exit 1", crash_tail)
+    assert crash_check < crash_wait < clear_pid < crash_error < crash_tail < crash_exit
+
+    timeout_check = readiness.index('if [[ "\\$ready" != 1 ]]; then', crash_exit)
+    timeout_error = readiness.index("printf 'vLLM readiness timed out\\n' >&2", timeout_check)
+    timeout_tail = readiness.index(
+        "tail -n 200 logs/finetune-cpe-lora-eval-vllm.log >&2 || true",
+        timeout_error,
+    )
+    assert timeout_check < timeout_error < timeout_tail
 
 
 def test_outer_pipeline_preserves_status_and_extracts_before_returning_it():
@@ -175,3 +268,59 @@ tar -cf artifact.tar logs/vllm.log models.json logs/candidate-generation.json
         "models.json",
         "logs/candidate-generation.json",
     ]
+
+
+def test_readiness_detects_synthetic_server_crash_and_reaps_it(tmp_path):
+    stage = tmp_path / "stage"
+    runtime_bin = stage / "vllm-runtime/bin"
+    runtime_bin.mkdir(parents=True)
+    logs = stage / "logs"
+    logs.mkdir()
+    fake_python = runtime_bin / "python3"
+    fake_python.write_text(
+        "#!/bin/sh\nprintf 'synthetic vLLM traceback\\n' >&2\nexit 42\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+
+    harness = r'''set -euo pipefail
+stage=$1
+vllm_python="$stage/vllm-runtime/bin/python3"
+"$vllm_python" > "$stage/logs/vllm.log" 2>&1 &
+vllm_pid=$!
+ready=0
+waited=0
+for _ in $(seq 1 120); do
+  if false; then
+    ready=1
+    break
+  fi
+  if ! kill -0 "$vllm_pid" 2>/dev/null; then
+    wait "$vllm_pid" 2>/dev/null || true
+    waited=1
+    vllm_pid=""
+    printf 'vLLM exited before becoming ready\n' >&2
+    tail -n 200 "$stage/logs/vllm.log" >&2 || true
+    printf 'waited=%s\nvllm_pid=%s\n' "$waited" "$vllm_pid" > "$stage/state"
+    exit 1
+  fi
+  sleep 0.01
+done
+exit 99
+'''
+    started = time.monotonic()
+    result = subprocess.run(
+        ["bash", "-c", harness, "_", str(stage)],
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.returncode == 1
+    assert elapsed < 2
+    assert "vLLM exited before becoming ready" in result.stderr
+    assert "synthetic vLLM traceback" in result.stderr
+    assert (stage / "state").read_text(encoding="utf-8") == (
+        "waited=1\nvllm_pid=\n"
+    )
