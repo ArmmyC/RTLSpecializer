@@ -1,0 +1,22 @@
+{
+  "ok": true,
+  "dataset": "data/distill/rtlcoder_synthetic_teacher_distill_v0_1/test.jsonl",
+  "output": "data/eval/candidates/qwen2_5_coder_7b_lora_pilot_schema_candidates.jsonl",
+  "base_url": "http://127.0.0.1:8011/v1",
+  "model": "qwen2_5_coder_7b_lora_pilot",
+  "api_key_env": "RTLSPEC_EVAL_API_KEY",
+  "raw_output_dir": "data/eval/raw_outputs/qwen2_5_coder_7b_lora_pilot_schema",
+  "selected_rows": 100,
+  "skipped_rows": 0,
+  "written_rows": 100,
+  "candidate_rows": 100,
+  "parse_error_rows": 0,
+  "api_error_rows": 0,
+  "parse_error_ids": [],
+  "api_error_ids": [],
+  "stopped_early": false,
+  "schema_reminder_enabled": true,
+  "response_format_json": true,
+  "errors": [],
+  "warnings": []
+}

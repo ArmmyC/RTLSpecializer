@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "dataset_rows": 100,
+  "candidate_rows": 100,
+  "matched_rows": 100,
+  "missing_candidates": 0,
+  "extra_candidates": 0,
+  "mean_score": 1.0,
+  "safety_failures": 0,
+  "output_dir": "data/eval/runs/qwen2_5_coder_7b_lora_pilot_schema",
+  "errors": [],
+  "warnings": []
+}

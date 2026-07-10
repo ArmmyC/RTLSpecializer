@@ -1,0 +1,577 @@
+{
+  "ok": true,
+  "run_names": [
+    "rtlcoder_synthetic_rule_baseline",
+    "rtlcoder_synthetic_active_model_base_schema",
+    "qwen2_5_coder_7b_base_schema",
+    "qwen2_5_coder_7b_lora_pilot_schema"
+  ],
+  "runs": [
+    {
+      "name": "rtlcoder_synthetic_rule_baseline",
+      "path": "data/eval/runs/rtlcoder_synthetic_rule_baseline",
+      "matched_rows": 100,
+      "mean_score": 0.898333,
+      "median_score": 0.898333,
+      "min_score": 0.898333,
+      "max_score": 0.898333,
+      "safety_failures": 0,
+      "error_counts": {},
+      "score_by_task_type": {
+        "rtl_bug_review": 0.898333
+      },
+      "weakest_rows": [
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000032_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 0.898333,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000034_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 0.898333,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000056_reference_synthetic_width_truncation_output",
+          "score": 0.898333,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000060_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 0.898333,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000062_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 0.898333,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000072_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 0.898333,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000102_reference_synthetic_width_truncation_output",
+          "score": 0.898333,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000125_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 0.898333,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000183_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 0.898333,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000219_reference_synthetic_width_truncation_output",
+          "score": 0.898333,
+          "error_count": 0,
+          "safety_failure_count": 0
+        }
+      ],
+      "score_mean_recomputed": 0.898333
+    },
+    {
+      "name": "rtlcoder_synthetic_active_model_base_schema",
+      "path": "data/eval/runs/rtlcoder_synthetic_active_model_base_schema",
+      "matched_rows": 100,
+      "mean_score": 0.9972,
+      "median_score": 1.0,
+      "min_score": 0.96,
+      "max_score": 1.0,
+      "safety_failures": 0,
+      "error_counts": {},
+      "score_by_task_type": {
+        "rtl_bug_review": 0.9972
+      },
+      "weakest_rows": [
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000056_reference_synthetic_width_truncation_output",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000219_reference_synthetic_width_truncation_output",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000481_reference_synthetic_wrong_reset_polarity",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000624_reference_synthetic_width_truncation_output",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_001146_reference_synthetic_width_truncation_output",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_001375_reference_synthetic_wrong_reset_polarity",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_001779_reference_synthetic_shift_direction_flip",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000032_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000034_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000060_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        }
+      ],
+      "score_mean_recomputed": 0.9972
+    },
+    {
+      "name": "qwen2_5_coder_7b_base_schema",
+      "path": "data/eval/runs/qwen2_5_coder_7b_base_schema",
+      "matched_rows": 100,
+      "mean_score": 0.9964,
+      "median_score": 1.0,
+      "min_score": 0.96,
+      "max_score": 1.0,
+      "safety_failures": 0,
+      "error_counts": {},
+      "score_by_task_type": {
+        "rtl_bug_review": 0.9964
+      },
+      "weakest_rows": [
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000056_reference_synthetic_width_truncation_output",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000219_reference_synthetic_width_truncation_output",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000481_reference_synthetic_wrong_reset_polarity",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000624_reference_synthetic_width_truncation_output",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_001146_reference_synthetic_width_truncation_output",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_001317_reference_synthetic_wrong_reset_polarity",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_001375_reference_synthetic_wrong_reset_polarity",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_001408_reference_synthetic_width_truncation_output",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_001779_reference_synthetic_shift_direction_flip",
+          "score": 0.96,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000032_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        }
+      ],
+      "score_mean_recomputed": 0.9964
+    },
+    {
+      "name": "qwen2_5_coder_7b_lora_pilot_schema",
+      "path": "data/eval/runs/qwen2_5_coder_7b_lora_pilot_schema",
+      "matched_rows": 100,
+      "mean_score": 1.0,
+      "median_score": 1.0,
+      "min_score": 1.0,
+      "max_score": 1.0,
+      "safety_failures": 0,
+      "error_counts": {},
+      "score_by_task_type": {
+        "rtl_bug_review": 1.0
+      },
+      "weakest_rows": [
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000032_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000034_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000056_reference_synthetic_width_truncation_output",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000060_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000062_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000072_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000102_reference_synthetic_width_truncation_output",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000125_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000183_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        },
+        {
+          "id": "teacher_distill_rtlcoder_resyn27k_000219_reference_synthetic_width_truncation_output",
+          "score": 1.0,
+          "error_count": 0,
+          "safety_failure_count": 0
+        }
+      ],
+      "score_mean_recomputed": 1.0
+    }
+  ],
+  "union_rows": 100,
+  "shared_rows_all_runs": 100,
+  "pairwise_overlap": {
+    "rtlcoder_synthetic_rule_baseline": {
+      "rtlcoder_synthetic_rule_baseline": 100,
+      "rtlcoder_synthetic_active_model_base_schema": 100,
+      "qwen2_5_coder_7b_base_schema": 100,
+      "qwen2_5_coder_7b_lora_pilot_schema": 100
+    },
+    "rtlcoder_synthetic_active_model_base_schema": {
+      "rtlcoder_synthetic_rule_baseline": 100,
+      "rtlcoder_synthetic_active_model_base_schema": 100,
+      "qwen2_5_coder_7b_base_schema": 100,
+      "qwen2_5_coder_7b_lora_pilot_schema": 100
+    },
+    "qwen2_5_coder_7b_base_schema": {
+      "rtlcoder_synthetic_rule_baseline": 100,
+      "rtlcoder_synthetic_active_model_base_schema": 100,
+      "qwen2_5_coder_7b_base_schema": 100,
+      "qwen2_5_coder_7b_lora_pilot_schema": 100
+    },
+    "qwen2_5_coder_7b_lora_pilot_schema": {
+      "rtlcoder_synthetic_rule_baseline": 100,
+      "rtlcoder_synthetic_active_model_base_schema": 100,
+      "qwen2_5_coder_7b_base_schema": 100,
+      "qwen2_5_coder_7b_lora_pilot_schema": 100
+    }
+  },
+  "missing_by_run": {
+    "rtlcoder_synthetic_rule_baseline": [],
+    "rtlcoder_synthetic_active_model_base_schema": [],
+    "qwen2_5_coder_7b_base_schema": [],
+    "qwen2_5_coder_7b_lora_pilot_schema": []
+  },
+  "largest_score_differences": [
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000032_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000034_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000056_reference_synthetic_width_truncation_output",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 0.96,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 0.96,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000060_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000062_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000072_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000102_reference_synthetic_width_truncation_output",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000125_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000183_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000219_reference_synthetic_width_truncation_output",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 0.96,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 0.96,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000228_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000263_reference_synthetic_wrong_reset_polarity",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000279_reference_synthetic_wrong_reset_polarity",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000282_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000332_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000337_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000344_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000346_reference_synthetic_width_truncation_output",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000360_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    },
+    {
+      "id": "teacher_distill_rtlcoder_resyn27k_000362_reference_synthetic_blocking_nonblocking_swap_in_clocked_block",
+      "score_spread": 0.101667,
+      "scores_by_run": {
+        "qwen2_5_coder_7b_base_schema": 1.0,
+        "qwen2_5_coder_7b_lora_pilot_schema": 1.0,
+        "rtlcoder_synthetic_active_model_base_schema": 1.0,
+        "rtlcoder_synthetic_rule_baseline": 0.898333
+      },
+      "missing_runs": []
+    }
+  ],
+  "errors": [],
+  "warnings": []
+}

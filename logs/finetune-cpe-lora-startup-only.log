@@ -1,0 +1,4 @@
+base_model=Qwen/Qwen2.5-Coder-7B-Instruct
+adapter=/storage/slurm/home/67070501002@cpe.kmutt.ac.th/RTLSpecializer/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora
+alias=qwen2_5_coder_7b_lora_pilot
+settings=temperature:0,max_tokens:2048,timeout:120,response_format_json:true

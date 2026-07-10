@@ -1,0 +1,76 @@
+{
+  "accepted": true,
+  "checks": {
+    "candidate_rows": {
+      "value": 100,
+      "required": 100,
+      "passed": true
+    },
+    "matched_rows": {
+      "value": 100,
+      "required": 100,
+      "passed": true
+    },
+    "missing_candidates": {
+      "value": 0,
+      "required": 0,
+      "passed": true
+    },
+    "extra_candidates": {
+      "value": 0,
+      "required": 0,
+      "passed": true
+    },
+    "parse_error_rows": {
+      "value": 0,
+      "required": 0,
+      "passed": true
+    },
+    "api_error_rows": {
+      "value": 0,
+      "required": 0,
+      "passed": true
+    },
+    "safety_failures": {
+      "value": 0,
+      "required": 0,
+      "passed": true
+    },
+    "mean_score": {
+      "value": 1.0,
+      "required": 0.995,
+      "passed": true
+    },
+    "exact_duplicate_groups": {
+      "value": 0,
+      "required": 0,
+      "passed": true
+    },
+    "mutation_type_mentions": {
+      "value": 99,
+      "required": 98,
+      "passed": true
+    },
+    "mutated_signal_mentions": {
+      "value": 100,
+      "required": 100,
+      "passed": true
+    }
+  },
+  "base_reference": {
+    "base_mean_score": 0.9964,
+    "base_near_duplicate_pairs": 5
+  },
+  "lora_result": {
+    "lora_mean_score": 1.0,
+    "lora_near_duplicate_pairs": 1
+  },
+  "deltas": {
+    "mean_score_delta_vs_base": 0.0036,
+    "near_duplicate_delta": -4
+  },
+  "errors": [],
+  "warnings": [
+    "near-duplicate behavior is reported but is not an automatic failure"
+  ]
+}
