@@ -26,6 +26,13 @@ def runtime_probe_python(remote: str) -> str:
     end = remote.index("\nPY\nthen", start)
     return remote[start:end]
 
+
+def compiler_probe_shell(remote: str) -> str:
+    selection = remote.index("\nselect_cuda_host_compiler\n")
+    start = remote.index("if ! {\n", selection)
+    end = remote.index("\nfi\n", start) + len("\nfi\n")
+    return remote[start:end].replace("\\$", "$")
+
 def test_launcher_is_valid_bash_and_has_fixed_lora_contract():
     assert subprocess.run(["bash","-n",str(SCRIPT)]).returncode==0
     text=SCRIPT.read_text()
@@ -74,8 +81,17 @@ def test_remote_stdout_is_artifact_only_and_rejected_acceptance_is_archived(tmp_
     for line in remote.splitlines():
         if "--json" in line:
             assert ">" in line
-        if "printf" in line:
-            assert ">&2" in line
+        if "printf" in line and ">&2" not in line:
+            assert any(
+                label in line
+                for label in (
+                    "CC=%s",
+                    "CXX=%s",
+                    "NVCC_CCBIN=%s",
+                    "TMPDIR=%s",
+                    "CUDA host compiler must be",
+                )
+            )
     assert "echo " not in remote
 
     stage=tmp_path/"stage"; stage.mkdir(); (stage/"logs").mkdir()
@@ -192,6 +208,214 @@ def test_runtime_probe_is_private_diagnostic_and_archived():
 
     archive = remote[remote.index("\ntar -cf -") :]
     assert "logs/vllm-runtime-probe.log" in archive.splitlines()[1]
+
+
+def test_compiler_selection_and_probe_precede_vllm_and_are_archived():
+    text = SCRIPT.read_text(encoding="utf-8")
+    remote = remote_script()
+    selection = shell_function(remote, "select_cuda_host_compiler")
+
+    assert 'command -v gcc-12 2>/dev/null || true' in selection
+    assert 'command -v g++-12 2>/dev/null || true' in selection
+    assert re.search(
+        r'(?m)^  gcc_major="\\\$\("\\\$gcc_candidate" '
+        r'-dumpfullversion -dumpversion \| cut -d\. -f1\)"$',
+        selection,
+    )
+    assert re.search(
+        r'(?m)^  gxx_major="\\\$\("\\\$gxx_candidate" '
+        r'-dumpfullversion -dumpversion \| cut -d\. -f1\)"$',
+        selection,
+    )
+    assert '[[ "\\$gcc_major" = 12 && "\\$gxx_major" = 12 ]]' in selection
+    assert 'export CC="\\$gcc_candidate"' in selection
+    assert 'export CXX="\\$gxx_candidate"' in selection
+    assert 'export NVCC_CCBIN="\\$gxx_candidate"' in selection
+    assert "allow-unsupported-compiler" not in text
+
+    tmpdir = remote.index('export TMPDIR="\\$stage/cache/tmp"')
+    select_call = remote.index("\nselect_cuda_host_compiler\n", tmpdir)
+    compiler_probe = remote.index("if ! {\n", select_call)
+    compiler_log = remote.index(
+        "} > logs/cuda-host-compiler-probe.log 2>&1", compiler_probe
+    )
+    runtime_probe = remote.index('if ! "\\$vllm_python" - <<\'PY\'', compiler_log)
+    import_vllm = remote.index("import vllm", runtime_probe)
+    serve = remote.index('"\\$vllm_python" -m vllm.entrypoints.cli.main serve')
+    assert tmpdir < select_call < compiler_probe < compiler_log < runtime_probe < import_vllm < serve
+
+    probe = remote[compiler_probe:runtime_probe]
+    assert 'nvcc --version' in probe
+    assert 'nvcc -std=c++17 "\\$TMPDIR/compiler-probe.cu"' in probe
+    assert '"\\$TMPDIR/compiler-probe"' in probe
+    assert "printf 'CUDA host compiler probe failed\\n' >&2" in probe
+    assert "tail -n 200 logs/cuda-host-compiler-probe.log >&2 || true" in probe
+
+    archive_line = remote[remote.index("\ntar -cf -", serve) :].splitlines()[1]
+    assert "logs/cuda-host-compiler-probe.log" in archive_line
+    assert "$TMPDIR/compiler-probe" not in archive_line
+    assert "cache/compiler" not in archive_line
+    assert not re.search(r"(?:^| )cache(?:/| |$)", archive_line)
+
+
+def test_compiler_override_pairing_and_shell_quoting():
+    result = subprocess.run(
+        ["bash", str(SCRIPT), "--host-gcc", "/tmp/gcc-12"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 1
+    assert "both --host-gcc and --host-gxx must be supplied together" in result.stderr
+
+    quote = shell_function(SCRIPT.read_text(encoding="utf-8"), "shell_quote")
+    original = "/tmp/compiler path/it's-$gcc[12]"
+    quoted = subprocess.run(
+        ["bash", "-c", f'{quote}\nshell_quote "$1"', "_", original],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    restored = subprocess.run(
+        ["bash", "-c", f'value={quoted}\nprintf "%s" "$value"'],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert restored == original
+
+
+def test_fake_gcc12_toolchain_passes_selection_and_cuda_probe(tmp_path):
+    remote = remote_script()
+    selection = shell_function(remote, "select_cuda_host_compiler").replace(
+        "\\$", "$"
+    )
+    probe = compiler_probe_shell(remote)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    trace = tmp_path / "trace.log"
+
+    compiler_script = """#!/bin/sh
+printf '%s:%s\\n' "$(basename "$0")" "$*" >> "$TRACE"
+case "$*" in
+  *-dumpfullversion*) printf '12.3.0\\n' ;;
+  *) printf '%s fake version 12.3.0\\n' "$(basename "$0")" ;;
+esac
+"""
+    for name in ("gcc-12", "g++-12"):
+        path = tools / name
+        path.write_text(compiler_script, encoding="utf-8")
+        path.chmod(0o755)
+    nvcc = tools / "nvcc"
+    nvcc.write_text(
+        """#!/bin/sh
+printf 'nvcc:%s\\n' "$*" >> "$TRACE"
+if [ "${1:-}" = --version ]; then printf 'nvcc fake version\\n'; exit 0; fi
+output=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then shift; output=$1; fi
+  shift
+done
+[ -n "$output" ] || exit 2
+printf '#!/bin/sh\\nprintf "compiled-probe-executed\\\\n" >> "$TRACE"\\n' > "$output"
+chmod +x "$output"
+""",
+        encoding="utf-8",
+    )
+    nvcc.chmod(0o755)
+
+    stage = tmp_path / "stage"
+    (stage / "logs").mkdir(parents=True)
+    (stage / "cache/tmp").mkdir(parents=True)
+    harness = f'''set -euo pipefail
+{selection}
+requested_host_gcc=""
+requested_host_gxx=""
+stage=$1
+export PATH="$2:$PATH"
+export TRACE=$3
+export TMPDIR="$stage/cache/tmp"
+cd "$stage"
+select_cuda_host_compiler
+{probe}
+printf 'selected_CC=%s\nselected_CXX=%s\nselected_NVCC_CCBIN=%s\n' \
+  "$CC" "$CXX" "$NVCC_CCBIN"
+'''
+    result = subprocess.run(
+        ["bash", "-c", harness, "_", str(stage), str(tools), str(trace)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"selected_CC={tools / 'gcc-12'}" in result.stdout
+    assert f"selected_CXX={tools / 'g++-12'}" in result.stdout
+    assert f"selected_NVCC_CCBIN={tools / 'g++-12'}" in result.stdout
+
+    compiler_log = (stage / "logs/cuda-host-compiler-probe.log").read_text(
+        encoding="utf-8"
+    )
+    assert f"NVCC_CCBIN={tools / 'g++-12'}" in compiler_log
+    assert f"TMPDIR={stage / 'cache/tmp'}" in compiler_log
+    trace_text = trace.read_text(encoding="utf-8")
+    assert "gcc-12:-dumpfullversion -dumpversion" in trace_text
+    assert "g++-12:-dumpfullversion -dumpversion" in trace_text
+    assert "nvcc:--version" in trace_text
+    assert "nvcc:-std=c++17" in trace_text
+    assert "compiled-probe-executed" in trace_text
+
+
+def test_missing_or_wrong_compiler_fails_before_vllm(tmp_path):
+    selection = shell_function(
+        remote_script(), "select_cuda_host_compiler"
+    ).replace("\\$", "$")
+    missing = subprocess.run(
+        [
+            "/usr/bin/bash",
+            "-c",
+            f'''set -euo pipefail
+{selection}
+requested_host_gcc=""
+requested_host_gxx=""
+PATH=$1
+if select_cuda_host_compiler; then printf 'vllm-started\n'; fi
+exit 1
+''',
+            "_",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert missing.returncode == 1
+    assert "supported GCC 12 compiler was not found" in missing.stderr
+    assert "vllm-started" not in missing.stdout
+
+    gcc = tmp_path / "gcc"
+    gxx = tmp_path / "gxx"
+    gcc.write_text("#!/bin/sh\nprintf '12.2.0\\n'\n", encoding="utf-8")
+    gxx.write_text("#!/bin/sh\nprintf '13.1.0\\n'\n", encoding="utf-8")
+    gcc.chmod(0o755)
+    gxx.chmod(0o755)
+    wrong = subprocess.run(
+        [
+            "/usr/bin/bash",
+            "-c",
+            f'''set -euo pipefail
+{selection}
+requested_host_gcc=$1
+requested_host_gxx=$2
+select_cuda_host_compiler
+printf 'vllm-started\n'
+''',
+            "_",
+            str(gcc),
+            str(gxx),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert wrong.returncode == 1
+    assert "found GCC 12 and G++ 13" in wrong.stderr
+    assert "vllm-started" not in wrong.stdout
 
 
 def test_stage_local_cache_environment_precedes_vllm_import_and_is_not_archived():

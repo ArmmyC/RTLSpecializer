@@ -15,6 +15,9 @@ RULE_RUN="data/eval/runs/rtlcoder_synthetic_rule_baseline"
 HOSTED_RUN="data/eval/runs/rtlcoder_synthetic_active_model_base_schema"
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+shell_quote() {
+  printf '%q' "$1"
+}
 escape_tar_transform_regex() {
   local value="$1" char escaped="" i
   for ((i = 0; i < ${#value}; i++)); do
@@ -56,11 +59,12 @@ usage() { cat <<'EOF'
 Usage: stage_cpe_qwen2_5_coder_7b_lora_eval.sh [--run-eval] [options]
 Default mode validates inputs and planned paths only; it never calls srun or an endpoint.
 Options: --run-eval --job-id ID --keep-stage --source-root PATH --model-source-dir PATH
-         --adapter-source-dir PATH --vllm-python PATH --port PORT
+         --adapter-source-dir PATH --vllm-python PATH --host-gcc PATH --host-gxx PATH
+         --port PORT
 EOF
 }
 
-run_eval=0; keep_stage=0; job_id=""; port=8011
+run_eval=0; keep_stage=0; job_id=""; port=8011; host_gcc=""; host_gxx=""
 source_root="${CPE_RTLSPECIALIZER_ROOT:-$HOME/RTLSpecializer}"
 model_source="${CPE_QWEN_MODEL_DIR:-$HOME/LLMModel/qwen25-coder-7b-instruct/models/Qwen__Qwen2.5-Coder-7B-Instruct}"
 adapter_source=""
@@ -68,13 +72,16 @@ vllm_python="${CPE_VLLM_PYTHON:-$HOME/LLMModel/qwen25-coder-7b-instruct/llm/bin/
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --run-eval) run_eval=1;; --keep-stage) keep_stage=1;;
-    --job-id|--source-root|--model-source-dir|--adapter-source-dir|--vllm-python|--port)
+    --job-id|--source-root|--model-source-dir|--adapter-source-dir|--vllm-python|--host-gcc|--host-gxx|--port)
       [[ $# -ge 2 ]] || die "$1 requires a value"; option="$1"; value="$2"; shift 2
-      case "$option" in --job-id)job_id="$value";;--source-root)source_root="$value";;--model-source-dir)model_source="$value";;--adapter-source-dir)adapter_source="$value";;--vllm-python)vllm_python="$value";;--port)port="$value";;esac
+      case "$option" in --job-id)job_id="$value";;--source-root)source_root="$value";;--model-source-dir)model_source="$value";;--adapter-source-dir)adapter_source="$value";;--vllm-python)vllm_python="$value";;--host-gcc)host_gcc="$value";;--host-gxx)host_gxx="$value";;--port)port="$value";;esac
       continue;;
     -h|--help) usage; exit 0;; *) die "unknown option: $1";;
   esac; shift
 done
+if [[ -n "$host_gcc" || -n "$host_gxx" ]]; then
+  [[ -n "$host_gcc" && -n "$host_gxx" ]] || die "both --host-gcc and --host-gxx must be supplied together"
+fi
 source_root="$(cd "$source_root" && pwd -P)" || die "source root not found"
 [[ -n "$adapter_source" ]] || adapter_source="$source_root/outputs/finetune/qwen2_5_coder_7b_rtl_teacher_distill_lora"
 [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] || die "port must be numeric"
@@ -94,9 +101,13 @@ if [[ "$run_eval" != 1 ]]; then printf 'preflight only; pass --run-eval to alloc
 command -v srun >/dev/null 2>&1 || die "srun is required"
 
 stage="/tmp/rtlspecializer-lora-eval-${USER:-user}-$$"
+host_gcc_remote="$(shell_quote "$host_gcc")"
+host_gxx_remote="$(shell_quote "$host_gxx")"
 remote=$(cat <<EOF
 set -euo pipefail
 stage='$stage'; keep='$keep_stage'; port='$port'; vllm_python="\$stage/vllm-runtime/bin/python3"
+requested_host_gcc=$host_gcc_remote
+requested_host_gxx=$host_gxx_remote
 stop_vllm() {
   if [[ -n "\${vllm_pid:-}" ]]; then
     kill "\$vllm_pid" 2>/dev/null || true
@@ -108,6 +119,38 @@ cleanup() {
   stop_vllm
   [[ "\$keep" = 1 ]] || rm -rf -- "\$stage"
 }
+select_cuda_host_compiler() {
+  local gcc_candidate="" gxx_candidate="" gcc_major gxx_major
+  if [[ -n "\${requested_host_gcc:-}" || -n "\${requested_host_gxx:-}" ]]; then
+    [[ -n "\${requested_host_gcc:-}" && -n "\${requested_host_gxx:-}" ]] || {
+      printf 'both --host-gcc and --host-gxx must be supplied together\n' >&2
+      return 1
+    }
+    gcc_candidate="\$requested_host_gcc"
+    gxx_candidate="\$requested_host_gxx"
+  else
+    gcc_candidate="\$(command -v gcc-12 2>/dev/null || true)"
+    gxx_candidate="\$(command -v g++-12 2>/dev/null || true)"
+  fi
+  [[ -x "\$gcc_candidate" ]] || {
+    printf 'supported GCC 12 compiler was not found\n' >&2
+    return 1
+  }
+  [[ -x "\$gxx_candidate" ]] || {
+    printf 'supported G++ 12 compiler was not found\n' >&2
+    return 1
+  }
+  gcc_major="\$("\$gcc_candidate" -dumpfullversion -dumpversion | cut -d. -f1)"
+  gxx_major="\$("\$gxx_candidate" -dumpfullversion -dumpversion | cut -d. -f1)"
+  [[ "\$gcc_major" = 12 && "\$gxx_major" = 12 ]] || {
+    printf 'CUDA host compiler must be GCC/G++ 12; found GCC %s and G++ %s\n' \
+      "\$gcc_major" "\$gxx_major" >&2
+    return 1
+  }
+  export CC="\$gcc_candidate"
+  export CXX="\$gxx_candidate"
+  export NVCC_CCBIN="\$gxx_candidate"
+}
 trap cleanup EXIT INT TERM
 mkdir -p "\$stage"
 tar -xf - -C "\$stage"
@@ -118,8 +161,11 @@ mkdir -p \
   "\$stage/cache/huggingface" \
   "\$stage/cache/torch" \
   "\$stage/cache/triton" \
-  "\$stage/cache/flashinfer"
+  "\$stage/cache/flashinfer" \
+  "\$stage/cache/compiler" \
+  "\$stage/cache/tmp"
 mkdir -p logs
+export TMPDIR="\$stage/cache/tmp"
 export HOME="\$stage/home"
 export XDG_CACHE_HOME="\$stage/cache/xdg"
 export HF_HOME="\$stage/cache/huggingface"
@@ -132,6 +178,30 @@ export VIRTUAL_ENV="\$stage/vllm-runtime"
 export PATH="\$VIRTUAL_ENV/bin:\$PATH"
 export PYTHONPATH="\$stage"
 export RTLSPEC_EVAL_API_KEY=local-lora-eval
+select_cuda_host_compiler
+if ! {
+  printf 'CC=%s\n' "\$CC"
+  printf 'CXX=%s\n' "\$CXX"
+  printf 'NVCC_CCBIN=%s\n' "\$NVCC_CCBIN"
+  printf 'TMPDIR=%s\n' "\$TMPDIR"
+  "\$CC" --version
+  "\$CXX" --version
+  nvcc --version
+  cat > "\$TMPDIR/compiler-probe.cu" <<'CU'
+__global__ void compiler_probe_kernel() {}
+
+int main() {
+  return 0;
+}
+CU
+  nvcc -std=c++17 "\$TMPDIR/compiler-probe.cu" -o "\$TMPDIR/compiler-probe"
+  "\$TMPDIR/compiler-probe"
+} > logs/cuda-host-compiler-probe.log 2>&1
+then
+  printf 'CUDA host compiler probe failed\n' >&2
+  tail -n 200 logs/cuda-host-compiler-probe.log >&2 || true
+  exit 1
+fi
 if ! "\$vllm_python" - <<'PY' \
   > logs/vllm-runtime-probe.log 2>&1
 import os
@@ -234,7 +304,7 @@ python3 scripts/eval/check_qwen2_5_coder_7b_lora_acceptance.py --lora-metrics '$
 acceptance_status=\$?
 set -e
 stop_vllm
-tar -cf - '$CANDIDATE' '$RAW_OUTPUTS' '$EVAL_RUN' '${REPORT_PREFIX}_comparison.md' '${REPORT_PREFIX}_comparison.json' '${REPORT_PREFIX}_vs_base_diff.md' '${REPORT_PREFIX}_vs_base_diff.json' '${REPORT_PREFIX}_acceptance.md' '${REPORT_PREFIX}_acceptance.json' models.json logs/vllm-runtime-probe.log logs/candidate-generation.json logs/finetune-cpe-lora-eval-vllm.log logs/finetune-cpe-lora-eval-run.log logs/evaluation-command.json logs/comparison-command.json logs/difference-command.json logs/acceptance-command.json
+tar -cf - '$CANDIDATE' '$RAW_OUTPUTS' '$EVAL_RUN' '${REPORT_PREFIX}_comparison.md' '${REPORT_PREFIX}_comparison.json' '${REPORT_PREFIX}_vs_base_diff.md' '${REPORT_PREFIX}_vs_base_diff.json' '${REPORT_PREFIX}_acceptance.md' '${REPORT_PREFIX}_acceptance.json' models.json logs/cuda-host-compiler-probe.log logs/vllm-runtime-probe.log logs/candidate-generation.json logs/finetune-cpe-lora-eval-vllm.log logs/finetune-cpe-lora-eval-run.log logs/evaluation-command.json logs/comparison-command.json logs/difference-command.json logs/acceptance-command.json
 exit "\$acceptance_status"
 EOF
 )
