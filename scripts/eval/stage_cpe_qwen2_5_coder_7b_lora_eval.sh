@@ -109,19 +109,65 @@ cleanup() {
   [[ "\$keep" = 1 ]] || rm -rf -- "\$stage"
 }
 trap cleanup EXIT INT TERM
-mkdir -p "\$stage"; tar -xf - -C "\$stage"; cd "\$stage"; mkdir -p logs
+mkdir -p "\$stage"
+tar -xf - -C "\$stage"
+cd "\$stage"
+mkdir -p \
+  "\$stage/home" \
+  "\$stage/cache/xdg" \
+  "\$stage/cache/huggingface" \
+  "\$stage/cache/torch" \
+  "\$stage/cache/triton" \
+  "\$stage/cache/flashinfer"
+mkdir -p logs
+export HOME="\$stage/home"
+export XDG_CACHE_HOME="\$stage/cache/xdg"
+export HF_HOME="\$stage/cache/huggingface"
+export HUGGINGFACE_HUB_CACHE="\$HF_HOME/hub"
+export TRANSFORMERS_CACHE="\$HF_HOME/transformers"
+export TORCH_HOME="\$stage/cache/torch"
+export TRITON_CACHE_DIR="\$stage/cache/triton"
+export FLASHINFER_WORKSPACE_BASE="\$stage/cache/flashinfer"
 export VIRTUAL_ENV="\$stage/vllm-runtime"
 export PATH="\$VIRTUAL_ENV/bin:\$PATH"
 export PYTHONPATH="\$stage"
 export RTLSPEC_EVAL_API_KEY=local-lora-eval
 if ! "\$vllm_python" - <<'PY' \
   > logs/vllm-runtime-probe.log 2>&1
+import os
+import pathlib
 import sys
 import vllm
 
 print("python_executable:", sys.executable)
 print("python_version:", sys.version)
 print("vllm_version:", vllm.__version__)
+
+for name in (
+    "HOME",
+    "XDG_CACHE_HOME",
+    "HF_HOME",
+    "HUGGINGFACE_HUB_CACHE",
+    "TRANSFORMERS_CACHE",
+    "TORCH_HOME",
+    "TRITON_CACHE_DIR",
+    "FLASHINFER_WORKSPACE_BASE",
+):
+    value = os.environ.get(name)
+    print(f"{name}:", value)
+    if not value:
+        raise RuntimeError(f"{name} is not configured")
+    path = pathlib.Path(value)
+    path.mkdir(parents=True, exist_ok=True)
+    probe = path / ".write-test"
+    probe.write_text("ok", encoding="utf-8")
+    probe.unlink()
+
+from flashinfer.jit import env as flashinfer_env
+
+print("flashinfer_base_dir:", flashinfer_env.FLASHINFER_BASE_DIR)
+print("flashinfer_cache_dir:", flashinfer_env.FLASHINFER_CACHE_DIR)
+print("flashinfer_workspace_dir:", flashinfer_env.FLASHINFER_WORKSPACE_DIR)
 PY
 then
   printf 'staged vLLM runtime probe failed\n' >&2

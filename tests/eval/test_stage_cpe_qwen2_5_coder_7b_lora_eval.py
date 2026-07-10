@@ -1,6 +1,8 @@
 from pathlib import Path
+import os
 import re
 import subprocess
+import sys
 import time
 
 ROOT=Path(__file__).resolve().parents[2]
@@ -16,6 +18,13 @@ def shell_function(text: str, name: str) -> str:
     match = re.search(rf"(?ms)^{name}\(\) \{{\n(.*?)^\}}$", text)
     assert match, f"missing {name} helper"
     return match.group(0)
+
+
+def runtime_probe_python(remote: str) -> str:
+    probe_command = remote.index('if ! "\\$vllm_python" - <<\'PY\'')
+    start = remote.index("import os\n", probe_command)
+    end = remote.index("\nPY\nthen", start)
+    return remote[start:end]
 
 def test_launcher_is_valid_bash_and_has_fixed_lora_contract():
     assert subprocess.run(["bash","-n",str(SCRIPT)]).returncode==0
@@ -169,14 +178,168 @@ def test_runtime_probe_is_private_diagnostic_and_archived():
         r'  > logs/vllm-runtime-probe\.log 2>&1',
         probe,
     )
+    assert 'import os' in probe
+    assert 'import pathlib' in probe
     assert 'import vllm' in probe
     assert 'vllm.__version__' in probe
+    assert 'probe.write_text("ok", encoding="utf-8")' in probe
+    assert 'probe.unlink()' in probe
+    assert 'from flashinfer.jit import env as flashinfer_env' in probe
+    assert 'flashinfer_env.FLASHINFER_WORKSPACE_DIR' in probe
     assert "printf 'staged vLLM runtime probe failed\\n' >&2" in probe
     assert "tail -n 200 logs/vllm-runtime-probe.log >&2 || true" in probe
     assert "exit 1" in probe
 
     archive = remote[remote.index("\ntar -cf -") :]
     assert "logs/vllm-runtime-probe.log" in archive.splitlines()[1]
+
+
+def test_stage_local_cache_environment_precedes_vllm_import_and_is_not_archived():
+    remote = remote_script()
+    stage_setup = remote.index('mkdir -p "\\$stage"')
+    extraction = remote.index('tar -xf - -C "\\$stage"', stage_setup)
+    enter_stage = remote.index('cd "\\$stage"', extraction)
+    cache_mkdir = remote.index('  "\\$stage/home" \\', enter_stage)
+    probe = remote.index('if ! "\\$vllm_python" - <<\'PY\'', cache_mkdir)
+    import_vllm = remote.index("import vllm", probe)
+
+    exports = (
+        'export HOME="\\$stage/home"',
+        'export XDG_CACHE_HOME="\\$stage/cache/xdg"',
+        'export HF_HOME="\\$stage/cache/huggingface"',
+        'export HUGGINGFACE_HUB_CACHE="\\$HF_HOME/hub"',
+        'export TRANSFORMERS_CACHE="\\$HF_HOME/transformers"',
+        'export TORCH_HOME="\\$stage/cache/torch"',
+        'export TRITON_CACHE_DIR="\\$stage/cache/triton"',
+        'export FLASHINFER_WORKSPACE_BASE="\\$stage/cache/flashinfer"',
+    )
+    positions = [remote.index(line, cache_mkdir) for line in exports]
+    virtual_env = remote.index('export VIRTUAL_ENV="\\$stage/vllm-runtime"')
+    assert stage_setup < extraction < enter_stage < cache_mkdir
+    assert positions == sorted(positions)
+    assert cache_mkdir < positions[0] < positions[-1] < virtual_env < probe < import_vllm
+
+    mkdir_block = remote[cache_mkdir:positions[0]]
+    for relative in (
+        "home",
+        "cache/xdg",
+        "cache/huggingface",
+        "cache/torch",
+        "cache/triton",
+        "cache/flashinfer",
+    ):
+        assert f'"\\$stage/{relative}"' in mkdir_block
+
+    environment_block = remote[enter_stage:probe]
+    assert "/storage/slurm/home" not in environment_block
+    assert re.findall(r'(?m)^export HOME=(.*)$', environment_block) == [
+        '"\\$stage/home"'
+    ]
+
+    archive_line = remote[remote.index("\ntar -cf -", probe) :].splitlines()[1]
+    assert "logs/vllm-runtime-probe.log" in archive_line
+    assert not re.search(r"(?:^| )(?:home|cache)(?:/| |$)", archive_line)
+
+
+def test_cleanup_removes_stage_local_caches_without_keep(tmp_path):
+    remote = remote_script()
+    stop = shell_function(remote, "stop_vllm").replace("\\$", "$")
+    cleanup = shell_function(remote, "cleanup").replace("\\$", "$")
+    stage = tmp_path / "stage"
+    (stage / "cache/flashinfer").mkdir(parents=True)
+    (stage / "cache/flashinfer/artifact").write_text("cache", encoding="utf-8")
+    harness = f'''set -euo pipefail
+{stop}
+{cleanup}
+stage=$1
+keep=0
+cleanup
+[[ ! -e "$stage" ]]
+'''
+    result = subprocess.run(
+        ["bash", "-c", harness, "_", str(stage)], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_probe_ignores_unwritable_inherited_home_and_uses_stage_paths(tmp_path):
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    inherited_home = tmp_path / "inherited-home"
+    inherited_home.mkdir()
+    inherited_home.chmod(0)
+
+    (stage / "vllm.py").write_text('__version__ = "0.23.0"\n', encoding="utf-8")
+    flashinfer_jit = stage / "flashinfer/jit"
+    flashinfer_jit.mkdir(parents=True)
+    (stage / "flashinfer/__init__.py").write_text("", encoding="utf-8")
+    (flashinfer_jit / "__init__.py").write_text("", encoding="utf-8")
+    (flashinfer_jit / "env.py").write_text(
+        """import os
+from pathlib import Path
+FLASHINFER_BASE_DIR = Path(os.environ["FLASHINFER_WORKSPACE_BASE"])
+FLASHINFER_CACHE_DIR = FLASHINFER_BASE_DIR / "cache"
+FLASHINFER_WORKSPACE_DIR = FLASHINFER_BASE_DIR / "workspace"
+""",
+        encoding="utf-8",
+    )
+    probe_file = stage / "probe.py"
+    probe_file.write_text(runtime_probe_python(remote_script()), encoding="utf-8")
+
+    harness = r'''set -euo pipefail
+stage=$1
+mkdir -p \
+  "$stage/home" \
+  "$stage/cache/xdg" \
+  "$stage/cache/huggingface" \
+  "$stage/cache/torch" \
+  "$stage/cache/triton" \
+  "$stage/cache/flashinfer"
+export HOME="$stage/home"
+export XDG_CACHE_HOME="$stage/cache/xdg"
+export HF_HOME="$stage/cache/huggingface"
+export HUGGINGFACE_HUB_CACHE="$HF_HOME/hub"
+export TRANSFORMERS_CACHE="$HF_HOME/transformers"
+export TORCH_HOME="$stage/cache/torch"
+export TRITON_CACHE_DIR="$stage/cache/triton"
+export FLASHINFER_WORKSPACE_BASE="$stage/cache/flashinfer"
+export PYTHONPATH="$stage"
+"$2" "$stage/probe.py"
+'''
+    environment = os.environ.copy()
+    environment["HOME"] = str(inherited_home)
+    try:
+        result = subprocess.run(
+            ["bash", "-c", harness, "_", str(stage), sys.executable],
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+    finally:
+        inherited_home.chmod(0o700)
+    assert result.returncode == 0, result.stderr
+
+    evidence = {}
+    for line in result.stdout.splitlines():
+        name, separator, value = line.partition(": ")
+        if separator:
+            evidence[name] = value
+    for name in (
+        "HOME",
+        "XDG_CACHE_HOME",
+        "HF_HOME",
+        "HUGGINGFACE_HUB_CACHE",
+        "TRANSFORMERS_CACHE",
+        "TORCH_HOME",
+        "TRITON_CACHE_DIR",
+        "FLASHINFER_WORKSPACE_BASE",
+        "flashinfer_base_dir",
+        "flashinfer_cache_dir",
+        "flashinfer_workspace_dir",
+    ):
+        resolved = Path(evidence[name]).resolve()
+        assert resolved.is_relative_to(stage.resolve())
+    assert not list(stage.rglob(".write-test"))
 
 
 def test_readiness_structurally_detects_crash_and_reports_bounded_timeout():
