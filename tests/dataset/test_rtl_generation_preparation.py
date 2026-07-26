@@ -1,10 +1,41 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
+from pathlib import Path
 
 from scripts.dataset.rtl_generation_preparation import SourceRow, _task_id, export_generation_normalization_batches
 from tests.dataset.rtl_generation_test_helpers import load_batch, make_checkout
+
+
+def test_manual_normalization_prompt_matches_generation_task_schema() -> None:
+    prompt_path = Path(__file__).resolve().parents[2] / "docs/dataset/llm_rtl_generation_task_normalization_prompt.md"
+    prompt = prompt_path.read_text(encoding="utf-8")
+    for field in (
+        "schema_version", "task_id", "source_id", "source_dataset", "design_family",
+        "language", "specification", "top_module", "interface", "clocking", "reset",
+        "latency_contract", "behavioral_constraints", "assumptions", "ambiguities", "provenance",
+    ):
+        assert f"`{field}`" in prompt or f'"{field}"' in prompt, field
+    for field in ("name", "direction", "declaration", "packed_range", "width_bits", "signed", "description"):
+        assert f"`{field}`" in prompt, field
+    collapsed = " ".join(prompt.split())
+    assert "exactly `clock_signal` and `edge`" in collapsed
+    assert "exactly `signal`, `active_level`, and `synchronous`" in collapsed
+    for field in ("cycles", "min_cycles", "max_cycles", "throughput_cycles", "description"):
+        assert f"`{field}`" in prompt, field
+    assert "do not include a top-level `license`" in prompt
+    assert "provenance.license" in prompt
+    assert "additionalProperties: false" in prompt
+    for forbidden in (
+        "`raw_specification`", "deterministic hint fields", "reference RTL",
+        "testbench content", "private paths", "tool results", "expected vectors",
+        "generated RTL",
+    ):
+        assert forbidden in prompt, forbidden
+    assert not re.search(r"\b(?:return|include|output|set|emit)\s+(?:the\s+)?[`\"]constraints[`\"]", prompt, re.IGNORECASE)
+    assert '"constraints":' not in prompt
 
 
 def test_export_separates_public_and_private_bytes_and_is_deterministic(tmp_path) -> None:
