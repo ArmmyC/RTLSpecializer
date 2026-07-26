@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_generation_task_v0.1.schema.json",
+  "title": "RTL generation task v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "task_id", "source_id", "source_dataset", "design_family",
+    "language", "specification", "top_module", "interface", "clocking", "reset",
+    "latency_contract", "behavioral_constraints", "assumptions", "ambiguities", "provenance"
+  ],
+  "properties": {
+    "schema_version": {"const": "rtl_generation_task_v0.1"},
+    "task_id": {"type": "string", "minLength": 1},
+    "source_id": {"type": "string", "minLength": 1},
+    "source_dataset": {"type": "string", "minLength": 1},
+    "design_family": {"type": "string", "minLength": 1},
+    "language": {"const": "systemverilog"},
+    "specification": {"type": "string"},
+    "top_module": {"type": ["string", "null"], "pattern": "^[A-Za-z_][A-Za-z0-9_$]*$"},
+    "interface": {
+      "type": "object", "additionalProperties": false, "required": ["ports"],
+      "properties": {
+        "ports": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["name", "direction", "declaration", "packed_range", "width_bits", "signed", "description"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_$]*$"},
+              "direction": {"enum": ["input", "output", "inout"]},
+              "declaration": {"type": "string"},
+              "packed_range": {"type": ["string", "null"]},
+              "width_bits": {"type": ["integer", "null"], "minimum": 1},
+              "signed": {"type": "boolean"},
+              "description": {"type": ["string", "null"]}
+            }
+          }
+        }
+      }
+    },
+    "clocking": {
+      "type": "object", "additionalProperties": false, "required": ["clock_signal", "edge"],
+      "properties": {"clock_signal": {"type": ["string", "null"]}, "edge": {"enum": ["posedge", "negedge", null]}}
+    },
+    "reset": {
+      "type": "object", "additionalProperties": false, "required": ["signal", "active_level", "synchronous"],
+      "properties": {"signal": {"type": ["string", "null"]}, "active_level": {"enum": ["high", "low", null]}, "synchronous": {"type": ["boolean", "null"]}}
+    },
+    "latency_contract": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "properties": {
+        "cycles": {"type": ["integer", "null"], "minimum": 0},
+        "min_cycles": {"type": ["integer", "null"], "minimum": 0},
+        "max_cycles": {"type": ["integer", "null"], "minimum": 0},
+        "throughput_cycles": {"type": ["integer", "null"], "minimum": 1},
+        "description": {"type": ["string", "null"]}
+      }
+    },
+    "behavioral_constraints": {"type": "array", "items": {"type": "string"}},
+    "assumptions": {"type": "array", "items": {"type": "string"}},
+    "ambiguities": {
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {"type": "string"},
+          {"type": "object", "additionalProperties": false, "required": ["statement"], "properties": {"topic": {"type": ["string", "null"]}, "statement": {"type": "string"}, "evidence": {"type": ["string", "null"]}}}
+        ]
+      }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["public_dataset_name", "public_dataset_url", "source_commit", "license", "original_source_id"],
+      "properties": {
+        "public_dataset_name": {"type": "string", "minLength": 1},
+        "public_dataset_url": {"type": ["string", "null"]},
+        "source_commit": {"type": ["string", "null"]},
+        "license": {"type": "string", "minLength": 1},
+        "original_source_id": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

@@ -9,6 +9,20 @@ Evidence-aware, dataset-first tooling for building structured RTL specialist tra
 > [!IMPORTANT]
 > RTLSpecializer is dataset preparation, review, release, and evaluation tooling. Its heuristic scores and teacher-distillation pilots are not proof of RTL correctness, equivalence, timing, area, activity, or power.
 
+RTL generation-task preparation is a separate local-only path:
+
+```text
+existing source data
+  → public generation-normalization batch
+  → manual LLM normalization into rtl_generation_task_v0.1
+  → deterministic validation
+  → private verification-asset join
+```
+
+It keeps reference RTL and testbenches private and does not call models, execute RTL, run RTLBench/EDA, or train models. The next milestone will add teacher RTL generation and RTLBench candidate verification; this workflow does not implement them. See [docs/dataset/rtl_generation_task_preparation_workflow.md](docs/dataset/rtl_generation_task_preparation_workflow.md).
+
+Clean `rtl_task_v0.1` rows can be exported into small local teacher-answer batches for manual ChatGPT/Claude/larger-teacher generation of conservative `rtl_answer_v0.1`, then validated and merged into draft chat rows. See [docs/dataset/rtl_answer_teacher_generation_workflow.md](docs/dataset/rtl_answer_teacher_generation_workflow.md).
+
 ## Overview
 
 RTL specialists need more than syntactically valid code. They need to reason about clock-cycle behavior, reset semantics, state, area, switching activity, evidence quality, and the limits of what a tool result can support.
