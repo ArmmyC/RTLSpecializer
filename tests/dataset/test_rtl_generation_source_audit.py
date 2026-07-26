@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
-from scripts.dataset.rtl_generation_preparation import audit_source_rows, write_audit_reports
+from scripts.dataset.rtl_generation_preparation import _repository_path_state, audit_source_rows, write_audit_reports
 from tests.dataset.rtl_generation_test_helpers import make_checkout
 
 
@@ -56,3 +57,9 @@ def test_audit_classifies_unconfirmed_license_and_missing_testbench(tmp_path) ->
     report = audit_source_rows(source)
     assert report["readiness_categories"] == {"license_blocked": 1}
     assert report["rows_with_placeholder_or_missing_license"] == 1
+
+
+def test_audit_path_classification_is_conservative() -> None:
+    assert _repository_path_state(Path("data/.local_data/verilog-eval-main/dataset_spec-to-rtl")) == "ignored_local"
+    assert _repository_path_state(Path("README.md")) == "tracked"
+    assert _repository_path_state(Path("/external/private/source")) == "untracked_or_unknown"

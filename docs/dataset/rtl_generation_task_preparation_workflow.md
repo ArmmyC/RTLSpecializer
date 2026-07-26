@@ -36,11 +36,15 @@ python scripts/dataset/export_rtl_generation_normalization_batches.py \
   --batch-size 5 --limit 5 --json
 ```
 
-The public batch contains task IDs, source IDs, provenance/license metadata,
-exact raw specification text, and conservative top/interface/clock/reset hints.
-It contains no reference RTL, testbench, support-file contents, expected
-vectors, answers, reports, logs, or private workspace paths. Before writing, the
-exporter checks the serialized public payload for full private-content leakage.
+The public batch contains a logical `source_label` from source metadata (for
+example `VerilogEval`), task IDs, source IDs, provenance/license metadata, exact
+raw specification text, and conservative top/interface/clock/reset hints. It
+does not contain a filesystem-derived `input` field. It contains no reference
+RTL, testbench, support-file contents, expected vectors, answers, reports, logs,
+or private workspace paths. Before writing, the exporter rejects exact,
+resolved, and repository-relative local input/output paths, `.local_data`,
+absolute/Windows/workspace paths, and private content. Public provenance URLs
+remain allowed.
 
 The private output contains:
 
@@ -89,8 +93,13 @@ python scripts/dataset/assemble_rtl_generation_inputs.py \
   --json
 ```
 
-Assembly requires an exact one-to-one join, deterministic ordering, valid
-relative private paths, and safe atomic output replacement. It does not execute
-the copied source. The next milestone will add teacher RTL generation and
-RTLBench candidate verification; those features are intentionally out of scope
-here.
+Assembly is per normalized batch. It accepts the full private manifest as a
+superset, requires exactly one matching asset for every normalized task, rejects
+duplicate or missing matches, and writes only matching assets. The result reports
+`unused_private_asset_count` for private records belonging to other batches.
+It validates normalized nested task fields, private POSIX path contracts, and
+recomputes SHA-256 over the specification and every private file before writing.
+Missing files, symlinks, path escapes, and hash mismatches fail assembly. It does
+not execute the copied source. The next milestone will add teacher RTL generation
+and RTLBench candidate verification; those features are intentionally out of
+scope here.

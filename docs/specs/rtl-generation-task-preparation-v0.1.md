@@ -67,17 +67,31 @@ RTLCoder rows without a deterministic testbench are accepted only for audit
 metadata or export as non-ready rows; they are never treated as executable-ready
 by this feature.
 
-The public normalization batch contains only source IDs, provenance, exact raw
-specification text, deterministic hints, and warnings. The private workspace
-contains copied reference/testbench/support bytes and a JSONL asset manifest.
+The public normalization batch contains only a logical `source_label`, source
+IDs, provenance, exact raw specification text, deterministic hints, and
+warnings. It never contains an `input` path. The private workspace contains
+copied reference/testbench/support bytes and a JSONL asset manifest.
 
 ## 5. Deterministic task identity and hints
 
 For each source row, `task_id` is the stable SHA-256-derived identifier
-`rtlgen_<source-dataset-slug>_<source-id-slug>_<digest>`, where the digest is
-computed from the exact source dataset name, source ID, and source commit or
-license identity. The same source row always receives the same task ID; duplicate
-source IDs are rejected before output.
+`rtlgen_<source-dataset-slug>_<source-id-slug>_<digest>`. The digest is the
+SHA-256 of stable, sorted-key JSON containing exactly:
+
+```json
+{
+  "source_dataset": "...",
+  "source_id": "...",
+  "source_commit": "... or null",
+  "license_identity": "normalized license label"
+}
+```
+
+The source dataset and source ID are exact metadata values. A source commit is
+included when available; normalized license identity is the fallback identity
+component. Provenance notes, local paths, and URLs are excluded. The same
+canonical identity always receives the same task ID; changing source ID or
+commit changes it, while changing notes or local checkout path does not.
 
 Prompt text is preserved byte-for-byte as decoded UTF-8 text and is not prefixed,
 summarized, or moved into a tool-evidence field. Top-module and interface hints
@@ -90,9 +104,15 @@ behavior.
 - Source, output, private workspace, and managed files must not be symlinks.
 - Relative private paths must remain below the private workspace root and must not
   contain traversal components or absolute paths.
+- Private paths use normalized POSIX separators only. Reference and testbench
+  paths are beneath `workspace/<task_id>/`; support paths are beneath
+  `workspace/<task_id>/support/`. Manifest hashes are lowercase SHA-256 values,
+  and support hash paths exactly match the support-file list.
 - Public JSON is checked for full reference RTL, full testbench, support contents,
-  private workspace paths, forbidden private field names, expected vectors,
-  answer schemas, and tool-result fields before it is written.
+  exact/resolved/repository-relative input and output paths, `.local_data`,
+  absolute/Windows/workspace paths, forbidden private field names, expected
+  vectors, answer schemas, and tool-result fields before it is written. Public
+  provenance URLs remain allowed.
 - Files are written with stable JSON formatting, newline termination, and atomic
   replacement after all preflight checks pass.
 - `--force` replaces only exact managed outputs. Unknown files remain untouched.
@@ -127,8 +147,12 @@ python scripts/dataset/assemble_rtl_generation_inputs.py \
 The exporter supports positive `--batch-size`, optional `--limit`, deterministic
 `--start-index`, and safe `--force`. It refuses zero exported rows. Audit output
 is local-only JSON and Markdown. Validation never rewrites its inputs. Assembly
-requires a complete one-to-one task/asset join and has guarded `--force` output
-replacement.
+accepts a private manifest superset: every normalized task must have exactly one
+asset, duplicate or missing task IDs fail, and extra private records are omitted
+from the assembled manifest and reported as `unused_private_asset_count`.
+Before writing, assembly recomputes the specification, reference RTL,
+testbench, and support-file byte hashes and rejects any mismatch, missing file,
+symlink, or path escape.
 
 ## 8. Verification
 

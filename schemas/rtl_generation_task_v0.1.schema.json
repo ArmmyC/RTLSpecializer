@@ -49,6 +49,7 @@
     },
     "latency_contract": {
       "type": ["object", "null"], "additionalProperties": false,
+      "required": ["cycles", "min_cycles", "max_cycles", "throughput_cycles", "description"],
       "properties": {
         "cycles": {"type": ["integer", "null"], "minimum": 0},
         "min_cycles": {"type": ["integer", "null"], "minimum": 0},

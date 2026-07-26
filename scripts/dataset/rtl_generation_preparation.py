@@ -14,6 +14,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import tempfile
 from collections import Counter
 from copy import deepcopy
@@ -85,6 +86,18 @@ LICENSE_PLACEHOLDER_RE = re.compile(
     r"see[_ -]?upstream|not[_ -]?provided|missing)(?:$|[_ .-])",
     re.IGNORECASE,
 )
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+ASSET_FIELDS = {
+    "schema_version", "task_id", "source_id", "top_module",
+    "verification_readiness", "readiness_reasons", "reference_rtl_path",
+    "testbench_path", "support_files", "input_hashes",
+}
+ASSET_HASH_FIELDS = {
+    "source_prompt_sha256", "reference_rtl_sha256", "testbench_sha256", "support_files",
+}
+PORT_FIELDS = {"name", "direction", "declaration", "packed_range", "width_bits", "signed", "description"}
+PROVENANCE_FIELDS = {"public_dataset_name", "public_dataset_url", "source_commit", "license", "original_source_id"}
 
 
 @dataclass
@@ -139,6 +152,13 @@ def _license_is_usable(value: Any) -> bool:
     if not isinstance(value, str) or not value.strip():
         return False
     return LICENSE_PLACEHOLDER_RE.search(value.strip()) is None
+
+
+def _license_identity(value: str | None) -> str:
+    """Return the stable identity form of a license label, without source paths."""
+    if not isinstance(value, str):
+        return "unknown"
+    return re.sub(r"\s+", " ", value.strip()).casefold() or "unknown"
 
 
 def _license_from_checkout(root: Path, fallback: str | None) -> str | None:
@@ -531,7 +551,14 @@ def discover_source_rows(input_path: Path) -> tuple[list[SourceRow], list[str]]:
 def _task_id(row: SourceRow) -> str:
     dataset_slug = re.sub(r"[^A-Za-z0-9]+", "_", row.source_dataset).strip("_").lower() or "source"
     source_slug = re.sub(r"[^A-Za-z0-9]+", "_", row.source_id).strip("_").lower() or "row"
-    identity = _json_bytes({"dataset": row.source_dataset, "source_id": row.source_id, "provenance": row.provenance})
+    source_commit = row.source_commit if isinstance(row.source_commit, str) else row.provenance.get("source_commit")
+    license_value = row.license if row.license is not None else row.provenance.get("license")
+    identity = _json_bytes({
+        "source_dataset": row.source_dataset,
+        "source_id": row.source_id,
+        "source_commit": source_commit if isinstance(source_commit, str) else None,
+        "license_identity": _license_identity(license_value),
+    })
     return f"rtlgen_{dataset_slug}_{source_slug}_{_sha256(identity)[:12]}"
 
 
@@ -606,7 +633,21 @@ def _walk_keys(value: Any, prefix: str = "") -> Iterable[tuple[str, str]]:
             yield from _walk_keys(item, f"{prefix}[{index}]")
 
 
-def _public_leak_errors(payload: Any, rows: list[SourceRow], private_root: Path | None) -> list[str]:
+def _path_variants(path: Path) -> set[str]:
+    values = {str(path), str(path.resolve())}
+    try:
+        values.add(str(path.resolve().relative_to(Path.cwd().resolve())))
+    except (OSError, ValueError):
+        pass
+    return {value for value in values if value}
+
+
+def _public_leak_errors(
+    payload: Any,
+    rows: list[SourceRow],
+    private_root: Path | None,
+    input_path: Path | None = None,
+) -> list[str]:
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     public_strings = [value for _, value in _walk_strings(payload)]
     errors: list[str] = []
@@ -617,13 +658,26 @@ def _public_leak_errors(payload: Any, rows: list[SourceRow], private_root: Path 
         for name, value in row.support_files.items():
             if value and (value.decode("utf-8", errors="ignore") in serialized or any(value.decode("utf-8", errors="ignore") in public_value for public_value in public_strings)):
                 errors.append(f"support file content would be present in public batch: {name}")
+    path_values: set[str] = set()
     if private_root is not None:
-        private_values = {str(private_root), _relative_display(private_root), private_root.name}
-        private_values.update({f"workspace/{x.name}" for x in private_root.iterdir()} if private_root.exists() and private_root.is_dir() else set())
-        for value in sorted(x for x in private_values if x):
-            if value in serialized:
-                errors.append("private workspace path would be present in public batch")
-                break
+        path_values.update(_path_variants(private_root))
+        path_values.update({private_root.name, "workspace"})
+    if input_path is not None:
+        path_values.update(_path_variants(input_path))
+        # Checkout directory names are useful leak sentinels, but URLs remain
+        # legitimate provenance values and are handled separately below.
+        path_values.update(part for part in input_path.parts[-2:] if part not in {"/", "", "data", ".local_data"} and len(part) > 2)
+    for value in sorted(path_values, key=len, reverse=True):
+        if value and any(value in public_value and "://" not in public_value for public_value in public_strings):
+            errors.append("local input or private workspace path would be present in public batch")
+            break
+    for value in public_strings:
+        if ".local_data" in value and "://" not in value:
+            errors.append(".local_data path would be present in public batch")
+        if WINDOWS_DRIVE_RE.match(value) or value.startswith("/") and "://" not in value:
+            errors.append("absolute or Windows path would be present in public batch")
+        if ("workspace/" in value or "workspace\\" in value) and "://" not in value:
+            errors.append("private workspace path would be present in public batch")
     for path, key in _walk_keys(payload):
         if key.lower() in PRIVATE_FIELD_NAMES:
             errors.append(f"forbidden private field in public payload: {path}")
@@ -834,9 +888,22 @@ def export_generation_normalization_batches(
     assets = [_asset_record(row, task_id) for row, task_id in tasks]
     payloads: list[tuple[Path, dict[str, Any]]] = []
     for index, offset in enumerate(range(0, len(tasks), batch_size), 1):
-        public_rows = [_public_row(row, task_id) for row, task_id in tasks[offset:offset + batch_size]]
-        payload = {"batch_schema_version":GENERATION_BATCH_SCHEMA_VERSION,"created_by":"export_rtl_generation_normalization_batches","input":_relative_display(input_path),"batch_index":index,"batch_count":batch_count,"row_count":len(public_rows),"start_index":start_index+offset,"prompt_template":PROMPT_TEMPLATE_PATH,"rows":public_rows}
-        leakage = _public_leak_errors(payload, [row for row,_ in tasks[offset:offset + batch_size]], private_output_dir)
+        batch_tasks = tasks[offset:offset + batch_size]
+        public_rows = [_public_row(row, task_id) for row, task_id in batch_tasks]
+        source_labels = sorted({row.source_dataset for row, _ in batch_tasks})
+        source_label = source_labels[0] if len(source_labels) == 1 else ",".join(source_labels)
+        payload = {
+            "batch_schema_version": GENERATION_BATCH_SCHEMA_VERSION,
+            "created_by": "export_rtl_generation_normalization_batches",
+            "source_label": source_label,
+            "batch_index": index,
+            "batch_count": batch_count,
+            "row_count": len(public_rows),
+            "start_index": start_index + offset,
+            "prompt_template": PROMPT_TEMPLATE_PATH,
+            "rows": public_rows,
+        }
+        leakage = _public_leak_errors(payload, [row for row, _ in batch_tasks], private_output_dir, input_path)
         if leakage:
             return {"ok":False,"input":_relative_display(input_path),"output_dir":_relative_display(output_dir),"private_output_dir":_relative_display(private_output_dir),"exported_rows":0,"batch_files":[],"errors":leakage,"warnings":[]}, 1
         payloads.append((output_dir / f"batch_{index:03d}.json", payload))
@@ -881,79 +948,134 @@ def _raw_rows(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
 
 def _task_shape_errors(task: dict[str, Any], raw: dict[str, Any] | None = None, private_assets: dict[str, dict[str, Any]] | None = None) -> list[str]:
     errors: list[str] = []
-    expected={"schema_version","task_id","source_id","source_dataset","design_family","language","specification","top_module","interface","clocking","reset","latency_contract","behavioral_constraints","assumptions","ambiguities","provenance"}
-    unknown=sorted(set(task)-expected)
-    errors.extend(f"unknown task field: {key}" for key in unknown)
-    required=expected-set(task)
-    errors.extend(f"missing task field: {key}" for key in sorted(required))
-    if task.get("schema_version") != GENERATION_TASK_SCHEMA_VERSION: errors.append("wrong schema version")
-    for key in ("task_id","source_id","source_dataset","design_family","language"):
-        if key in task and (not isinstance(task[key],str) or not task[key].strip()): errors.append(f"{key} must be a non-empty string")
-    if task.get("language") != "systemverilog": errors.append("language must be systemverilog")
-    if "top_module" in task and task["top_module"] is not None and (not isinstance(task["top_module"],str) or not IDENTIFIER_RE.fullmatch(task["top_module"])): errors.append("invalid module name")
-    if not isinstance(task.get("specification"),str): errors.append("specification must be a string")
-    interface=task.get("interface")
-    if not isinstance(interface,dict) or set(interface)-{"ports"} or not isinstance(interface.get("ports"),list): errors.append("interface must contain only a ports array")
+    expected = {"schema_version", "task_id", "source_id", "source_dataset", "design_family", "language", "specification", "top_module", "interface", "clocking", "reset", "latency_contract", "behavioral_constraints", "assumptions", "ambiguities", "provenance"}
+    errors.extend(f"unknown task field: {key}" for key in sorted(set(task) - expected))
+    errors.extend(f"missing task field: {key}" for key in sorted(expected - set(task)))
+    if task.get("schema_version") != GENERATION_TASK_SCHEMA_VERSION:
+        errors.append("wrong schema version")
+    for key in ("task_id", "source_id", "source_dataset", "design_family", "language"):
+        if key in task and (not isinstance(task[key], str) or not task[key].strip()):
+            errors.append(f"{key} must be a non-empty string")
+    if task.get("language") != "systemverilog":
+        errors.append("language must be systemverilog")
+    if "top_module" in task and task["top_module"] is not None and (not isinstance(task["top_module"], str) or not IDENTIFIER_RE.fullmatch(task["top_module"])):
+        errors.append("invalid module name")
+    if not isinstance(task.get("specification"), str):
+        errors.append("specification must be a string")
+
+    interface = task.get("interface")
+    interface_ports: list[dict[str, Any]] = []
+    if not isinstance(interface, dict) or set(interface) != {"ports"} or not isinstance(interface.get("ports"), list):
+        errors.append("interface must have exactly a ports array")
     else:
-        names=set()
-        for index,port in enumerate(interface["ports"]):
-            if not isinstance(port,dict): errors.append(f"interface port {index} must be an object"); continue
-            allowed={"name","direction","declaration","packed_range","width_bits","signed","description"}
-            errors.extend(f"unknown interface port field: {key}" for key in sorted(set(port)-allowed))
-            if not isinstance(port.get("name"),str) or not IDENTIFIER_RE.fullmatch(port.get("name","")): errors.append(f"invalid port name at index {index}")
-            elif port["name"] in names: errors.append(f"duplicate port name: {port['name']}")
-            names.add(port.get("name"))
-            if port.get("direction") not in {"input","output","inout"}: errors.append(f"invalid port direction at index {index}")
-            if not isinstance(port.get("declaration"),str): errors.append(f"port declaration must be a string at index {index}")
-            if port.get("packed_range") is not None and not isinstance(port.get("packed_range"),str): errors.append(f"packed_range must be string or null at index {index}")
-            if port.get("width_bits") is not None and (not isinstance(port.get("width_bits"),int) or port.get("width_bits")<1): errors.append(f"invalid width_bits at index {index}")
-            if not isinstance(port.get("signed"),bool): errors.append(f"signed must be boolean at index {index}")
-            if port.get("description") is not None and not isinstance(port.get("description"),str): errors.append(f"description must be string or null at index {index}")
-    for block, allowed in (("clocking",{"clock_signal","edge"}), ("reset",{"signal","active_level","synchronous"})):
-        value=task.get(block)
-        if not isinstance(value,dict) or set(value)-allowed: errors.append(f"{block} has unknown or missing fields")
-        elif block=="clocking":
-            if value.get("clock_signal") is not None and (not isinstance(value["clock_signal"],str) or not IDENTIFIER_RE.fullmatch(value["clock_signal"])): errors.append("invalid clock signal")
-            if value.get("edge") not in {None,"posedge","negedge"}: errors.append("invalid clock edge")
-        else:
-            if value.get("signal") is not None and (not isinstance(value["signal"],str) or not IDENTIFIER_RE.fullmatch(value["signal"])): errors.append("invalid reset signal")
-            if value.get("active_level") not in {None,"high","low"}: errors.append("invalid reset active level")
-            if value.get("synchronous") is not None and not isinstance(value.get("synchronous"),bool): errors.append("reset synchronous must be boolean or null")
-    for key in ("behavioral_constraints","assumptions"):
-        if not isinstance(task.get(key),list):
+        names: set[str] = set()
+        for index, port in enumerate(interface["ports"]):
+            if not isinstance(port, dict):
+                errors.append(f"interface port {index} must be an object")
+                continue
+            missing = PORT_FIELDS - set(port)
+            errors.extend(f"missing interface port field: {key}" for key in sorted(missing))
+            errors.extend(f"unknown interface port field: {key}" for key in sorted(set(port) - PORT_FIELDS))
+            if not isinstance(port.get("name"), str) or not IDENTIFIER_RE.fullmatch(port.get("name", "")):
+                errors.append(f"invalid port name at index {index}")
+            elif port["name"] in names:
+                errors.append(f"duplicate port name: {port['name']}")
+            else:
+                names.add(port["name"])
+            if port.get("direction") not in {"input", "output", "inout"}:
+                errors.append(f"invalid port direction at index {index}")
+            if not isinstance(port.get("declaration"), str):
+                errors.append(f"port declaration must be a string at index {index}")
+            if port.get("packed_range") is not None and not isinstance(port.get("packed_range"), str):
+                errors.append(f"packed_range must be string or null at index {index}")
+            if port.get("width_bits") is not None and (type(port.get("width_bits")) is not int or port["width_bits"] < 1):
+                errors.append(f"invalid width_bits at index {index}")
+            if not isinstance(port.get("signed"), bool):
+                errors.append(f"signed must be boolean at index {index}")
+            if port.get("description") is not None and not isinstance(port.get("description"), str):
+                errors.append(f"description must be string or null at index {index}")
+            interface_ports.append(port)
+
+    clocking = task.get("clocking")
+    if not isinstance(clocking, dict) or set(clocking) != {"clock_signal", "edge"}:
+        errors.append("clocking must have exactly clock_signal and edge")
+    else:
+        if clocking["clock_signal"] is not None and (not isinstance(clocking["clock_signal"], str) or not IDENTIFIER_RE.fullmatch(clocking["clock_signal"])):
+            errors.append("invalid clock signal")
+        if clocking["edge"] not in {None, "posedge", "negedge"}:
+            errors.append("invalid clock edge")
+
+    reset = task.get("reset")
+    if not isinstance(reset, dict) or set(reset) != {"signal", "active_level", "synchronous"}:
+        errors.append("reset must have exactly signal, active_level, and synchronous")
+    else:
+        if reset["signal"] is not None and (not isinstance(reset["signal"], str) or not IDENTIFIER_RE.fullmatch(reset["signal"])):
+            errors.append("invalid reset signal")
+        if reset["active_level"] not in {None, "high", "low"}:
+            errors.append("invalid reset active level")
+        if reset["synchronous"] is not None and not isinstance(reset["synchronous"], bool):
+            errors.append("reset synchronous must be boolean or null")
+
+    port_directions = {port.get("name"): port.get("direction") for port in interface_ports if isinstance(port.get("name"), str)}
+    if isinstance(clocking, dict) and clocking.get("clock_signal") is not None and port_directions.get(clocking.get("clock_signal")) not in {"input", "inout"}:
+        errors.append("clock signal must name an input or inout port")
+    if isinstance(reset, dict) and reset.get("signal") is not None and port_directions.get(reset.get("signal")) not in {"input", "inout"}:
+        errors.append("reset signal must name an input or inout port")
+
+    for key in ("behavioral_constraints", "assumptions"):
+        if not isinstance(task.get(key), list):
             errors.append(f"{key} must be an array")
-        elif any(not isinstance(item,str) for item in task[key]):
+        elif any(not isinstance(item, str) for item in task[key]):
             errors.append(f"{key} items must be strings")
-    latency=task.get("latency_contract")
+    latency = task.get("latency_contract")
     if latency is not None:
-        if not isinstance(latency,dict):
+        allowed_latency = {"cycles", "min_cycles", "max_cycles", "throughput_cycles", "description"}
+        if not isinstance(latency, dict):
             errors.append("latency_contract must be an object or null")
         else:
-            allowed_latency={"cycles","min_cycles","max_cycles","throughput_cycles","description"}
-            errors.extend(f"unknown latency field: {key}" for key in sorted(set(latency)-allowed_latency))
-            for key in allowed_latency-{"description"}:
-                if key in latency and latency[key] is not None and (not isinstance(latency[key],int) or latency[key] < (1 if key=="throughput_cycles" else 0)):
+            errors.extend(f"missing latency field: {key}" for key in sorted(allowed_latency - set(latency)))
+            errors.extend(f"unknown latency field: {key}" for key in sorted(set(latency) - allowed_latency))
+            for key in allowed_latency - {"description"}:
+                if key in latency and latency[key] is not None and (type(latency[key]) is not int or latency[key] < (1 if key == "throughput_cycles" else 0)):
                     errors.append(f"invalid latency field: {key}")
-            if "description" in latency and latency["description"] is not None and not isinstance(latency["description"],str): errors.append("latency description must be string or null")
-    ambiguities=task.get("ambiguities")
-    if not isinstance(ambiguities,list): errors.append("ambiguities must be an array")
+            if "description" in latency and latency["description"] is not None and not isinstance(latency["description"], str):
+                errors.append("latency description must be string or null")
+            minimum, maximum, cycles = latency.get("min_cycles"), latency.get("max_cycles"), latency.get("cycles")
+            if type(minimum) is int and type(maximum) is int and minimum > maximum:
+                errors.append("latency min_cycles must not exceed max_cycles")
+            if type(cycles) is int and type(minimum) is int and cycles < minimum:
+                errors.append("latency cycles conflicts with min_cycles")
+            if type(cycles) is int and type(maximum) is int and cycles > maximum:
+                errors.append("latency cycles conflicts with max_cycles")
+
+    ambiguities = task.get("ambiguities")
+    if not isinstance(ambiguities, list):
+        errors.append("ambiguities must be an array")
     else:
-        for index,item in enumerate(ambiguities):
-            if not isinstance(item,(str,dict)): errors.append(f"ambiguity {index} must be a string or object")
-            if isinstance(item,dict):
-                allowed={"topic","statement","evidence"}
-                errors.extend(f"unknown ambiguity field: {key}" for key in sorted(set(item)-allowed))
-                if not isinstance(item.get("statement"),str) or not item["statement"].strip(): errors.append(f"ambiguity {index} needs a statement")
-    provenance=task.get("provenance")
-    p_expected={"public_dataset_name","public_dataset_url","source_commit","license","original_source_id"}
-    if not isinstance(provenance,dict): errors.append("provenance must be an object")
+        for index, item in enumerate(ambiguities):
+            if not isinstance(item, (str, dict)):
+                errors.append(f"ambiguity {index} must be a string or object")
+            elif isinstance(item, dict):
+                allowed = {"topic", "statement", "evidence"}
+                errors.extend(f"unknown ambiguity field: {key}" for key in sorted(set(item) - allowed))
+                if not isinstance(item.get("statement"), str) or not item["statement"].strip():
+                    errors.append(f"ambiguity {index} needs a statement")
+                for key in ("topic", "evidence"):
+                    if key in item and item[key] is not None and not isinstance(item[key], str):
+                        errors.append(f"ambiguity {index}.{key} must be string or null")
+
+    provenance = task.get("provenance")
+    if not isinstance(provenance, dict):
+        errors.append("provenance must be an object")
     else:
-        errors.extend(f"unknown provenance field: {key}" for key in sorted(set(provenance)-p_expected))
-        errors.extend(f"missing provenance field: {key}" for key in sorted(p_expected-set(provenance)))
-        for key in ("public_dataset_name","license","original_source_id"):
-            if key in provenance and (not isinstance(provenance[key],str) or not provenance[key]): errors.append(f"provenance.{key} must be non-empty")
-        for key in ("public_dataset_url","source_commit"):
-            if key in provenance and provenance[key] is not None and not isinstance(provenance[key],str): errors.append(f"provenance.{key} must be string or null")
+        errors.extend(f"unknown provenance field: {key}" for key in sorted(set(provenance) - PROVENANCE_FIELDS))
+        errors.extend(f"missing provenance field: {key}" for key in sorted(PROVENANCE_FIELDS - set(provenance)))
+        for key in ("public_dataset_name", "license", "original_source_id"):
+            if key in provenance and (not isinstance(provenance[key], str) or not provenance[key]):
+                errors.append(f"provenance.{key} must be non-empty")
+        for key in ("public_dataset_url", "source_commit"):
+            if key in provenance and provenance[key] is not None and not isinstance(provenance[key], str):
+                errors.append(f"provenance.{key} must be string or null")
     if raw is not None:
         for field, expected_value in (("task_id",raw.get("task_id")),("source_id",raw.get("source_id")),("source_dataset",raw.get("source_dataset"))):
             if task.get(field) != expected_value: errors.append(f"changed {field}")
@@ -974,8 +1096,8 @@ def _task_shape_errors(task: dict[str, Any], raw: dict[str, Any] | None = None, 
             if expected_declarations != actual_declarations: errors.append("port declarations do not preserve source-facing wording")
         clock_hint=raw.get("deterministic_clock_hints") or []
         reset_hint=raw.get("deterministic_reset_hints") or []
-        clock=task.get("clocking",{})
-        reset=task.get("reset",{})
+        clock=task.get("clocking") if isinstance(task.get("clocking"),dict) else {}
+        reset=task.get("reset") if isinstance(task.get("reset"),dict) else {}
         if not clock_hint and (clock.get("clock_signal") is not None or clock.get("edge") is not None): errors.append("invented clock evidence")
         if not reset_hint and any(reset.get(key) is not None for key in ("signal","active_level","synchronous")):
             errors.append("invented reset evidence")
@@ -1011,6 +1133,7 @@ def _load_assets(path: Path) -> tuple[dict[str,dict[str,Any]], list[str]]:
         if not isinstance(task_id,str) or not task_id: errors.append(f"private asset line {index}: missing task_id")
         elif task_id in records: errors.append(f"duplicate private asset task_id: {task_id}")
         else: records[task_id]=record
+        errors.extend(f"private asset line {index}: {item}" for item in _asset_shape_errors(record))
         forbidden=PRIVATE_FIELD_NAMES & {str(k).lower() for k in record}
         forbidden.discard("support_files")
         if forbidden: errors.append(f"private asset embeds forbidden content fields: {sorted(forbidden)}")
@@ -1038,22 +1161,162 @@ def validate_generation_normalized_batch(raw_batch_path: Path, normalized_path: 
     return report, 0 if report["ok"] else 1
 
 
-def _asset_shape_errors(asset: dict[str,Any]) -> list[str]:
-    expected={"schema_version","task_id","source_id","top_module","verification_readiness","readiness_reasons","reference_rtl_path","testbench_path","support_files","input_hashes"}
-    errors=[f"unknown asset field: {key}" for key in sorted(set(asset)-expected)]
-    errors.extend(f"missing asset field: {key}" for key in sorted(expected-set(asset)))
-    if asset.get("schema_version") != VERIFICATION_ASSET_SCHEMA_VERSION: errors.append("wrong asset schema version")
-    if asset.get("verification_readiness") not in READINESS_CATEGORIES: errors.append("invalid verification readiness")
-    for key in ("task_id","source_id"):
-        if not isinstance(asset.get(key),str) or not asset[key]: errors.append(f"asset {key} must be non-empty")
-    if asset.get("top_module") is not None and (not isinstance(asset["top_module"],str) or not IDENTIFIER_RE.fullmatch(asset["top_module"])): errors.append("invalid asset top module")
-    for key in ("reference_rtl_path","testbench_path"):
-        value=asset.get(key)
-        if value is not None and (not isinstance(value,str) or Path(value).is_absolute() or ".." in Path(value).parts): errors.append(f"unsafe asset path: {key}")
-    if not isinstance(asset.get("support_files"),list) or any(not isinstance(x,str) for x in asset.get("support_files",[])): errors.append("support_files must be relative strings")
-    hashes=asset.get("input_hashes")
-    if not isinstance(hashes,dict) or set(hashes)-{"source_prompt_sha256","reference_rtl_sha256","testbench_sha256","support_files"}: errors.append("invalid input_hashes")
+def _private_relative_path_errors(value: Any, task_id: str, kind: str) -> list[str]:
+    """Validate an asset path as a normalized, task-scoped POSIX path."""
+    if not isinstance(value, str) or not value:
+        return [f"unsafe asset path: {kind}"]
+    errors: list[str] = []
+    if "\x00" in value:
+        errors.append(f"asset path contains NUL: {kind}")
+    if "\\" in value:
+        errors.append(f"asset path must use POSIX separators: {kind}")
+    if WINDOWS_DRIVE_RE.match(value) or value.startswith("/"):
+        errors.append(f"asset path must be relative: {kind}")
+    parts = value.split("/")
+    if any(not part for part in parts):
+        errors.append(f"asset path has an empty component: {kind}")
+    if any(part in {".", ".."} for part in parts):
+        errors.append(f"asset path has traversal component: {kind}")
+    if errors:
+        return errors
+    if kind in {"reference_rtl_path", "testbench_path"}:
+        if len(parts) != 3 or parts[:2] != ["workspace", task_id]:
+            errors.append(f"{kind} must be beneath workspace/{task_id}/")
+    elif kind == "support_file":
+        if len(parts) < 4 or parts[:3] != ["workspace", task_id, "support"]:
+            errors.append(f"support path must be beneath workspace/{task_id}/support/")
+    elif kind == "support_hash_path":
+        if len(parts) < 4 or parts[:3] != ["workspace", task_id, "support"]:
+            errors.append(f"support hash path must be beneath workspace/{task_id}/support/")
     return errors
+
+
+def _hash_value_errors(value: Any, field: str, *, nullable: bool) -> list[str]:
+    if value is None and nullable:
+        return []
+    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+        return [f"{field} must be 64 lowercase hexadecimal characters" if value is not None else f"missing required hash: {field}"]
+    return []
+
+
+def _asset_shape_errors(asset: dict[str, Any]) -> list[str]:
+    errors = [f"unknown asset field: {key}" for key in sorted(set(asset) - ASSET_FIELDS)]
+    errors.extend(f"missing asset field: {key}" for key in sorted(ASSET_FIELDS - set(asset)))
+    if asset.get("schema_version") != VERIFICATION_ASSET_SCHEMA_VERSION:
+        errors.append("wrong asset schema version")
+    if asset.get("verification_readiness") not in READINESS_CATEGORIES:
+        errors.append("invalid verification readiness")
+    for key in ("task_id", "source_id"):
+        if not isinstance(asset.get(key), str) or not asset[key]:
+            errors.append(f"asset {key} must be non-empty")
+    task_id = asset.get("task_id") if isinstance(asset.get("task_id"), str) else ""
+    if asset.get("top_module") is not None and (not isinstance(asset["top_module"], str) or not IDENTIFIER_RE.fullmatch(asset["top_module"])):
+        errors.append("invalid asset top module")
+    reasons = asset.get("readiness_reasons")
+    if not isinstance(reasons, list) or any(not isinstance(reason, str) for reason in reasons):
+        errors.append("readiness_reasons must be an array of strings")
+
+    for key in ("reference_rtl_path", "testbench_path"):
+        value = asset.get(key)
+        if value is not None:
+            errors.extend(_private_relative_path_errors(value, task_id, key))
+    support_files = asset.get("support_files")
+    if not isinstance(support_files, list) or any(not isinstance(value, str) for value in support_files):
+        errors.append("support_files must be an array of relative strings")
+        support_files = []
+    if len(support_files) != len(set(support_files)):
+        errors.append("support_files must be unique")
+    for value in support_files:
+        errors.extend(_private_relative_path_errors(value, task_id, "support_file"))
+
+    hashes = asset.get("input_hashes")
+    if not isinstance(hashes, dict):
+        errors.append("input_hashes must be an object")
+        hashes = {}
+    else:
+        errors.extend(f"unknown input hash field: {key}" for key in sorted(set(hashes) - ASSET_HASH_FIELDS))
+        errors.extend(f"missing input hash field: {key}" for key in sorted(ASSET_HASH_FIELDS - set(hashes)))
+    errors.extend(_hash_value_errors(hashes.get("source_prompt_sha256"), "source_prompt_sha256", nullable=False))
+    for path_key, hash_key in (("reference_rtl_path", "reference_rtl_sha256"), ("testbench_path", "testbench_sha256")):
+        path_value, hash_value = asset.get(path_key), hashes.get(hash_key)
+        errors.extend(_hash_value_errors(hash_value, hash_key, nullable=path_value is None))
+        if path_value is None and hash_value is not None:
+            errors.append(f"{hash_key} requires {path_key}")
+        if path_value is not None and hash_value is None:
+            errors.append(f"{path_key} requires {hash_key}")
+    support_hashes = hashes.get("support_files")
+    if not isinstance(support_hashes, list):
+        errors.append("input_hashes.support_files must be an array")
+        support_hashes = []
+    seen_hash_paths: set[str] = set()
+    hash_path_list: list[str] = []
+    for index, item in enumerate(support_hashes):
+        if not isinstance(item, dict):
+            errors.append(f"support hash {index} must be an object")
+            continue
+        if set(item) != {"path", "sha256"}:
+            errors.append(f"support hash {index} must have exactly path and sha256")
+        path_value = item.get("path")
+        errors.extend(_private_relative_path_errors(path_value, task_id, "support_hash_path"))
+        if isinstance(path_value, str):
+            if path_value in seen_hash_paths:
+                errors.append(f"duplicate support hash path: {path_value}")
+            seen_hash_paths.add(path_value)
+            hash_path_list.append(path_value)
+        errors.extend(_hash_value_errors(item.get("sha256"), f"support hash {index}.sha256", nullable=False))
+    if hash_path_list != support_files:
+        errors.append("support hash paths must exactly match support_files")
+
+    if asset.get("verification_readiness") == "executable_ready":
+        for path_key, hash_key in (("reference_rtl_path", "reference_rtl_sha256"), ("testbench_path", "testbench_sha256")):
+            if asset.get(path_key) is None or hashes.get(hash_key) is None:
+                errors.append(f"executable_ready requires {path_key} and {hash_key}")
+    return sorted(set(errors))
+
+
+def _read_private_asset_bytes(private_root: Path, relative: str, label: str) -> tuple[bytes | None, str | None]:
+    path = private_root / relative
+    if not _is_within(path, private_root) or _path_contains_symlink(path) or path.is_symlink():
+        return None, f"{label} escapes the private workspace or is a symlink: {relative}"
+    if not path.is_file():
+        return None, f"missing or unreadable {label}: {relative}"
+    try:
+        return path.read_bytes(), None
+    except OSError as exc:
+        return None, f"could not read {label} {relative}: {exc}"
+
+
+def _verify_asset_integrity(task: dict[str, Any], asset: dict[str, Any], private_root: Path) -> list[str]:
+    shape_errors = _asset_shape_errors(asset)
+    if shape_errors:
+        return shape_errors
+    errors: list[str] = []
+    if not isinstance(task.get("specification"), str):
+        return ["specification must be a string before integrity verification"]
+    hashes = asset["input_hashes"]
+    expected_prompt_hash = hashes["source_prompt_sha256"]
+    actual_prompt_hash = _sha256(_text_bytes(task["specification"]))
+    if actual_prompt_hash != expected_prompt_hash:
+        errors.append(f"specification hash mismatch for task {task.get('task_id')}")
+    for path_key, hash_key, label in (
+        ("reference_rtl_path", "reference_rtl_sha256", "reference RTL"),
+        ("testbench_path", "testbench_sha256", "testbench"),
+    ):
+        relative = asset[path_key]
+        if relative is None:
+            continue
+        content, read_error = _read_private_asset_bytes(private_root, relative, label)
+        if read_error:
+            errors.append(read_error)
+        elif _sha256(content or b"") != hashes[hash_key]:
+            errors.append(f"{label} hash mismatch for task {task.get('task_id')}")
+    for item in hashes["support_files"]:
+        content, read_error = _read_private_asset_bytes(private_root, item["path"], "support file")
+        if read_error:
+            errors.append(read_error)
+        elif _sha256(content or b"") != item["sha256"]:
+            errors.append(f"support file hash mismatch for task {task.get('task_id')}: {item['path']}")
+    return sorted(set(errors))
 
 
 def _assembled_private_leak_errors(tasks: list[dict[str, Any]], assets: dict[str, dict[str, Any]], private_root: Path) -> list[str]:
@@ -1106,27 +1369,28 @@ def assemble_generation_inputs(normalized_path: Path, private_assets_path: Path,
     normalized_value, load_errors=_load_json(normalized_path); errors.extend(load_errors)
     tasks, task_errors=_normalized_rows(normalized_value); errors.extend(task_errors)
     asset_records, asset_errors=_load_assets(private_assets_path); errors.extend(asset_errors)
-    if len({str(t.get("task_id")) for t in tasks}) != len(tasks): errors.append("duplicate task IDs")
-    task_ids={str(t.get("task_id")) for t in tasks}; asset_ids=set(asset_records)
-    if task_ids != asset_ids:
-        errors.append("private assets and normalized tasks are not a one-to-one join")
+    if len({str(t.get("task_id")) for t in tasks}) != len(tasks):
+        errors.append("duplicate task IDs")
+    task_ids={str(t.get("task_id")) for t in tasks}
+    asset_ids=set(asset_records)
+    missing_ids = task_ids - asset_ids
+    unused_private_asset_count = len(asset_ids - task_ids)
+    if missing_ids:
+        errors.append(f"missing private asset records for normalized task IDs: {sorted(missing_ids)}")
+    selected_assets = {task_id: asset_records[task_id] for task_id in task_ids if task_id in asset_records}
+    private_root=private_assets_path.parent.resolve()
     for task in tasks:
         errors.extend(f"task {task.get('task_id')}: {item}" for item in _task_shape_errors(task, None, asset_records))
-        asset=asset_records.get(str(task.get("task_id")))
-        if not asset: continue
+        asset=selected_assets.get(str(task.get("task_id")))
+        if not asset:
+            continue
         errors.extend(f"asset {asset.get('task_id')}: {item}" for item in _asset_shape_errors(asset))
-        if asset.get("source_id") != task.get("source_id"): errors.append(f"source ID conflict for task {task.get('task_id')}")
-        if asset.get("top_module") is not None and task.get("top_module") is not None and asset.get("top_module") != task.get("top_module"): errors.append(f"top module conflict for task {task.get('task_id')}")
-        private_root=private_assets_path.parent.resolve()
-        for field in ("reference_rtl_path","testbench_path"):
-            value=asset.get(field)
-            if value is not None:
-                path=private_root / value
-                if not _is_within(path,private_root) or path.is_symlink() or not path.is_file(): errors.append(f"invalid private asset path for {task.get('task_id')}: {field}")
-        for value in asset.get("support_files",[]):
-            path=private_root/value
-            if not _is_within(path,private_root) or path.is_symlink() or not path.is_file(): errors.append(f"invalid private support path for {task.get('task_id')}")
-    errors.extend(_assembled_private_leak_errors(tasks, asset_records, private_assets_path.parent.resolve()))
+        if asset.get("source_id") != task.get("source_id"):
+            errors.append(f"source ID conflict for task {task.get('task_id')}")
+        if asset.get("top_module") is not None and task.get("top_module") is not None and asset.get("top_module") != task.get("top_module"):
+            errors.append(f"top module conflict for task {task.get('task_id')}")
+        errors.extend(f"task {task.get('task_id')}: {item}" for item in _verify_asset_integrity(task, asset, private_root))
+    errors.extend(_assembled_private_leak_errors(tasks, selected_assets, private_root))
     for output in (tasks_output,assets_output):
         if output.is_symlink(): errors.append(f"output must not be a symlink: {output}")
         if output.exists() and not force: errors.append(f"output already exists: {output}; use --force")
@@ -1138,18 +1402,43 @@ def assemble_generation_inputs(normalized_path: Path, private_assets_path: Path,
     if tasks_output.exists() and force and not _managed_jsonl(tasks_output,GENERATION_TASK_SCHEMA_VERSION): errors.append("refusing to replace unknown task output")
     if assets_output.exists() and force and not _managed_jsonl(assets_output,VERIFICATION_ASSET_SCHEMA_VERSION): errors.append("refusing to replace unknown asset output")
     if errors:
-        return {"ok":False,"tasks_output":_relative_display(tasks_output),"assets_output":_relative_display(assets_output),"rows":len(tasks),"errors":sorted(set(errors))},1
+        return {"ok":False,"tasks_output":_relative_display(tasks_output),"assets_output":_relative_display(assets_output),"rows":len(tasks),"unused_private_asset_count":unused_private_asset_count,"errors":sorted(set(errors))},1
     task_bytes=b"".join(json.dumps(t,ensure_ascii=False,separators=(",", ":"),sort_keys=True).encode()+b"\n" for t in sorted(tasks,key=lambda x:(str(x.get('task_id')),str(x.get('source_id')))))
-    asset_bytes=b"".join(json.dumps(asset_records[t],ensure_ascii=False,separators=(",", ":"),sort_keys=True).encode()+b"\n" for t in sorted(task_ids))
+    asset_bytes=b"".join(json.dumps(selected_assets[t],ensure_ascii=False,separators=(",", ":"),sort_keys=True).encode()+b"\n" for t in sorted(task_ids))
     try:
         _atomic_write(tasks_output,task_bytes); _atomic_write(assets_output,asset_bytes)
     except OSError as exc:
-        return {"ok":False,"tasks_output":_relative_display(tasks_output),"assets_output":_relative_display(assets_output),"rows":len(tasks),"errors":[f"could not atomically write outputs: {exc}"]},1
-    return {"ok":True,"tasks_output":_relative_display(tasks_output),"assets_output":_relative_display(assets_output),"rows":len(tasks),"errors":[]},0
+        return {"ok":False,"tasks_output":_relative_display(tasks_output),"assets_output":_relative_display(assets_output),"rows":len(tasks),"unused_private_asset_count":unused_private_asset_count,"errors":[f"could not atomically write outputs: {exc}"]},1
+    warnings = [f"{unused_private_asset_count} private asset records were not selected for this normalized batch"] if unused_private_asset_count else []
+    return {"ok":True,"tasks_output":_relative_display(tasks_output),"assets_output":_relative_display(assets_output),"rows":len(tasks),"selected_private_asset_count":len(selected_assets),"unused_private_asset_count":unused_private_asset_count,"errors":[],"warnings":warnings},0
 
 
 def _median_stats(values: list[int]) -> dict[str, int | float | None]:
     return {"maximum": max(values) if values else None, "median": median(values) if values else None}
+
+
+def _repository_path_state(path: Path) -> str:
+    """Classify a path from fixed repository metadata, never from its contents."""
+    resolved = path.resolve()
+    if ".local_data" in resolved.parts:
+        return "ignored_local"
+    repo_root = Path(__file__).resolve().parents[2]
+    try:
+        relative = resolved.relative_to(repo_root)
+    except ValueError:
+        return "untracked_or_unknown"
+    relative_text = relative.as_posix()
+    tracked = subprocess.run(
+        ["git", "-C", str(repo_root), "ls-files", "--error-unmatch", "--", relative_text],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    )
+    if tracked.returncode == 0:
+        return "tracked"
+    ignored = subprocess.run(
+        ["git", "-C", str(repo_root), "check-ignore", "-q", "--", relative_text],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+    )
+    return "ignored_local" if ignored.returncode == 0 else "untracked_or_unknown"
 
 
 def audit_source_rows(input_path: Path) -> dict[str, Any]:
@@ -1174,7 +1463,7 @@ def audit_source_rows(input_path: Path) -> dict[str, Any]:
             if len([item for item in smoke if item["design_family"] == label]) >= (2 if label in {"combinational","sequential"} else 1):
                 break
     canonical = _relative_display(input_path)
-    return {"report_schema_version":AUDIT_SCHEMA_VERSION,"input":canonical,"file_format":"local VerilogEval or normalized task input","tracked_or_ignored":"ignored" if ".local_data" in input_path.parts or "data" in input_path.parts else "local","total_rows":len(rows),"unique_source_ids":len(set(ids)),"duplicate_source_id_count":duplicate_count,"rows_with_nonempty_prompt_or_specification":sum(bool(r.specification) for r in rows),"rows_with_reference_rtl":sum(bool(r.reference_rtl) for r in rows),"rows_with_testbench":sum(bool(r.testbench) for r in rows),"rows_with_support_files":sum(bool(r.support_files) for r in rows),"rows_with_one_detected_module":sum(len(module_names(r.reference_rtl or ""))==1 for r in rows),"rows_with_deterministic_top_module":sum(bool(r.top_module_hint) for r in rows),"rows_with_deterministic_interface":sum(bool(r.interface_hints) for r in rows),"rows_with_confirmed_license_metadata":sum(_license_is_usable(r.license) for r in rows),"rows_with_placeholder_or_missing_license":sum(not _license_is_usable(r.license) for r in rows),"rows_appearing_executable_ready":categories["executable_ready"],"rows_needing_testbench":categories["needs_testbench"],"rows_structural_only":categories["structural_only"],"rows_unsuitable":categories["invalid"]+categories["license_blocked"],"readiness_categories":dict(sorted(categories.items())),"design_family_distribution":dict(sorted(families.items())),"size_bytes":{"prompt_or_specification":_median_stats(prompt_sizes),"reference_rtl":_median_stats(rtl_sizes),"testbench":_median_stats(tb_sizes)},"symlinked_inputs":_safe_source_tree(input_path),"unsafe_paths":[],"source_prompt_text_preserved_exactly":True,"reference_rtl_and_testbench_embedded_in_normalized_rows":input_path.is_file(),"samples":samples,"smoke_subset":smoke,"recommended_canonical_v0_1_input":{"path":canonical,"reason":"local input with usable specifications and deterministic private verification assets"},"errors":discovery_errors}
+    return {"report_schema_version":AUDIT_SCHEMA_VERSION,"input":canonical,"file_format":"local VerilogEval or normalized task input","tracked_or_ignored":_repository_path_state(input_path),"total_rows":len(rows),"unique_source_ids":len(set(ids)),"duplicate_source_id_count":duplicate_count,"rows_with_nonempty_prompt_or_specification":sum(bool(r.specification) for r in rows),"rows_with_reference_rtl":sum(bool(r.reference_rtl) for r in rows),"rows_with_testbench":sum(bool(r.testbench) for r in rows),"rows_with_support_files":sum(bool(r.support_files) for r in rows),"rows_with_one_detected_module":sum(len(module_names(r.reference_rtl or ""))==1 for r in rows),"rows_with_deterministic_top_module":sum(bool(r.top_module_hint) for r in rows),"rows_with_deterministic_interface":sum(bool(r.interface_hints) for r in rows),"rows_with_confirmed_license_metadata":sum(_license_is_usable(r.license) for r in rows),"rows_with_placeholder_or_missing_license":sum(not _license_is_usable(r.license) for r in rows),"rows_appearing_executable_ready":categories["executable_ready"],"rows_needing_testbench":categories["needs_testbench"],"rows_structural_only":categories["structural_only"],"rows_unsuitable":categories["invalid"]+categories["license_blocked"],"readiness_categories":dict(sorted(categories.items())),"design_family_distribution":dict(sorted(families.items())),"size_bytes":{"prompt_or_specification":_median_stats(prompt_sizes),"reference_rtl":_median_stats(rtl_sizes),"testbench":_median_stats(tb_sizes)},"symlinked_inputs":_safe_source_tree(input_path),"unsafe_paths":[],"source_prompt_text_preserved_exactly":True,"reference_rtl_and_testbench_embedded_in_normalized_rows":input_path.is_file(),"samples":samples,"smoke_subset":smoke,"recommended_canonical_v0_1_input":{"path":canonical,"reason":"local input with usable specifications and deterministic private verification assets"},"errors":discovery_errors}
 
 
 def write_audit_reports(report: dict[str, Any], json_path: Path, markdown_path: Path) -> None:

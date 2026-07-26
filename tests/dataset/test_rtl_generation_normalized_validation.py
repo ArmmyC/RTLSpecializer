@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import json
 
-from scripts.dataset.rtl_generation_preparation import export_generation_normalization_batches, validate_generation_normalized_batch
+from scripts.dataset.rtl_generation_preparation import _task_shape_errors, export_generation_normalization_batches, validate_generation_normalized_batch
 from tests.dataset.rtl_generation_test_helpers import load_batch, make_checkout, normalized_task_from_raw, write_json
 
 
@@ -92,3 +92,60 @@ def test_explicit_ambiguity_allows_unknown_clock_or_reset_to_remain_null(tmp_pat
     write_json(normalized, rows)
     report, code = validate_generation_normalized_batch(raw, normalized, assets)
     assert code == 0, report
+
+
+def test_validator_rejects_every_required_nested_field_when_missing(tmp_path) -> None:
+    _, normalized, _, _ = _export_one(tmp_path)
+    base = json.loads(normalized.read_text(encoding="utf-8"))[0]
+    for field in ("interface", "clocking", "reset", "provenance"):
+        broken = copy.deepcopy(base)
+        broken.pop(field)
+        assert any(f"missing task field: {field}" in error for error in _task_shape_errors(broken))
+
+    for field in ("ports",):
+        broken = copy.deepcopy(base)
+        broken["interface"].pop(field)
+        assert any("interface must have exactly" in error for error in _task_shape_errors(broken))
+    for field in ("clock_signal", "edge"):
+        broken = copy.deepcopy(base)
+        broken["clocking"].pop(field)
+        assert any("clocking must have exactly" in error for error in _task_shape_errors(broken))
+    for field in ("signal", "active_level", "synchronous"):
+        broken = copy.deepcopy(base)
+        broken["reset"].pop(field)
+        assert any("reset must have exactly" in error for error in _task_shape_errors(broken))
+    for field in ("name", "direction", "declaration", "packed_range", "width_bits", "signed", "description"):
+        broken = copy.deepcopy(base)
+        broken["interface"]["ports"][0].pop(field)
+        assert any(f"missing interface port field: {field}" in error for error in _task_shape_errors(broken))
+    for field in ("public_dataset_name", "public_dataset_url", "source_commit", "license", "original_source_id"):
+        broken = copy.deepcopy(base)
+        broken["provenance"].pop(field)
+        assert any(f"missing provenance field: {field}" in error for error in _task_shape_errors(broken))
+    for field in ("cycles", "min_cycles", "max_cycles", "throughput_cycles", "description"):
+        broken = copy.deepcopy(base)
+        broken["latency_contract"] = {
+            "cycles": 1, "min_cycles": 1, "max_cycles": 1,
+            "throughput_cycles": 1, "description": None,
+        }
+        broken["latency_contract"].pop(field)
+        assert any(f"missing latency field: {field}" in error for error in _task_shape_errors(broken))
+    broken = copy.deepcopy(base)
+    broken["ambiguities"] = [{"topic": "timing"}]
+    assert any("ambiguity 0 needs a statement" in error for error in _task_shape_errors(broken))
+
+
+def test_validator_rejects_inconsistent_clock_reset_and_latency_contracts(tmp_path) -> None:
+    _, normalized, _, _ = _export_one(tmp_path)
+    task = json.loads(normalized.read_text(encoding="utf-8"))[0]
+    task["clocking"]["clock_signal"] = "q"
+    task["reset"] = {"signal": "q", "active_level": "high", "synchronous": False}
+    task["latency_contract"] = {
+        "cycles": 5, "min_cycles": 6, "max_cycles": 2,
+        "throughput_cycles": 1, "description": None,
+    }
+    errors = _task_shape_errors(task)
+    assert any("clock signal must name" in error for error in errors)
+    assert any("reset signal must name" in error for error in errors)
+    assert any("min_cycles" in error for error in errors)
+    assert any("cycles conflicts" in error for error in errors)
