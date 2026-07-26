@@ -617,8 +617,10 @@ def _markdown_report(report: dict[str, Any]) -> str:
     lines.extend(["", "## Skipped rows", "", "| Source ID | Line | Reasons |", "| --- | --- | --- |"])
     if report["skipped_row_details"]:
         for item in report["skipped_row_details"]:
+            skip_reasons = ", ".join(item["skip_reasons"])
+            escaped_skip_reasons = skip_reasons.replace("|", r"\|")
             lines.append(
-                f"| `{item['source_id']}` | `{item['line_number']}` | {', '.join(item['skip_reasons']).replace('|', '\\|')} |"
+                f"| `{item['source_id']}` | `{item['line_number']}` | {escaped_skip_reasons} |"
             )
     else:
         lines.append("| — | — | none |")

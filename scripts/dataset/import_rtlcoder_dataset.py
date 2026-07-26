@@ -470,7 +470,8 @@ def _markdown_report(report: dict[str, Any]) -> str:
             + (f": {field['preview']}" if field.get("preview") else "")
             for field in sample["fields"]
         )
-        lines.append(f"| `{sample['row_index']}` | `{sample['source_line_number']}` | {field_text.replace('|', '\\|')} |")
+        escaped_field_text = field_text.replace("|", r"\|")
+        lines.append(f"| `{sample['row_index']}` | `{sample['source_line_number']}` | {escaped_field_text} |")
     if not inspection["sample_rows"]:
         lines.append("| — | — | none |")
     lines.extend([

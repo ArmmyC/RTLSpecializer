@@ -230,7 +230,8 @@ def _interface_hints(text: str | None) -> list[dict[str, Any]]:
     seen: set[str] = set()
     for match in matches:
         direction = match.group(1).lower()
-        declaration = f"{direction} {re.sub(r'\\s+', ' ', match.group(2)).strip()}"
+        declaration_body = re.sub(r"\s+", " ", match.group(2)).strip()
+        declaration = f"{direction} {declaration_body}"
         name = _port_name(match.group(2))
         if not name or name in seen:
             continue
