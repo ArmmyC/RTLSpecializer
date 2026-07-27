@@ -57,7 +57,7 @@ def evidence_for_plan(run: Path, *, accepted: bool = False) -> Path:
             "lint": {"candidate": {"attempted": False, "passed": None, "reason": "not_requested"}},
             "synthesis": {"candidate": {"attempted": False, "passed": None, "reason": "not_requested"}},
         },
-        "mismatch_summary": {"contract": "mismatch_count_v1", "reported_counts": [0 if accepted else 1], "reported_sample_counts": [1], "maximum_count": 0 if accepted else 1, "timeout_reported": False},
+        "mismatch_summary": {"contract": "mismatch_count_v1", "reported_counts": [0 if accepted else 1], "reported_sample_counts": [0 if accepted else 1], "maximum_count": 0 if accepted else 1, "timeout_reported": False},
         "failure_category": "passed" if accepted else "functional_mismatch", "accepted": accepted,
         "diagnostics": [] if accepted else ["The bounded mismatch count was nonzero."],
     }

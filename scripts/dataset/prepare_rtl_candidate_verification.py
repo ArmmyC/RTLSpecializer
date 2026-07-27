@@ -19,12 +19,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--private-assets-root", required=True, type=Path)
     parser.add_argument("--candidates", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--attempt", type=int, choices=range(1, 5))
+    parser.add_argument("--candidate-id", action="append", default=[])
     parser.add_argument("--overwrite", "--force", dest="overwrite", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     report, code = prepare_candidate_verification(
         args.tasks, args.assets, args.private_assets_root, args.candidates,
-        args.output_dir, overwrite=args.overwrite,
+        args.output_dir, overwrite=args.overwrite, attempt=args.attempt,
+        candidate_ids=args.candidate_id,
     )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))

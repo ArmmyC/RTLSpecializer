@@ -29,7 +29,11 @@ def test_fenced_response_and_reference_copy_are_rejected(tmp_path: Path) -> None
     assert code == 0, result
     fenced = tmp_path / "fenced.json"
     fenced.write_text("```json\n{}\n```\n", encoding="utf-8")
-    result, code = validate_teacher_candidate_batch(packet_dir / "packet_0001.json", fenced)
+    result, code = validate_teacher_candidate_batch(
+        packet_dir / "packet_0001.json", fenced,
+        private_assets_path=FIXTURE_ROOT / "verification_assets.jsonl",
+        private_assets_root=FIXTURE_ROOT / "private_assets",
+    )
     assert code != 0
     assert any(value in result["errors"][0].lower() for value in ("fence", "malformed"))
     copied = tmp_path / "copied.json"

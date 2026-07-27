@@ -19,7 +19,7 @@ existing source data
   → private verification-asset join
 ```
 
-It keeps reference RTL and testbenches private and does not call models, execute RTL, run RTLBench/EDA, or train models. The manual teacher-generation and verification workflow now continues from these validated tasks through local candidate validation, deterministic RTLBench handoff, evidence ingestion, and bounded repair packets. See [docs/dataset/manual_rtl_teacher_verification_workflow.md](docs/dataset/manual_rtl_teacher_verification_workflow.md).
+It keeps reference RTL and testbenches private and does not call models, execute RTL, run RTLBench/EDA, or train models. The manual teacher-generation and verification workflow continues from these validated tasks through private-boundary candidate validation, attempt-specific RTLBench handoffs, append-only evidence history, and bounded repair packets through four attempts. See [docs/dataset/manual_rtl_teacher_verification_workflow.md](docs/dataset/manual_rtl_teacher_verification_workflow.md).
 
 Clean `rtl_task_v0.1` rows can be exported into small local teacher-answer batches for manual ChatGPT/Claude/larger-teacher generation of conservative `rtl_answer_v0.1`, then validated and merged into draft chat rows. See [docs/dataset/rtl_answer_teacher_generation_workflow.md](docs/dataset/rtl_answer_teacher_generation_workflow.md).
 

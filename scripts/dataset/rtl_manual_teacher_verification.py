@@ -14,7 +14,6 @@ import os
 import re
 import stat
 import tempfile
-from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -44,6 +43,10 @@ MAX_ASSUMPTIONS = 100
 MAX_ASSUMPTION_BYTES = 2 * 1024
 MAX_DIAGNOSTIC_BYTES = 4096
 MAX_DIAGNOSTICS = 100
+MAX_JSONL_BYTES = 32 * 1024 * 1024
+MAX_WORKSPACE_ARTIFACT_BYTES = 8 * 1024 * 1024
+MAX_SOURCE_INDEX_LINES = 20_000
+MAX_SOURCE_INDEX_LINE_BYTES = 1_024
 PROMPT_GENERATION_VERSION = "llm_rtl_teacher_generation_prompt_v0.1"
 PROMPT_REPAIR_VERSION = "llm_rtl_teacher_repair_prompt_v0.1"
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
@@ -61,6 +64,21 @@ FAILURE_CATEGORIES = {
     "internal_error",
     "partial_failure",
 }
+PACKET_ID_RE = re.compile(r"^rtl_teacher_(initial|repair)_batch_(\d{4})_([0-9a-f]{12})$")
+STATUS_REASONS = {
+    None,
+    "not_requested",
+    "pending",
+    "tool_unavailable",
+    "compile_failure",
+    "functional_mismatch",
+    "simulation_result_missing",
+    "simulation_failure",
+    "timeout",
+    "internal_error",
+    "partial_failure",
+}
+REQUIRED_UNATTEMPTED_REASONS = {"tool_unavailable", "compile_failure", "internal_error"}
 PRIVATE_KEY_NAMES = {
     "reference_rtl_path",
     "testbench_path",
@@ -177,11 +195,22 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _sha256_file(path: Path) -> str:
+def _sha256_file(path: Path, *, maximum: int | None = None) -> str:
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
+    total = 0
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                total += len(chunk)
+                if maximum is not None and total > maximum:
+                    raise WorkflowError(f"{path} exceeds the maximum size of {maximum} bytes")
+                digest.update(chunk)
+            if maximum is not None and os.fstat(handle.fileno()).st_size > maximum:
+                raise WorkflowError(f"{path} grew beyond the maximum size of {maximum} bytes")
+    except WorkflowError:
+        raise
+    except OSError as exc:
+        raise WorkflowError(f"could not read {path}: {exc}") from exc
     return digest.hexdigest()
 
 
@@ -236,7 +265,7 @@ def _is_dangerous_root(path: Path) -> bool:
 def _atomic_write(path: Path, content: bytes) -> None:
     if _contains_symlink(path):
         raise WorkflowError(f"output path contains a symlink: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_directory(path.parent, "output parent")
     if path.exists() and path.is_dir():
         raise WorkflowError(f"output is a directory: {path}")
     handle = tempfile.NamedTemporaryFile("wb", dir=path.parent, prefix=".rtl-manual-", delete=False)
@@ -252,18 +281,66 @@ def _atomic_write(path: Path, content: bytes) -> None:
         raise
 
 
+def _ensure_directory(path: Path, label: str) -> Path:
+    """Create a directory hierarchy one component at a time, safely."""
+
+    requested = path.absolute()
+    if _contains_symlink(requested):
+        raise WorkflowError(f"{label} path contains a symlink: {path}")
+    if requested.exists():
+        if not requested.is_dir():
+            raise WorkflowError(f"{label} is not a directory: {path}")
+        return requested
+    missing: list[Path] = []
+    current = requested
+    while not current.exists():
+        missing.append(current)
+        if current.parent == current:
+            raise WorkflowError(f"could not find a parent for {label}: {path}")
+        current = current.parent
+    if _contains_symlink(current) or not current.is_dir():
+        raise WorkflowError(f"{label} existing ancestor is not a directory: {current}")
+    for directory in reversed(missing):
+        try:
+            directory.mkdir()
+        except FileExistsError:
+            if _contains_symlink(directory) or not directory.is_dir():
+                raise WorkflowError(f"{label} became unsafe while creating: {directory}")
+        except OSError as exc:
+            raise WorkflowError(f"could not create {label} {directory}: {exc}") from exc
+    return requested
+
+
+def _read_bounded(path: Path, maximum: int | None) -> bytes:
+    """Read regular input in chunks and reject before unbounded allocation."""
+
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(64 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if maximum is not None and total > maximum:
+                    raise WorkflowError(f"{path} exceeds the maximum size of {maximum} bytes")
+                chunks.append(chunk)
+            if maximum is not None and os.fstat(handle.fileno()).st_size > maximum:
+                raise WorkflowError(f"{path} grew beyond the maximum size of {maximum} bytes")
+    except WorkflowError:
+        raise
+    except OSError as exc:
+        raise WorkflowError(f"could not read {path}: {exc}") from exc
+    return b"".join(chunks)
+
+
 def _read_bytes(path: Path, *, maximum: int | None = None) -> bytes:
     if _contains_symlink(path) or path.is_symlink():
         raise WorkflowError(f"input must not be a symlink: {path}")
     if not path.is_file():
         raise WorkflowError(f"input is not a regular file: {path}")
-    try:
-        value = path.read_bytes()
-    except OSError as exc:
-        raise WorkflowError(f"could not read {path}: {exc}") from exc
-    if maximum is not None and len(value) > maximum:
-        raise WorkflowError(f"{path} exceeds the maximum size of {maximum} bytes")
-    return value
+    return _read_bounded(path, maximum)
 
 
 def _read_json(path: Path, *, maximum: int | None = None) -> Any:
@@ -398,6 +475,27 @@ def _packet_digest(kind: str, task_ids: list[str], target_attempt: int, prompt_v
 def _packet_id(kind: str, number: int, task_ids: list[str], target_attempt: int, prompt_version: str) -> str:
     prefix = "initial" if kind == "initial" else "repair"
     return f"rtl_teacher_{prefix}_batch_{number:04d}_{_packet_digest(kind, task_ids, target_attempt, prompt_version)}"
+
+
+def _packet_prompt_version(kind: str) -> str:
+    return PROMPT_GENERATION_VERSION if kind == "initial" else PROMPT_REPAIR_VERSION
+
+
+def _validate_packet_identity(packet: dict[str, Any]) -> None:
+    match = PACKET_ID_RE.fullmatch(packet["packet_id"])
+    if match is None:
+        raise WorkflowError("packet_id does not have the exact deterministic format")
+    prefix, number_text, digest = match.groups()
+    kind = packet["packet_kind"]
+    if prefix != kind:
+        raise WorkflowError("packet_id kind does not match packet_kind")
+    number = int(number_text)
+    if number < 1:
+        raise WorkflowError("packet_id packet index must be positive")
+    task_ids = [row["task"]["task_id"] for row in packet["rows"]]
+    expected = _packet_id(kind, number, task_ids, packet["target_attempt"], _packet_prompt_version(kind))
+    if packet["packet_id"] != expected or digest != _packet_digest(kind, task_ids, packet["target_attempt"], _packet_prompt_version(kind)):
+        raise WorkflowError("packet_id digest does not match packet contents")
 
 
 def _prompt_text(name: str) -> str:
@@ -557,6 +655,11 @@ def _load_packet(path: Path) -> dict[str, Any]:
                 raise WorkflowError(f"repair row {index} contains private diagnostic content")
     if packet["packet_kind"] == "initial" and packet["target_attempt"] != 1:
         raise WorkflowError("initial packet target_attempt must be 1")
+    if packet["packet_kind"] == "initial" and packet["schema_version"] != PACKET_SCHEMA_VERSION:
+        raise WorkflowError("initial packet has an invalid schema version")
+    if packet["packet_kind"] == "repair" and packet["schema_version"] != REPAIR_PACKET_SCHEMA_VERSION:
+        raise WorkflowError("repair packet has an invalid schema version")
+    _validate_packet_identity(packet)
     return packet
 
 
@@ -628,11 +731,11 @@ def _load_assets(path: Path, private_root: Path) -> dict[str, dict[str, Any]]:
         # private artifact hashes are checked here before any candidate use.
         hashes = asset["input_hashes"]
         for field, hash_field in (("reference_rtl_path", "reference_rtl_sha256"), ("testbench_path", "testbench_sha256")):
-            content = _read_bytes(private_root / asset[field])
+            content = _read_bytes(private_root / asset[field], maximum=MAX_WORKSPACE_ARTIFACT_BYTES)
             if _sha256_bytes(content) != hashes[hash_field]:
                 raise WorkflowError(f"asset {task_id} {field} hash mismatch")
         for item in hashes["support_files"]:
-            content = _read_bytes(private_root / item["path"])
+            content = _read_bytes(private_root / item["path"], maximum=MAX_WORKSPACE_ARTIFACT_BYTES)
             if _sha256_bytes(content) != item["sha256"]:
                 raise WorkflowError(f"asset {task_id} support hash mismatch: {item['path']}")
         artifact_paths = [private_root / asset["reference_rtl_path"], private_root / asset["testbench_path"]]
@@ -654,7 +757,7 @@ def _private_leak_check(candidate: dict[str, Any], asset: dict[str, Any], privat
     if _sha256_bytes(candidate_bytes) in private_hashes:
         raise WorkflowError("candidate RTL matches a private reference, testbench, or support file")
     for path in private_contents:
-        content = _read_bytes(path)
+        content = _read_bytes(path, maximum=MAX_WORKSPACE_ARTIFACT_BYTES)
         if len(content) >= 32 and content in candidate_bytes:
             raise WorkflowError("candidate RTL contains complete private file content")
 
@@ -666,6 +769,8 @@ def _candidate_record(record: Any, label: str = "candidate record") -> dict[str,
     for field in ("candidate_id", "task_id", "source_id", "packet_id"):
         if not isinstance(record[field], str) or not record[field].strip():
             raise WorkflowError(f"{label}.{field} must be a non-empty string")
+    if not PACKET_ID_RE.fullmatch(record["packet_id"]):
+        raise WorkflowError(f"{label}.packet_id is not a deterministic teacher packet ID")
     if type(record["attempt"]) is not int or not 1 <= record["attempt"] <= 4:
         raise WorkflowError(f"{label}.attempt must be in 1..4")
     if not isinstance(record["candidate_sha256"], str) or not SHA256_RE.fullmatch(record["candidate_sha256"]):
@@ -679,7 +784,7 @@ def _candidate_record(record: Any, label: str = "candidate record") -> dict[str,
 
 
 def _load_candidate_records(path: Path) -> list[dict[str, Any]]:
-    rows = _load_jsonl(path)
+    rows = _load_jsonl(path, maximum=MAX_JSONL_BYTES)
     seen_ids: set[str] = set()
     seen_pairs: set[tuple[str, int]] = set()
     for index, record in enumerate(rows, 1):
@@ -702,25 +807,26 @@ def validate_teacher_candidate_batch(
     append: bool = False,
 ) -> tuple[dict[str, Any], int]:
     try:
+        if append and overwrite:
+            raise WorkflowError("--append and --overwrite are mutually exclusive")
+        if private_assets_path is None or private_assets_root is None:
+            raise WorkflowError("private-assets and private-assets-root are required")
         packet = _load_packet(packet_path)
         raw = _read_bytes(response_path, maximum=MAX_RESPONSE_BYTES)
         try:
-            response = json.loads(raw.decode("utf-8"))
+            response_text = raw.decode("utf-8")
+            response = json.loads(response_text)
         except UnicodeDecodeError as exc:
             raise WorkflowError(f"response is not valid UTF-8: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise WorkflowError(f"response is malformed JSON: {exc.msg}") from exc
-        if response_path.read_text(encoding="utf-8", errors="replace").lstrip().startswith("```"):
+        if response_text.lstrip().startswith("```"):
             raise WorkflowError("Markdown fences are not allowed")
         _strict_fields(response, RESPONSE_FIELDS, "response")
         rows = response["rows"]
         if not isinstance(rows, list) or len(rows) != packet["row_count"]:
             raise WorkflowError("response row count does not match packet")
-        assets: dict[str, dict[str, Any]] = {}
-        if private_assets_path is not None:
-            if private_assets_root is None:
-                raise WorkflowError("private-assets-root is required with private-assets")
-            assets = _load_assets(private_assets_path, private_assets_root)
+        assets = _load_assets(private_assets_path, private_assets_root)
         records: list[dict[str, Any]] = []
         seen_tasks: set[str] = set()
         for index, (packet_row, candidate) in enumerate(zip(packet["rows"], rows), 1):
@@ -731,16 +837,15 @@ def validate_teacher_candidate_batch(
             if task["task_id"] in seen_tasks:
                 raise WorkflowError("duplicate task IDs in response")
             seen_tasks.add(task["task_id"])
-            if assets:
-                asset = assets.get(task["task_id"])
-                if asset is None:
-                    raise WorkflowError(f"missing private asset for task {task['task_id']}")
-                if asset["source_id"] != task["source_id"] or asset["top_module"] != task["top_module"]:
-                    raise WorkflowError(f"task/private asset identity mismatch for {task['task_id']}")
-                integrity_errors = _verify_asset_integrity(task, asset, private_assets_root)
-                if integrity_errors:
-                    raise WorkflowError(f"private asset integrity failure: {'; '.join(integrity_errors)}")
-                _private_leak_check(candidate, asset, private_assets_root)  # type: ignore[arg-type]
+            asset = assets.get(task["task_id"])
+            if asset is None:
+                raise WorkflowError(f"missing private asset for task {task['task_id']}")
+            if asset["source_id"] != task["source_id"] or asset["top_module"] != task["top_module"]:
+                raise WorkflowError(f"task/private asset identity mismatch for {task['task_id']}")
+            integrity_errors = _verify_asset_integrity(task, asset, private_assets_root)
+            if integrity_errors:
+                raise WorkflowError(f"private asset integrity failure: {'; '.join(integrity_errors)}")
+            _private_leak_check(candidate, asset, private_assets_root)
             attempt = packet["target_attempt"]
             candidate_id = f"{task['task_id']}_attempt_{attempt:02d}"
             record = {
@@ -755,6 +860,8 @@ def validate_teacher_candidate_batch(
             }
             records.append(record)
         if output_path is not None:
+            if _is_alias(output_path, packet_path) or _is_alias(output_path, response_path) or _is_alias(output_path, private_assets_path):
+                raise WorkflowError("candidate output aliases an input")
             existing: list[dict[str, Any]] = []
             if output_path.exists():
                 if not (overwrite or append):
@@ -766,8 +873,7 @@ def validate_teacher_candidate_batch(
                 if overwrite and not append:
                     existing = []
             combined = existing + records
-            order = {row["task"]["task_id"]: index for index, row in enumerate(packet["rows"])}
-            combined.sort(key=lambda row: (order.get(row["task_id"], len(order)), row["attempt"], row["candidate_id"]))
+            combined.sort(key=lambda row: (row["task_id"], row["attempt"], row["candidate_id"]))
             if _contains_symlink(output_path) or _is_hard_link(output_path):
                 raise WorkflowError("candidate output must not be a symlink or hard-link")
             _atomic_write(output_path, b"".join(_json_bytes(row) for row in combined))
@@ -781,9 +887,9 @@ def _asset_for_task(asset: dict[str, Any], task: dict[str, Any], private_root: P
     errors = _verify_asset_integrity(task, asset, private_root)
     if errors:
         raise WorkflowError(f"asset {task['task_id']} integrity failure: {'; '.join(errors)}")
-    reference = _read_bytes(private_root / asset["reference_rtl_path"])
-    testbench = _read_bytes(private_root / asset["testbench_path"])
-    support = [(item, _read_bytes(private_root / item)) for item in asset["support_files"]]
+    reference = _read_bytes(private_root / asset["reference_rtl_path"], maximum=MAX_WORKSPACE_ARTIFACT_BYTES)
+    testbench = _read_bytes(private_root / asset["testbench_path"], maximum=MAX_WORKSPACE_ARTIFACT_BYTES)
+    support = [(item, _read_bytes(private_root / item, maximum=MAX_WORKSPACE_ARTIFACT_BYTES)) for item in asset["support_files"]]
     return reference, testbench, support
 
 
@@ -896,6 +1002,8 @@ def prepare_candidate_verification(
     output_dir: Path,
     *,
     overwrite: bool = False,
+    attempt: int | None = None,
+    candidate_ids: Iterable[str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     stage: Path | None = None
     backup: Path | None = None
@@ -903,6 +1011,11 @@ def prepare_candidate_verification(
         tasks = _load_tasks(tasks_path)
         assets = _load_assets(assets_path, private_assets_root)
         records = _load_candidate_records(candidates_path)
+        if _is_dangerous_root(output_dir):
+            raise WorkflowError(f"refusing dangerous output root: {_display_path(output_dir)}")
+        output_parent = _ensure_directory(output_dir.parent, "output parent")
+        if output_dir.is_symlink():
+            raise WorkflowError(f"output directory must not be a symlink: {output_dir}")
         if _output_aliases_inputs(output_dir, (tasks_path, assets_path, candidates_path, private_assets_root)):
             raise WorkflowError("output directory aliases an input or private asset root")
         if output_dir.exists():
@@ -917,9 +1030,31 @@ def prepare_candidate_verification(
             if _tree_has_symlink(output_dir):
                 raise WorkflowError("refusing to overwrite an output containing symlinks")
         selected = _validate_candidate_task_join(tasks, assets, records, private_assets_root)
-        stage = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.stage-", dir=output_dir.parent if output_dir.parent.exists() else None))
+        if attempt is not None and (type(attempt) is not int or not 1 <= attempt <= 4):
+            raise WorkflowError("attempt must be an integer in 1..4")
+        requested_ids = list(candidate_ids or [])
+        if any(not isinstance(value, str) or not value for value in requested_ids):
+            raise WorkflowError("candidate-id values must be non-empty strings")
+        if len(set(requested_ids)) != len(requested_ids):
+            raise WorkflowError("duplicate candidate-id filters are not allowed")
+        all_ids = {row[0]["candidate_id"] for row in selected}
+        unknown_ids = sorted(set(requested_ids) - all_ids)
+        if unknown_ids:
+            raise WorkflowError(f"unknown candidate-id: {unknown_ids}")
+        if attempt is not None:
+            selected = [row for row in selected if row[0]["attempt"] == attempt]
+        if requested_ids:
+            requested_set = set(requested_ids)
+            selected = [row for row in selected if row[0]["candidate_id"] in requested_set]
+        if not selected:
+            raise WorkflowError("candidate selection is empty")
+        stage = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}.stage-", dir=str(output_parent)))
         if _contains_symlink(stage):
             raise WorkflowError("staging directory contains a symlink")
+        if os.stat(stage).st_dev != os.stat(output_parent).st_dev:
+            raise WorkflowError("staging and output parent are on different filesystems")
+        if output_dir.exists() and os.stat(stage).st_dev != os.stat(output_dir).st_dev:
+            raise WorkflowError("staging and output are on different filesystems")
         workspace = stage / "workspace"
         manifest_rows: list[dict[str, Any]] = []
         plan_rows: list[dict[str, Any]] = []
@@ -955,11 +1090,17 @@ def prepare_candidate_verification(
                 if any(reference and reference in content for reference in reference_bytes):
                     raise WorkflowError("reference RTL bytes would enter the RTLBench workspace")
         if output_dir.exists():
-            backup = output_dir.parent / f".{output_dir.name}.backup-{os.getpid()}"
+            backup = output_parent / f".{output_dir.name}.backup-{os.getpid()}"
             if backup.exists() or backup.is_symlink():
                 raise WorkflowError("managed overwrite backup path already exists")
             os.replace(output_dir, backup)
-        os.replace(stage, output_dir)
+        try:
+            os.replace(stage, output_dir)
+        except BaseException:
+            if backup is not None and not output_dir.exists():
+                os.replace(backup, output_dir)
+                backup = None
+            raise
         stage = None
         if backup is not None:
             _remove_tree(backup)
@@ -1003,6 +1144,8 @@ def _status(value: Any, label: str) -> dict[str, Any]:
         raise WorkflowError(f"{label} unattempted check needs passed=null")
     if value["reason"] is not None and not isinstance(value["reason"], str):
         raise WorkflowError(f"{label}.reason must be string or null")
+    if value["reason"] not in STATUS_REASONS or value["reason"] == "pending":
+        raise WorkflowError(f"{label}.reason is unsupported or still pending")
     if value["attempted"] and value["passed"] and value["reason"] is not None:
         raise WorkflowError(f"{label} passing check must have reason=null")
     if not value["attempted"] and not value["reason"]:
@@ -1027,10 +1170,14 @@ def _validate_plan(plan: Any, label: str) -> dict[str, Any]:
     _strict_fields(paths, {"candidate_rtl_path", "testbench_path", "support_files"}, f"{label}.workspace_paths")
     _portable_relative(paths["candidate_rtl_path"], f"{label}.candidate path")
     _portable_relative(paths["testbench_path"], f"{label}.testbench path")
+    if paths["candidate_rtl_path"] == paths["testbench_path"]:
+        raise WorkflowError(f"{label}.candidate and testbench paths must be distinct")
     if not isinstance(paths["support_files"], list):
         raise WorkflowError(f"{label}.workspace_paths.support_files must be a list")
     for index, value in enumerate(paths["support_files"]):
         _portable_relative(value, f"{label}.support_files[{index}]")
+    if len(set(paths["support_files"])) != len(paths["support_files"]):
+        raise WorkflowError(f"{label}.support_files must be unique")
     hashes = plan["expected_hashes"]
     _strict_fields(hashes, {"candidate_rtl_sha256", "testbench_sha256", "support_files"}, f"{label}.expected_hashes")
     for field in ("candidate_rtl_sha256", "testbench_sha256"):
@@ -1040,7 +1187,9 @@ def _validate_plan(plan: Any, label: str) -> dict[str, Any]:
         raise WorkflowError(f"{label}.expected support hashes do not match paths")
     for index, item in enumerate(hashes["support_files"]):
         _strict_fields(item, {"path", "sha256"}, f"{label}.support_hash[{index}]")
-        if item["path"] != paths["support_files"][index] or not SHA256_RE.fullmatch(item["sha256"]):
+        if (item["path"] != paths["support_files"][index]
+                or not isinstance(item["sha256"], str)
+                or not SHA256_RE.fullmatch(item["sha256"])):
             raise WorkflowError(f"{label}.support_hash[{index}] is invalid")
     return plan
 
@@ -1066,7 +1215,19 @@ def _validate_checks(value: Any, requested: dict[str, bool]) -> dict[str, Any]:
     expected = {"compile": "candidate", "simulation": "candidate_passes", "lint": "candidate", "synthesis": "candidate"}
     for check, leaf in expected.items():
         _strict_fields(value[check], {leaf}, f"checks.{check}")
-        _status(value[check][leaf], f"checks.{check}.{leaf}")
+        status = _status(value[check][leaf], f"checks.{check}.{leaf}")
+        if requested[check]:
+            if status["reason"] == "not_requested":
+                raise WorkflowError(f"checks.{check}.{leaf} is required but marked not_requested")
+            if not status["attempted"] and status["reason"] not in REQUIRED_UNATTEMPTED_REASONS:
+                raise WorkflowError(f"checks.{check}.{leaf} has an unsupported unavailable reason")
+        else:
+            if status != {"attempted": False, "passed": None, "reason": "not_requested"}:
+                raise WorkflowError(f"checks.{check}.{leaf} must be exactly not_requested")
+    compile_status = value["compile"]["candidate"]
+    simulation_status = value["simulation"]["candidate_passes"]
+    if simulation_status["passed"] is True and compile_status["passed"] is not True:
+        raise WorkflowError("simulation cannot pass when compile did not pass")
     return value
 
 
@@ -1079,12 +1240,36 @@ def _validate_mismatch(value: Any) -> dict[str, Any]:
     if any(item is not None and (type(item) is not int or item < 0) for item in value["reported_sample_counts"]):
         raise WorkflowError("mismatch sample counts are invalid")
     maximum = max(value["reported_counts"]) if value["reported_counts"] else None
-    if value["maximum_count"] != maximum or type(value["timeout_reported"]) is not bool:
+    if ((value["maximum_count"] != maximum
+            or (value["maximum_count"] is not None and type(value["maximum_count"]) is not int))
+            or type(value["timeout_reported"]) is not bool):
         raise WorkflowError("mismatch_summary maximum or timeout flag is inconsistent")
     return value
 
 
-def _diagnostic_leak(value: str, plan: dict[str, Any], workspace_root: Path | None = None) -> bool:
+def _build_source_line_index(plans: Iterable[dict[str, Any]], workspace_root: Path) -> tuple[set[bytes], bool]:
+    paths: set[str] = set()
+    for plan in plans:
+        paths.add(plan["workspace_paths"]["candidate_rtl_path"])
+        paths.add(plan["workspace_paths"]["testbench_path"])
+        paths.update(plan["workspace_paths"]["support_files"])
+    lines: set[bytes] = set()
+    conservative = False
+    for relative in sorted(paths):
+        path = workspace_root / relative
+        raw = _read_bounded(path, MAX_WORKSPACE_ARTIFACT_BYTES)
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if len(line) > MAX_SOURCE_INDEX_LINE_BYTES or len(lines) >= MAX_SOURCE_INDEX_LINES:
+                conservative = True
+                continue
+            lines.add(line)
+    return lines, conservative
+
+
+def _diagnostic_leak(value: str, plan: dict[str, Any], source_index: tuple[set[bytes], bool] | None = None) -> bool:
     if "\x00" in value or len(value.encode("utf-8")) > MAX_DIAGNOSTIC_BYTES:
         return True
     if _private_string_leak(value) or "workspace/" in value or ".rtlbench-run-" in value:
@@ -1094,15 +1279,33 @@ def _diagnostic_leak(value: str, plan: dict[str, Any], workspace_root: Path | No
             return True
     if re.search(r"(?i)\b(?:authorization\s*:\s*bearer|bearer|api[_-]?key|token|password|secret)\b", value):
         return True
-    if workspace_root is not None:
-        for relative in (plan["workspace_paths"]["candidate_rtl_path"], plan["workspace_paths"]["testbench_path"], *plan["workspace_paths"]["support_files"]):
-            content = (workspace_root / relative).read_bytes() if (workspace_root / relative).is_file() else b""
-            if len(content) >= 16 and any(line and line in value.encode("utf-8") for line in content.splitlines()):
-                return True
+    if source_index is not None:
+        lines, conservative = source_index
+        encoded = value.encode("utf-8")
+        if conservative or any(line and line in encoded for line in lines):
+            return True
     return False
 
 
-def _evidence_row(evidence: Any, plan: dict[str, Any], workspace_root: Path | None) -> dict[str, Any]:
+def _select_failure_category(checks: dict[str, Any], accepted: bool) -> str:
+    if accepted:
+        return "passed"
+    required = [checks["compile"]["candidate"], checks["simulation"]["candidate_passes"]]
+    for category in (
+        "timeout",
+        "compile_failure",
+        "functional_mismatch",
+        "simulation_result_missing",
+        "simulation_failure",
+        "tool_unavailable",
+        "internal_error",
+    ):
+        if any(status.get("reason") == category for status in required):
+            return category
+    return "partial_failure"
+
+
+def _evidence_row(evidence: Any, plan: dict[str, Any], source_index: tuple[set[bytes], bool] | None) -> dict[str, Any]:
     _strict_fields(evidence, EVIDENCE_FIELDS, "evidence row")
     for field in ("schema_version", "candidate_id", "task_id", "source_id", "top_module", "testbench_top", "simulation_result_contract"):
         if not isinstance(evidence[field], str):
@@ -1127,7 +1330,7 @@ def _evidence_row(evidence: Any, plan: dict[str, Any], workspace_root: Path | No
         raise WorkflowError("evidence diagnostics are invalid")
     if len(set(diagnostics)) != len(diagnostics):
         raise WorkflowError("evidence diagnostics must be deterministic and deduplicated")
-    if any(_diagnostic_leak(item, plan, workspace_root) for item in diagnostics):
+    if any(_diagnostic_leak(item, plan, source_index) for item in diagnostics):
         raise WorkflowError("evidence diagnostics contain private paths, source, or credentials")
     compile_status = checks["compile"]["candidate"]
     simulation_status = checks["simulation"]["candidate_passes"]
@@ -1135,32 +1338,34 @@ def _evidence_row(evidence: Any, plan: dict[str, Any], workspace_root: Path | No
     if evidence["accepted"] != accepted:
         raise WorkflowError("evidence.accepted is inconsistent with required check leaves")
     if accepted:
-        if evidence["failure_category"] != "passed" or not mismatch["reported_counts"] or mismatch["maximum_count"] != 0 or mismatch["timeout_reported"]:
+        if (evidence["failure_category"] != "passed" or not mismatch["reported_counts"]
+                or not mismatch["reported_sample_counts"]
+                or any(count != 0 for count in mismatch["reported_counts"])
+                or any(type(count) is not int or count != 0 for count in mismatch["reported_sample_counts"])
+                or mismatch["timeout_reported"]):
             raise WorkflowError("accepted mismatch_count_v1 evidence is inconsistent")
     else:
         if evidence["failure_category"] == "passed":
             raise WorkflowError("failed evidence cannot use failure_category=passed")
-        if mismatch["timeout_reported"] or compile_status.get("reason") == "timeout" or simulation_status.get("reason") == "timeout":
-            expected_category = "timeout"
-        elif compile_status["passed"] is False:
-            expected_category = "compile_failure"
-        elif any(count > 0 for count in mismatch["reported_counts"]):
-            expected_category = "functional_mismatch"
-        elif simulation_status.get("reason") == "simulation_result_missing":
-            expected_category = "simulation_result_missing"
-        elif simulation_status["passed"] is False:
-            expected_category = "simulation_failure"
-        elif not compile_status["attempted"] or not simulation_status["attempted"]:
-            expected_category = "tool_unavailable"
-        else:
-            expected_category = "partial_failure"
+        expected_category = _select_failure_category(checks, accepted)
         if evidence["failure_category"] != expected_category:
             raise WorkflowError(f"failure_category is inconsistent; expected {expected_category}")
+        positive_mismatch = any(count > 0 for count in mismatch["reported_counts"])
+        if positive_mismatch and evidence["failure_category"] not in {"functional_mismatch", "timeout"}:
+            raise WorkflowError("positive mismatch reports require functional_mismatch unless timeout has priority")
+        timeout_reason = compile_status.get("reason") == "timeout" or simulation_status.get("reason") == "timeout"
+        if mismatch["timeout_reported"] != timeout_reason:
+            raise WorkflowError("timeout marker must align with a timeout leaf reason")
+        if mismatch["timeout_reported"] and evidence["failure_category"] != "timeout":
+            raise WorkflowError("timeout marker requires failure_category=timeout")
+        if simulation_status.get("reason") == "simulation_result_missing" and (
+                not simulation_status["attempted"] or compile_status["passed"] is not True):
+            raise WorkflowError("simulation_result_missing requires an attempted simulation after compile passed")
     return evidence
 
 
 def _load_plans(path: Path) -> list[dict[str, Any]]:
-    plans = _load_jsonl(path)
+    plans = _load_jsonl(path, maximum=MAX_JSONL_BYTES)
     seen: set[str] = set()
     for index, plan in enumerate(plans, 1):
         _validate_plan(plan, f"plan row {index}")
@@ -1174,10 +1379,21 @@ def ingest_candidate_evidence(
     plan_path: Path,
     evidence_path: Path,
     output_path: Path,
+    *,
+    append: bool = False,
+    overwrite: bool = False,
 ) -> tuple[dict[str, Any], int]:
     try:
+        if append and overwrite:
+            raise WorkflowError("--append and --overwrite are mutually exclusive")
+        if _contains_symlink(output_path) or output_path.is_symlink():
+            raise WorkflowError("evidence output must not be a symlink")
+        if output_path.exists() and (output_path.is_dir() or _is_hard_link(output_path)):
+            raise WorkflowError("evidence output must be a regular non-hard-linked file")
+        if _is_alias(output_path, plan_path) or _is_alias(output_path, evidence_path):
+            raise WorkflowError("evidence output aliases an input")
         plans = _load_plans(plan_path)
-        evidence_rows = _load_jsonl(evidence_path)
+        evidence_rows = _load_jsonl(evidence_path, maximum=MAX_JSONL_BYTES)
         if len(plans) != len(evidence_rows):
             raise WorkflowError("evidence row count does not match plan")
         workspace_root = plan_path.parent / "workspace"
@@ -1189,16 +1405,17 @@ def ingest_candidate_evidence(
                 (plan["workspace_paths"]["testbench_path"], plan["expected_hashes"]["testbench_sha256"]),
             ):
                 path = workspace_root / relative
-                if _contains_symlink(path) or not path.is_file() or _sha256_file(path) != expected_hash:
+                if _contains_symlink(path) or not path.is_file() or _sha256_file(path, maximum=MAX_WORKSPACE_ARTIFACT_BYTES) != expected_hash:
                     raise WorkflowError(f"workspace hash mismatch or missing file: {relative}")
             for item in plan["expected_hashes"]["support_files"]:
                 path = workspace_root / item["path"]
-                if _contains_symlink(path) or not path.is_file() or _sha256_file(path) != item["sha256"]:
+                if _contains_symlink(path) or not path.is_file() or _sha256_file(path, maximum=MAX_WORKSPACE_ARTIFACT_BYTES) != item["sha256"]:
                     raise WorkflowError(f"workspace support hash mismatch or missing file: {item['path']}")
+        source_index = _build_source_line_index(plans, workspace_root)
         attempts: list[dict[str, Any]] = []
         accepted = 0
         for index, (plan, evidence) in enumerate(zip(plans, evidence_rows), 1):
-            evidence = _evidence_row(evidence, plan, workspace_root if workspace_root.is_dir() else None)
+            evidence = _evidence_row(evidence, plan, source_index)
             if evidence["accepted"]:
                 accepted += 1
             attempts.append({
@@ -1211,10 +1428,19 @@ def ingest_candidate_evidence(
                 "mismatch_summary": evidence["mismatch_summary"], "diagnostics": evidence["diagnostics"],
                 "toolchain": evidence["toolchain"],
             })
+        existing: list[dict[str, Any]] = []
         if output_path.exists():
-            raise WorkflowError(f"output already exists: {output_path}; use --overwrite is intentionally not implicit")
-        _atomic_write(output_path, b"".join(_json_bytes(row) for row in attempts))
-        return {"ok": True, "ingested_attempts": len(attempts), "accepted_attempts": accepted, "failed_attempts": len(attempts) - accepted, "errors": [], "warnings": []}, 0
+            if not (append or overwrite):
+                raise WorkflowError(f"output already exists: {output_path}; use --append or --overwrite")
+            existing = _load_attempts(output_path)
+            if overwrite:
+                existing = []
+        combined = existing + attempts
+        _validate_attempt_history(combined)
+        combined.sort(key=lambda row: (row["task_id"], row["attempt"], row["candidate_id"]))
+        _atomic_write(output_path, b"".join(_json_bytes(row) for row in combined))
+        accepted_total = sum(1 for row in combined if row["accepted"])
+        return {"ok": True, "ingested_attempts": len(attempts), "total_attempts": len(combined), "accepted_attempts": accepted_total, "failed_attempts": len(combined) - accepted_total, "errors": [], "warnings": []}, 0
     except WorkflowError as exc:
         return {"ok": False, "ingested_attempts": 0, "errors": [_report_error(exc)], "warnings": []}, 1
 
@@ -1230,12 +1456,79 @@ def _validate_attempt(row: Any, label: str) -> dict[str, Any]:
         raise WorkflowError(f"{label} has invalid attempt or accepted")
     if not SHA256_RE.fullmatch(row["candidate_sha256"]) or row["failure_category"] not in FAILURE_CATEGORIES:
         raise WorkflowError(f"{label} has invalid hash or failure category")
-    _validate_checks(row["checks"], REQUESTED_CHECKS)
+    checks = _validate_checks(row["checks"], REQUESTED_CHECKS)
     _validate_mismatch(row["mismatch_summary"])
-    if not isinstance(row["diagnostics"], list) or any(not isinstance(item, str) or len(item.encode("utf-8")) > MAX_DIAGNOSTIC_BYTES for item in row["diagnostics"]):
+    accepted = checks["compile"]["candidate"]["passed"] is True and checks["simulation"]["candidate_passes"]["passed"] is True
+    if row["accepted"] != accepted:
+        raise WorkflowError(f"{label}.accepted is inconsistent with required checks")
+    expected_category = _select_failure_category(checks, accepted)
+    if row["failure_category"] != expected_category:
+        raise WorkflowError(f"{label}.failure_category is inconsistent; expected {expected_category}")
+    mismatch = row["mismatch_summary"]
+    if accepted:
+        if (not mismatch["reported_counts"] or not mismatch["reported_sample_counts"]
+                or any(count != 0 for count in mismatch["reported_counts"])
+                or any(type(count) is not int or count != 0 for count in mismatch["reported_sample_counts"])
+                or mismatch["timeout_reported"]):
+            raise WorkflowError(f"{label}.accepted mismatch summary is inconsistent")
+    else:
+        if any(count > 0 for count in mismatch["reported_counts"]) and row["failure_category"] not in {"functional_mismatch", "timeout"}:
+            raise WorkflowError(f"{label} positive mismatch report has an inconsistent category")
+        timeout_reason = any(checks[name][leaf].get("reason") == "timeout" for name, leaf in (("compile", "candidate"), ("simulation", "candidate_passes")))
+        if mismatch["timeout_reported"] != timeout_reason:
+            raise WorkflowError(f"{label} timeout marker is inconsistent")
+        if mismatch["timeout_reported"] and row["failure_category"] != "timeout":
+            raise WorkflowError(f"{label} timeout category is inconsistent")
+        simulation = checks["simulation"]["candidate_passes"]
+        if simulation.get("reason") == "simulation_result_missing" and (not simulation["attempted"] or checks["compile"]["candidate"]["passed"] is not True):
+            raise WorkflowError(f"{label} missing-result state is impossible")
+    if (not isinstance(row["diagnostics"], list)
+            or len(row["diagnostics"]) > MAX_DIAGNOSTICS
+            or len(set(row["diagnostics"])) != len(row["diagnostics"])
+            or any(not isinstance(item, str) or len(item.encode("utf-8")) > MAX_DIAGNOSTIC_BYTES for item in row["diagnostics"])):
         raise WorkflowError(f"{label}.diagnostics is invalid")
+    diagnostic_plan = {"workspace_paths": {"candidate_rtl_path": "", "testbench_path": "", "support_files": []}}
+    if any(_diagnostic_leak(item, diagnostic_plan) for item in row["diagnostics"]):
+        raise WorkflowError(f"{label}.diagnostics contain private paths or credentials")
     _validate_toolchain(row["toolchain"], f"{label}.toolchain")
     return row
+
+
+def _load_attempts(path: Path) -> list[dict[str, Any]]:
+    rows = _load_jsonl(path, maximum=MAX_JSONL_BYTES)
+    for index, row in enumerate(rows, 1):
+        _validate_attempt(row, f"attempt row {index}")
+    return rows
+
+
+def _validate_attempt_history(rows: list[dict[str, Any]]) -> None:
+    seen_ids: set[str] = set()
+    seen_pairs: set[tuple[str, int]] = set()
+    by_task: dict[str, list[dict[str, Any]]] = {}
+    for index, row in enumerate(rows, 1):
+        _validate_attempt(row, f"attempt row {index}")
+        expected_id = f"{row['task_id']}_attempt_{row['attempt']:02d}"
+        if row["candidate_id"] != expected_id:
+            raise WorkflowError(f"attempt row {index} has a non-deterministic candidate_id")
+        if row["candidate_id"] in seen_ids:
+            raise WorkflowError(f"duplicate attempt candidate_id: {row['candidate_id']}")
+        pair = (row["task_id"], row["attempt"])
+        if pair in seen_pairs:
+            raise WorkflowError(f"duplicate attempt record: {pair}")
+        seen_ids.add(row["candidate_id"])
+        seen_pairs.add(pair)
+        by_task.setdefault(row["task_id"], []).append(row)
+    for task_id, history in by_task.items():
+        history.sort(key=lambda row: row["attempt"])
+        if len({row["source_id"] for row in history}) != 1 or len({row["top_module"] for row in history}) != 1:
+            raise WorkflowError(f"attempt history for {task_id} changes source or top module")
+        expected = list(range(1, history[-1]["attempt"] + 1))
+        actual = [row["attempt"] for row in history]
+        if actual != expected:
+            raise WorkflowError(f"attempt history for {task_id} must be contiguous from 1")
+        accepted_positions = [index for index, row in enumerate(history) if row["accepted"]]
+        if accepted_positions and accepted_positions[0] != len(history) - 1:
+            raise WorkflowError(f"attempt history for {task_id} contains an attempt after acceptance")
 
 
 def export_teacher_repair_packets(
@@ -1253,9 +1546,18 @@ def export_teacher_repair_packets(
             raise WorkflowError("max-attempts must be in 1..4 and batch-size must be positive")
         tasks = _load_tasks(tasks_path)
         candidates = _load_candidate_records(candidates_path)
-        attempts = _load_jsonl(attempts_path)
-        for index, row in enumerate(attempts, 1):
-            _validate_attempt(row, f"attempt row {index}")
+        attempts = _load_attempts(attempts_path)
+        _validate_attempt_history(attempts)
+        task_map = {task["task_id"]: task for task in tasks}
+        candidate_map: dict[str, dict[str, Any]] = {}
+        for index, record in enumerate(candidates, 1):
+            task = task_map.get(record["task_id"])
+            if task is None:
+                raise WorkflowError(f"candidate record {index} references an unknown task")
+            _validate_candidate_object(record["candidate"], task, f"candidate record {index}.candidate")
+            if record["source_id"] != task["source_id"] or record["candidate_id"] != f"{record['task_id']}_attempt_{record['attempt']:02d}":
+                raise WorkflowError(f"candidate record {index} has inconsistent identity")
+            candidate_map[record["candidate_id"]] = record
         by_candidate: dict[str, dict[str, Any]] = {}
         seen_attempts: set[tuple[str, int]] = set()
         for row in attempts:
@@ -1265,6 +1567,18 @@ def export_teacher_repair_packets(
             if pair in seen_attempts:
                 raise WorkflowError(f"duplicate attempt record: {pair}")
             seen_attempts.add(pair)
+            task = task_map.get(row["task_id"])
+            if task is None:
+                raise WorkflowError(f"attempt references an unknown task: {row['task_id']}")
+            if row["source_id"] != task["source_id"] or row["top_module"] != task["top_module"]:
+                raise WorkflowError(f"attempt task identity mismatch: {row['task_id']}")
+            candidate = candidate_map.get(row["candidate_id"])
+            if candidate is None:
+                raise WorkflowError(f"missing candidate for attempt {row['candidate_id']}")
+            if candidate["task_id"] != row["task_id"] or candidate["source_id"] != row["source_id"] or candidate["attempt"] != row["attempt"]:
+                raise WorkflowError(f"candidate/attempt identity mismatch: {row['candidate_id']}")
+            if candidate["candidate_sha256"] != row["candidate_sha256"]:
+                raise WorkflowError(f"candidate/attempt hash mismatch: {row['candidate_id']}")
             by_candidate[row["candidate_id"]] = row
         by_task_candidate: dict[tuple[str, int], dict[str, Any]] = {}
         for row in candidates:
@@ -1274,7 +1588,8 @@ def export_teacher_repair_packets(
         selected: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
         for task in tasks:
             all_task_attempts = [row for row in attempts if row["task_id"] == task["task_id"]]
-            if all_task_attempts and max(all_task_attempts, key=lambda row: row["attempt"])["accepted"]:
+            all_task_attempts.sort(key=lambda row: row["attempt"])
+            if all_task_attempts and all_task_attempts[-1]["accepted"]:
                 continue
             failed = [row for row in all_task_attempts if not row["accepted"]]
             if not failed:

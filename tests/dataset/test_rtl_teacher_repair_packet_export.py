@@ -38,5 +38,5 @@ def test_attempt_four_is_not_repairable(tmp_path: Path) -> None:
     # selection must stop before requiring a missing repair source.
     output = tmp_path / "repairs"
     result, code = export_teacher_repair_packets(FIXTURE_ROOT / "generation_tasks.jsonl", candidates, attempts, output)
-    assert code == 0, result
-    assert result["repairable_attempts"] == 0
+    assert code != 0
+    assert "contiguous" in result["errors"][0]

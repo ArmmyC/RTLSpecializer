@@ -17,9 +17,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plan", required=True, type=Path)
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--append", action="store_true")
+    parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    report, code = ingest_candidate_evidence(args.plan, args.evidence, args.output)
+    report, code = ingest_candidate_evidence(
+        args.plan, args.evidence, args.output,
+        append=args.append, overwrite=args.overwrite,
+    )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:

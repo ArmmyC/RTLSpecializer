@@ -1,12 +1,12 @@
 # Manual RTL teacher generation and verification workflow
 
-This is a manual, local workflow. No model API is used. RTLSpecializer never
-executes RTL, testbenches, RTLBench, Icarus, VVP, Verilator, Yosys, or another
-EDA tool. Reference RTL and private testbenches are never sent to the LLM.
-Generated candidates and evidence remain local, and even accepted results need
-human review before any dataset promotion.
+This is an explicitly manual, local workflow. RTLSpecializer does not call a
+model API, expose an endpoint, make automated model calls, invoke a
+subprocess, execute RTL or testbenches, invoke RTLBench, or invoke an EDA tool.
+The operator performs the LLM interaction and the isolated RTLBench run. A
+human reviews evidence before any dataset promotion.
 
-## Initial packet
+## 1. Export the initial packet
 
 ```bash
 python scripts/dataset/export_rtl_teacher_generation_packets.py \
@@ -15,11 +15,16 @@ python scripts/dataset/export_rtl_teacher_generation_packets.py \
   --batch-size 1 --limit 5 --json
 ```
 
-Copy `packet_0001.md` into the chosen LLM. Save only its returned JSON as
-`packet_0001_response.json`. The response must contain exactly `rows`; do not
-save Markdown fences or explanatory prose.
+Copy `packet_0001.md` into the chosen LLM manually. Save only its returned JSON
+as `packet_0001_response.json`; do not save Markdown fences or explanatory
+prose. Packet IDs are deterministic over packet kind, ordered task IDs, target
+attempt, and prompt version.
 
-## Validate the response
+## 2. Validate and append candidate records
+
+The production validator always requires both private-boundary options. It
+checks private hashes, task/private identity, and reference/testbench/support
+contamination before writing a public candidate record.
 
 ```bash
 python scripts/dataset/validate_rtl_teacher_candidate_batch.py \
@@ -27,48 +32,83 @@ python scripts/dataset/validate_rtl_teacher_candidate_batch.py \
   --response data/.local_data/manual_teacher_responses/packet_0001_response.json \
   --private-assets data/review/rtl_generation_pilot/verification_assets.jsonl \
   --private-assets-root data/.local_data/rtl_generation_verification_assets \
-  --output data/.local_data/validated_teacher_candidates/candidates.jsonl \
+  --output data/review/rtl_generation_pilot/candidate_records.jsonl \
   --json
 ```
 
-The validator derives the candidate ID and attempt locally, verifies the
-candidate hash, checks the declared top-module text conservatively, and checks
-for private asset contamination. It does not compile or simulate.
+When a repair response is validated, append it to the same candidate-record
+file. Existing records are fully validated and the combined file is sorted by
+`task_id`, `attempt`, and `candidate_id`.
 
-## Prepare the RTLBench handoff
+```bash
+python scripts/dataset/validate_rtl_teacher_candidate_batch.py \
+  --packet data/review/rtl_teacher_repair_packets/attempt_02/packet_0001.json \
+  --response data/.local_data/manual_teacher_responses/repair_02_packet_0001.json \
+  --private-assets data/review/rtl_generation_pilot/verification_assets.jsonl \
+  --private-assets-root data/.local_data/rtl_generation_verification_assets \
+  --output data/review/rtl_generation_pilot/candidate_records.jsonl \
+  --append --json
+```
+
+## 3. Select one attempt for the RTLBench handoff
+
+Filters are applied only after all input records and private assets have been
+validated. The selected candidate-record order is preserved. Use an
+attempt-specific directory so a repair round does not silently reverify older
+attempts.
+
+Initial verification:
 
 ```bash
 python scripts/dataset/prepare_rtl_candidate_verification.py \
   --tasks data/review/rtl_generation_pilot/generation_tasks.jsonl \
   --assets data/review/rtl_generation_pilot/verification_assets.jsonl \
   --private-assets-root data/.local_data/rtl_generation_verification_assets \
-  --candidates data/.local_data/validated_teacher_candidates/candidates.jsonl \
+  --candidates data/review/rtl_generation_pilot/candidate_records.jsonl \
+  --attempt 1 \
   --output-dir data/.local_data/rtl_candidate_verification/run_001 \
   --json
 ```
 
-The output contains `candidate_manifest.jsonl`, `verification_plan.jsonl`,
-`run_instructions.md`, and a workspace with only candidate RTL, testbench, and
-support files. Reference RTL is never copied.
+Attempt 2 verification:
 
-## Human verification
+```bash
+python scripts/dataset/prepare_rtl_candidate_verification.py \
+  --tasks data/review/rtl_generation_pilot/generation_tasks.jsonl \
+  --assets data/review/rtl_generation_pilot/verification_assets.jsonl \
+  --private-assets-root data/.local_data/rtl_generation_verification_assets \
+  --candidates data/review/rtl_generation_pilot/candidate_records.jsonl \
+  --attempt 2 \
+  --output-dir data/.local_data/rtl_candidate_verification/run_002 \
+  --json
+```
 
-Run the exact command in `run_instructions.md` manually inside a disposable,
-least-privileged container or VM with no network access or production secrets:
+`--candidate-id` may be repeated for a narrower handoff. Unknown IDs, duplicate
+filters, boolean attempt values, and empty selections are rejected. The output
+parent may be missing; it is created safely, and staging remains in that same
+parent for atomic publication.
+
+## 4. Run the isolated verification manually
+
+Run the exact command in each run directory’s `run_instructions.md` manually
+inside a disposable, least-privileged container or VM with no network access
+or production secrets:
 
 ```bash
 rtlbench verify-candidates \
-  --manifest <output-dir>/candidate_manifest.jsonl \
-  --output <output-dir>/candidate_evidence.jsonl \
-  --workspace-root <output-dir>/workspace \
+  --manifest <run-dir>/candidate_manifest.jsonl \
+  --output <run-dir>/candidate_evidence.jsonl \
+  --workspace-root <run-dir>/workspace \
   --work-dir /tmp/rtlbench-candidate-work \
   --force
 ```
 
-Externally enforce CPU, memory, process, output, disk, and time limits.
+Enforce CPU, memory, process, output, disk, and time limits externally.
 RTLSpecializer does not invoke this command.
 
-## Ingest evidence
+## 5. Ingest evidence across attempts
+
+The first ingestion rejects an existing output by default:
 
 ```bash
 python scripts/dataset/ingest_rtl_candidate_evidence.py \
@@ -78,26 +118,50 @@ python scripts/dataset/ingest_rtl_candidate_evidence.py \
   --json
 ```
 
-Ingestion checks identities, hashes, requested checks, check leaves, mismatch
-reports, acceptance consistency, failure-category priority, diagnostics, and
-private leakage. A simulation pass is evidence for this candidate under this
-testbench contract; it is not a proof of equivalence or a golden-data approval.
+Append the next verified attempt without deleting history:
 
-## Failed candidate and repair
+```bash
+python scripts/dataset/ingest_rtl_candidate_evidence.py \
+  --plan data/.local_data/rtl_candidate_verification/run_002/verification_plan.jsonl \
+  --evidence data/.local_data/rtl_candidate_verification/run_002/candidate_evidence.jsonl \
+  --output data/review/rtl_generation_pilot/generation_attempts.jsonl \
+  --append \
+  --json
+```
+
+`--append` and `--overwrite` are mutually exclusive. Append loads and fully
+validates existing attempts, then atomically writes deterministic order
+`task_id`, `attempt`, `candidate_id`. Attempts must be contiguous from 1, no
+attempt may exceed 4, and an accepted attempt is terminal. The fixed v0.1
+profile requires compile and simulation and leaves lint/synthesis exactly
+`not_requested`.
+
+## 6. Export repair packets by round
+
+After a failed attempt, export the latest valid failure to its own round
+directory:
 
 ```bash
 python scripts/dataset/export_rtl_teacher_repair_packets.py \
   --tasks data/review/rtl_generation_pilot/generation_tasks.jsonl \
-  --candidates data/.local_data/validated_teacher_candidates/candidates.jsonl \
+  --candidates data/review/rtl_generation_pilot/candidate_records.jsonl \
   --attempts data/review/rtl_generation_pilot/generation_attempts.jsonl \
-  --output-dir data/review/rtl_teacher_repair_packets \
+  --output-dir data/review/rtl_teacher_repair_packets/attempt_02 \
   --max-attempts 4 --batch-size 1 --json
 ```
 
-Only the latest failed attempt below attempt four is exported. The repair packet
-contains the original public task, complete previous candidate, and bounded
-sanitized evidence. It excludes reference RTL, testbench/support content,
-expected vectors, hashes, private paths, raw logs, and API details. Copy its
-Markdown packet to the LLM, save JSON only, and validate it with the same
-candidate validator. Repeat at most four total attempts; no packet is exported
-for an accepted or attempt-four candidate.
+Use `attempt_03` and `attempt_04` for later rounds. The packet filenames may
+restart at `packet_0001.*` inside each directory; no previous repair directory
+needs to be deleted or overwritten. Each repair packet binds the public task,
+candidate record, and generation attempt and sets `target_attempt` to the
+previous attempt plus one. No repair packet is exported after attempt 4 or
+after acceptance.
+
+Repeat candidate validation with `--append`, select only the new attempt with
+`--attempt`, prepare a new run directory, and ingest with `--append`. Once an
+attempt is accepted, the workflow is terminal for that task and no further
+repair packet is produced.
+
+Reference RTL, testbench/support content, private paths, credentials, raw logs,
+expected vectors, and private hashes never enter teacher-visible packets,
+candidate records, generation attempts, or reports.
