@@ -1,0 +1,13 @@
+{
+  "rows": [
+    {
+      "schema_version": "rtl_teacher_candidate_v0.1",
+      "task_id": "rtlgen_synthetic_example",
+      "top_module": "TopModule",
+      "language": "systemverilog",
+      "rtl": "module TopModule(input logic a, input logic b, output logic y);\n  always_comb begin\n    y = a & b;\n  end\nendmodule\n",
+      "implementation_summary": "Implements the requested combinational AND behavior.",
+      "assumptions": []
+    }
+  ]
+}

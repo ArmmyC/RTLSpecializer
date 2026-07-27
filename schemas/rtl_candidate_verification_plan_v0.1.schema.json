@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_candidate_verification_plan_v0.1.schema.json",
+  "title": "RTL candidate verification plan v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidate_id", "task_id", "source_id", "attempt", "top_module", "verification_profile", "testbench_top", "simulation_result_contract", "requested_checks", "workspace_paths", "expected_hashes"],
+  "properties": {
+    "schema_version": {"const": "rtl_candidate_verification_plan_v0.1"},
+    "candidate_id": {"type": "string", "minLength": 1}, "task_id": {"type": "string", "minLength": 1}, "source_id": {"type": "string", "minLength": 1},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 4}, "top_module": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_$]*$"},
+    "verification_profile": {"const": "verilog_eval_mismatch_v1"}, "testbench_top": {"const": "tb"}, "simulation_result_contract": {"const": "mismatch_count_v1"},
+    "requested_checks": {"type": "object", "additionalProperties": false, "properties": {"compile": {"const": true}, "simulation": {"const": true}, "lint": {"const": false}, "synthesis": {"const": false}}, "required": ["compile", "simulation", "lint", "synthesis"]},
+    "workspace_paths": {"type": "object", "additionalProperties": false, "required": ["candidate_rtl_path", "testbench_path", "support_files"], "properties": {"candidate_rtl_path": {"type": "string"}, "testbench_path": {"type": "string"}, "support_files": {"type": "array", "items": {"type": "string"}}}},
+    "expected_hashes": {"type": "object", "additionalProperties": false, "required": ["candidate_rtl_sha256", "testbench_sha256", "support_files"], "properties": {"candidate_rtl_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "testbench_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "support_files": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}}}}
+  }
+}

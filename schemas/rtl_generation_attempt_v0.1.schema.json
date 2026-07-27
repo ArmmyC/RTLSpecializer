@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_generation_attempt_v0.1.schema.json",
+  "title": "Evidence-aware RTL generation attempt v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidate_id", "task_id", "source_id", "attempt", "top_module", "candidate_sha256", "verification_profile", "accepted", "failure_category", "checks", "mismatch_summary", "diagnostics", "toolchain"],
+  "properties": {
+    "schema_version": {"const": "rtl_generation_attempt_v0.1"}, "candidate_id": {"type": "string"}, "task_id": {"type": "string"}, "source_id": {"type": "string"}, "attempt": {"type": "integer", "minimum": 1, "maximum": 4}, "top_module": {"type": "string"}, "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "verification_profile": {"const": "verilog_eval_mismatch_v1"}, "accepted": {"type": "boolean"}, "failure_category": {"enum": ["passed", "tool_unavailable", "compile_failure", "functional_mismatch", "simulation_result_missing", "simulation_failure", "timeout", "internal_error", "partial_failure"]}, "checks": {"type": "object"}, "mismatch_summary": {"type": "object"}, "diagnostics": {"type": "array", "items": {"type": "string", "maxLength": 4096}}, "toolchain": {"type": "object"}
+  }
+}

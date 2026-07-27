@@ -19,7 +19,7 @@ existing source data
   → private verification-asset join
 ```
 
-It keeps reference RTL and testbenches private and does not call models, execute RTL, run RTLBench/EDA, or train models. The next milestone will add teacher RTL generation and RTLBench candidate verification; this workflow does not implement them. See [docs/dataset/rtl_generation_task_preparation_workflow.md](docs/dataset/rtl_generation_task_preparation_workflow.md).
+It keeps reference RTL and testbenches private and does not call models, execute RTL, run RTLBench/EDA, or train models. The manual teacher-generation and verification workflow now continues from these validated tasks through local candidate validation, deterministic RTLBench handoff, evidence ingestion, and bounded repair packets. See [docs/dataset/manual_rtl_teacher_verification_workflow.md](docs/dataset/manual_rtl_teacher_verification_workflow.md).
 
 Clean `rtl_task_v0.1` rows can be exported into small local teacher-answer batches for manual ChatGPT/Claude/larger-teacher generation of conservative `rtl_answer_v0.1`, then validated and merged into draft chat rows. See [docs/dataset/rtl_answer_teacher_generation_workflow.md](docs/dataset/rtl_answer_teacher_generation_workflow.md).
 
@@ -270,6 +270,7 @@ Generated and potentially sensitive workspaces such as `data/.local_data/`, `dat
 - [Public-data review and promotion](docs/dataset/review_promotion_workflow.md)
 - [VerilogEval review workflow](docs/dataset/verilog_eval_review_workflow.md)
 - [Dataset release workflow](docs/dataset/release_workflow.md)
+- [Manual RTL teacher generation and verification](docs/dataset/manual_rtl_teacher_verification_workflow.md)
 - [Evaluation harness](docs/eval/evaluation_harness.md)
 - [Local model candidate runner](docs/eval/model_candidate_runner.md)
 - [OpenAI-compatible candidate runner](docs/eval/openai_compatible_candidate_runner.md)
