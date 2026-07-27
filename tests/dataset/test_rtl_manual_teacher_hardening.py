@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
+import jsonschema
 
 import scripts.dataset.rtl_manual_teacher_verification as verification
 from scripts.dataset.rtl_manual_teacher_verification import (
@@ -474,7 +475,6 @@ def test_generation_attempt_status_schema_covers_all_contract_states() -> None:
 
 
 def test_generated_attempt_representatives_validate_against_committed_schema(tmp_path: Path) -> None:
-    jsonschema = pytest.importorskip("jsonschema")
     _, _, run = initial_flow(tmp_path)
     accepted_evidence = evidence_for_plan(run, accepted=True)
     output = tmp_path / "accepted-attempt.jsonl"
