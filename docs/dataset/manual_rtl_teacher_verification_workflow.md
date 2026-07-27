@@ -134,7 +134,10 @@ validates existing attempts, then atomically writes deterministic order
 `task_id`, `attempt`, `candidate_id`. Attempts must be contiguous from 1, no
 attempt may exceed 4, and an accepted attempt is terminal. The fixed v0.1
 profile requires compile and simulation and leaves lint/synthesis exactly
-`not_requested`.
+`not_requested`. Accepted mismatch reports have zero mismatch counts, but their
+sample counts may be positive or null. A process timeout may have
+`timeout_reported: false`; a true timeout marker requires a timeout leaf and the
+`timeout` category.
 
 ## 6. Export repair packets by round
 

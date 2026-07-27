@@ -15,9 +15,19 @@
         "passed": {"type": ["boolean", "null"]},
         "reason": {"type": ["string", "null"], "enum": [null, "not_requested", "tool_unavailable", "compile_failure", "functional_mismatch", "simulation_result_missing", "simulation_failure", "timeout", "internal_error", "partial_failure"]}
       },
-      "anyOf": [
-        {"properties": {"attempted": {"const": true}, "passed": {"type": "boolean"}, "reason": {"const": null}}},
-        {"properties": {"attempted": {"const": false}, "passed": {"const": null}, "reason": {"type": "string", "minLength": 1}}}
+      "oneOf": [
+        {
+          "required": ["attempted", "passed", "reason"],
+          "properties": {"attempted": {"const": true}, "passed": {"const": true}, "reason": {"const": null}}
+        },
+        {
+          "required": ["attempted", "passed", "reason"],
+          "properties": {"attempted": {"const": true}, "passed": {"const": false}, "reason": {"enum": ["tool_unavailable", "compile_failure", "functional_mismatch", "simulation_result_missing", "simulation_failure", "timeout", "internal_error", "partial_failure"]}}
+        },
+        {
+          "required": ["attempted", "passed", "reason"],
+          "properties": {"attempted": {"const": false}, "passed": {"const": null}, "reason": {"enum": ["not_requested", "tool_unavailable", "compile_failure", "internal_error"]}}
+        }
       ]
     },
     "checks": {

@@ -1339,9 +1339,7 @@ def _evidence_row(evidence: Any, plan: dict[str, Any], source_index: tuple[set[b
         raise WorkflowError("evidence.accepted is inconsistent with required check leaves")
     if accepted:
         if (evidence["failure_category"] != "passed" or not mismatch["reported_counts"]
-                or not mismatch["reported_sample_counts"]
                 or any(count != 0 for count in mismatch["reported_counts"])
-                or any(type(count) is not int or count != 0 for count in mismatch["reported_sample_counts"])
                 or mismatch["timeout_reported"]):
             raise WorkflowError("accepted mismatch_count_v1 evidence is inconsistent")
     else:
@@ -1354,8 +1352,8 @@ def _evidence_row(evidence: Any, plan: dict[str, Any], source_index: tuple[set[b
         if positive_mismatch and evidence["failure_category"] not in {"functional_mismatch", "timeout"}:
             raise WorkflowError("positive mismatch reports require functional_mismatch unless timeout has priority")
         timeout_reason = compile_status.get("reason") == "timeout" or simulation_status.get("reason") == "timeout"
-        if mismatch["timeout_reported"] != timeout_reason:
-            raise WorkflowError("timeout marker must align with a timeout leaf reason")
+        if mismatch["timeout_reported"] and not timeout_reason:
+            raise WorkflowError("timeout marker requires a timeout leaf reason")
         if mismatch["timeout_reported"] and evidence["failure_category"] != "timeout":
             raise WorkflowError("timeout marker requires failure_category=timeout")
         if simulation_status.get("reason") == "simulation_result_missing" and (
@@ -1468,15 +1466,14 @@ def _validate_attempt(row: Any, label: str) -> dict[str, Any]:
     if accepted:
         if (not mismatch["reported_counts"] or not mismatch["reported_sample_counts"]
                 or any(count != 0 for count in mismatch["reported_counts"])
-                or any(type(count) is not int or count != 0 for count in mismatch["reported_sample_counts"])
                 or mismatch["timeout_reported"]):
             raise WorkflowError(f"{label}.accepted mismatch summary is inconsistent")
     else:
         if any(count > 0 for count in mismatch["reported_counts"]) and row["failure_category"] not in {"functional_mismatch", "timeout"}:
             raise WorkflowError(f"{label} positive mismatch report has an inconsistent category")
         timeout_reason = any(checks[name][leaf].get("reason") == "timeout" for name, leaf in (("compile", "candidate"), ("simulation", "candidate_passes")))
-        if mismatch["timeout_reported"] != timeout_reason:
-            raise WorkflowError(f"{label} timeout marker is inconsistent")
+        if mismatch["timeout_reported"] and not timeout_reason:
+            raise WorkflowError(f"{label} timeout marker has no timeout leaf reason")
         if mismatch["timeout_reported"] and row["failure_category"] != "timeout":
             raise WorkflowError(f"{label} timeout category is inconsistent")
         simulation = checks["simulation"]["candidate_passes"]

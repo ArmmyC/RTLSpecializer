@@ -222,7 +222,7 @@ def test_rtlbench_failure_category_fixtures_are_ingested(tmp_path: Path) -> None
         value["failure_category"] = category
         value["accepted"] = name == "accepted"
         if name == "accepted":
-            value["mismatch_summary"] = {"contract": "mismatch_count_v1", "reported_counts": [0], "reported_sample_counts": [0], "maximum_count": 0, "timeout_reported": False}
+            value["mismatch_summary"] = {"contract": "mismatch_count_v1", "reported_counts": [0], "reported_sample_counts": [20], "maximum_count": 0, "timeout_reported": False}
         elif category in {"functional_mismatch"}:
             value["mismatch_summary"] = {"contract": "mismatch_count_v1", "reported_counts": [1], "reported_sample_counts": [1], "maximum_count": 1, "timeout_reported": False}
         elif category == "timeout":
@@ -235,6 +235,77 @@ def test_rtlbench_failure_category_fixtures_are_ingested(tmp_path: Path) -> None
         result, code = ingest_candidate_evidence(run / "verification_plan.jsonl", evidence, output)
         assert code == 0, (name, result)
         assert json.loads(output.read_text(encoding="utf-8"))["failure_category"] == category
+
+
+def test_process_timeout_and_testbench_timeout_marker_are_distinct(tmp_path: Path) -> None:
+    _, candidates, run = initial_flow(tmp_path)
+    base = json.loads(evidence_for_plan(run).read_text(encoding="utf-8"))
+
+    def ingest_variant(name: str, compile_status: dict, simulation_status: dict, marker: bool, category: str):
+        value = json.loads(json.dumps(base))
+        value["checks"]["compile"]["candidate"] = compile_status
+        value["checks"]["simulation"]["candidate_passes"] = simulation_status
+        value["mismatch_summary"] = {
+            "contract": "mismatch_count_v1", "reported_counts": [],
+            "reported_sample_counts": [], "maximum_count": None,
+            "timeout_reported": marker,
+        }
+        value["failure_category"] = category
+        value["accepted"] = False
+        evidence = tmp_path / f"{name}.jsonl"
+        evidence.write_text(json.dumps(value) + "\n", encoding="utf-8")
+        output = tmp_path / f"{name}-attempts.jsonl"
+        result, code = ingest_candidate_evidence(run / "verification_plan.jsonl", evidence, output)
+        assert code == 0, (name, result)
+        return output
+
+    marker_output = ingest_variant(
+        "testbench-timeout",
+        {"attempted": True, "passed": True, "reason": None},
+        {"attempted": True, "passed": False, "reason": "timeout"},
+        True,
+        "timeout",
+    )
+    process_output = ingest_variant(
+        "simulator-timeout",
+        {"attempted": True, "passed": True, "reason": None},
+        {"attempted": True, "passed": False, "reason": "timeout"},
+        False,
+        "timeout",
+    )
+    compiler_output = ingest_variant(
+        "compiler-timeout",
+        {"attempted": True, "passed": False, "reason": "timeout"},
+        {"attempted": False, "passed": None, "reason": "compile_failure"},
+        False,
+        "timeout",
+    )
+    for output in (marker_output, process_output, compiler_output):
+        attempt = json.loads(output.read_text(encoding="utf-8"))
+        assert attempt["failure_category"] == "timeout"
+
+    invalid = json.loads(json.dumps(base))
+    invalid["checks"]["simulation"]["candidate_passes"] = {"attempted": True, "passed": False, "reason": "simulation_failure"}
+    invalid["mismatch_summary"] = {
+        "contract": "mismatch_count_v1", "reported_counts": [],
+        "reported_sample_counts": [], "maximum_count": None,
+        "timeout_reported": True,
+    }
+    invalid["failure_category"] = "simulation_failure"
+    invalid["accepted"] = False
+    invalid_path = tmp_path / "invalid-timeout-marker.jsonl"
+    invalid_path.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+    result, code = ingest_candidate_evidence(
+        run / "verification_plan.jsonl", invalid_path, tmp_path / "invalid-timeout-marker.out"
+    )
+    assert code != 0
+
+    repair_dir = tmp_path / "timeout-repair"
+    result, code = export_teacher_repair_packets(
+        FIXTURE_ROOT / "generation_tasks.jsonl", candidates, compiler_output, repair_dir
+    )
+    assert code == 0, result
+    assert result["repairable_attempts"] == 1
 
 
 def test_pending_and_impossible_final_leaves_are_rejected(tmp_path: Path) -> None:
@@ -251,7 +322,7 @@ def test_pending_and_impossible_final_leaves_are_rejected(tmp_path: Path) -> Non
     accepted_counts["checks"]["simulation"]["candidate_passes"] = {"attempted": True, "passed": True, "reason": None}
     accepted_counts["accepted"] = True
     accepted_counts["failure_category"] = "passed"
-    accepted_counts["mismatch_summary"] = {"contract": "mismatch_count_v1", "reported_counts": [0], "reported_sample_counts": [1], "maximum_count": 0, "timeout_reported": False}
+    accepted_counts["mismatch_summary"] = {"contract": "mismatch_count_v1", "reported_counts": [1], "reported_sample_counts": [1], "maximum_count": 1, "timeout_reported": False}
     mutations.append(accepted_counts)
     for index, value in enumerate(mutations):
         evidence = tmp_path / f"invalid-{index}.jsonl"
@@ -351,3 +422,79 @@ def test_schema_documents_are_parseable_and_generation_attempt_is_not_unrestrict
                     walk(child)
 
         walk(value)
+
+
+def test_generation_attempt_status_schema_covers_all_contract_states() -> None:
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/rtl_generation_attempt_v0.1.schema.json").read_text(encoding="utf-8")
+    )
+    status_schema = schema["$defs"]["status"]
+
+    def matches(value, rule):
+        if "const" in rule and value != rule["const"]:
+            return False
+        if "enum" in rule and value not in rule["enum"]:
+            return False
+        if "type" in rule:
+            expected = rule["type"]
+            expected = expected if isinstance(expected, list) else [expected]
+            actual = "null" if value is None else "boolean" if isinstance(value, bool) else "integer" if isinstance(value, int) else "string" if isinstance(value, str) else "object"
+            if actual not in expected:
+                return False
+        return True
+
+    def schema_accepts(value):
+        if set(value) != {"attempted", "passed", "reason"}:
+            return False
+        return any(
+            all(matches(value[name], rule) for name, rule in branch["properties"].items())
+            for branch in status_schema["oneOf"]
+        )
+
+    valid = [
+        {"attempted": True, "passed": True, "reason": None},
+        *({"attempted": True, "passed": False, "reason": reason} for reason in (
+            "compile_failure", "functional_mismatch", "simulation_result_missing",
+            "simulation_failure", "timeout", "tool_unavailable", "internal_error", "partial_failure",
+        )),
+        *({"attempted": False, "passed": None, "reason": reason} for reason in (
+            "not_requested", "tool_unavailable", "compile_failure", "internal_error",
+        )),
+    ]
+    invalid = [
+        {"attempted": False, "passed": True, "reason": "tool_unavailable"},
+        {"attempted": True, "passed": None, "reason": "internal_error"},
+        {"attempted": True, "passed": True, "reason": "compile_failure"},
+        {"attempted": True, "passed": False, "reason": None},
+        {"attempted": False, "passed": None, "reason": "pending"},
+        {"attempted": False, "passed": None, "reason": None},
+    ]
+    assert all(schema_accepts(value) for value in valid)
+    assert not any(schema_accepts(value) for value in invalid)
+
+
+def test_generated_attempt_representatives_validate_against_committed_schema(tmp_path: Path) -> None:
+    jsonschema = pytest.importorskip("jsonschema")
+    _, _, run = initial_flow(tmp_path)
+    accepted_evidence = evidence_for_plan(run, accepted=True)
+    output = tmp_path / "accepted-attempt.jsonl"
+    result, code = ingest_candidate_evidence(run / "verification_plan.jsonl", accepted_evidence, output)
+    assert code == 0, result
+    accepted = json.loads(output.read_text(encoding="utf-8"))
+    schema = json.loads(
+        (Path(__file__).parents[2] / "schemas/rtl_generation_attempt_v0.1.schema.json").read_text(encoding="utf-8")
+    )
+    validator = jsonschema.Draft202012Validator(schema)
+    representatives = [
+        accepted,
+        {**accepted, "mismatch_summary": {**accepted["mismatch_summary"], "reported_sample_counts": [None]}},
+        {**accepted, "accepted": False, "failure_category": "functional_mismatch", "checks": {**accepted["checks"], "simulation": {"candidate_passes": {"attempted": True, "passed": False, "reason": "functional_mismatch"}}}, "mismatch_summary": {"contract": "mismatch_count_v1", "reported_counts": [1], "reported_sample_counts": [20], "maximum_count": 1, "timeout_reported": False}},
+        {**accepted, "accepted": False, "failure_category": "timeout", "checks": {**accepted["checks"], "simulation": {"candidate_passes": {"attempted": True, "passed": False, "reason": "timeout"}}}, "mismatch_summary": {"contract": "mismatch_count_v1", "reported_counts": [], "reported_sample_counts": [], "maximum_count": None, "timeout_reported": False}},
+        {**accepted, "accepted": False, "failure_category": "internal_error", "checks": {**accepted["checks"], "compile": {"candidate": {"attempted": True, "passed": False, "reason": "internal_error"}}, "simulation": {"candidate_passes": {"attempted": False, "passed": None, "reason": "internal_error"}}}, "mismatch_summary": {"contract": "mismatch_count_v1", "reported_counts": [], "reported_sample_counts": [], "maximum_count": None, "timeout_reported": False}},
+        {**accepted, "accepted": False, "failure_category": "tool_unavailable", "checks": {**accepted["checks"], "compile": {"candidate": {"attempted": False, "passed": None, "reason": "tool_unavailable"}}, "simulation": {"candidate_passes": {"attempted": False, "passed": None, "reason": "tool_unavailable"}}}, "mismatch_summary": {"contract": "mismatch_count_v1", "reported_counts": [], "reported_sample_counts": [], "maximum_count": None, "timeout_reported": False}},
+    ]
+    for value in representatives:
+        errors = list(validator.iter_errors(value))
+        assert not errors, errors
+    malformed = {**accepted, "checks": {**accepted["checks"], "compile": {"candidate": {"attempted": True, "passed": None, "reason": "compile_failure"}}}}
+    assert list(validator.iter_errors(malformed))

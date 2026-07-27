@@ -104,9 +104,12 @@ Required leaves cannot remain pending. Passing leaves have `reason: null`;
 failed leaves have a supported reason; unattempted required leaves use a
 supported unavailable reason. Simulation cannot pass unless compile passed.
 Accepted mismatch evidence contains at least one report with zero counts and
-no timeout. Positive mismatch reports select `functional_mismatch` unless
-timeout has priority. A missing simulation result is valid only after an
-attempted simulation and a passed compile.
+no timeout; sample counts may be nonnegative integers or null and do not need
+to be zero. Positive mismatch reports select `functional_mismatch` unless
+timeout has priority. A timeout leaf may represent a process timeout even when
+the testbench did not print its timeout marker; a true marker still requires a
+timeout leaf and the `timeout` category. A missing simulation result is valid
+only after an attempted simulation and a passed compile.
 
 ## Validation commands
 
