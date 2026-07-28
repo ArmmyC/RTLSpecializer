@@ -2,7 +2,12 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .local_data/
+# Legacy local workspace retained and ignored for backward compatibility; new runs use data/runs/.
 data/.local_data/
+
+# Synthetic migration fixture intentionally mirrors the legacy .local_data name.
+!/tests/fixtures/data_workspace_layout/legacy/.local_data/
+!/tests/fixtures/data_workspace_layout/legacy/.local_data/**
 
 # Local/generated data workspaces
 /data/**

@@ -7,10 +7,10 @@ This workflow prepares a small local VerilogEval-derived review batch for human 
 Place a local VerilogEval checkout or manifest under an ignored path such as:
 
 ```text
-data/.local_data/verilog-eval-main/
+data/raw/verilog_eval/upstream/
 ```
 
-`data/.local_data/` is ignored. Raw VerilogEval files must stay local-only and must not be committed.
+`data/.local_data/` remains an ignored legacy workspace. New raw VerilogEval files belong under `data/raw/verilog_eval/upstream/`; they must stay local-only and must not be committed.
 
 Generated-data tracking policy:
 
@@ -33,7 +33,7 @@ If you already have clean normalized `rtl_task_v0.1` rows and need teacher `rtl_
 
 ```bash
 python scripts/dataset/prepare_verilog_eval_review_batch.py \
-  --input data/.local_data/verilog-eval-main \
+  --input data/raw/verilog_eval/upstream \
   --output-dir data/review/verilog_eval_batch_001 \
   --limit 10 \
   --license "VerilogEval local public data staged by user; verify exact license/provenance before promotion" \

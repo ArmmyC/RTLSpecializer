@@ -156,11 +156,11 @@ Imported rows remain drafts until a reviewer replaces the conservative stub with
 
 ### Prepare a VerilogEval review batch
 
-For VerilogEval-style data, place a locally obtained checkout under an ignored path such as `data/.local_data/verilog-eval-main/`, then prepare a small draft batch:
+For VerilogEval-style data, place a locally obtained checkout under the legacy-compatible raw path `data/raw/verilog_eval/upstream/`, then prepare a small draft batch:
 
 ```bash
 python scripts/dataset/prepare_verilog_eval_review_batch.py \
-  --input data/.local_data/verilog-eval-main \
+  --input data/raw/verilog_eval/upstream \
   --output-dir data/review/verilog_eval_batch_001 \
   --limit 10 \
   --license "Verify the exact local source license before promotion" \
@@ -246,7 +246,7 @@ scripts/finetune/        Canonical exports and pilot training helpers
 tests/                   Dataset, evaluation, and fine-tuning tests
 ```
 
-Generated and potentially sensitive workspaces such as `data/.local_data/`, `data/review/`, `data/drafts/`, `data/releases/`, `data/eval/`, `outputs/`, `models/`, and `adapters/` are ignored by default. Inspect `git status` before committing any artifact.
+Generated and potentially sensitive workspaces such as legacy `data/.local_data/`, `data/review/`, `data/drafts/`, `data/releases/`, `data/eval/`, `outputs/`, `models/`, and `adapters/` are ignored by default. New manual runs belong under `data/runs/manual_rtl_teacher/<run-id>/`; inspect `git status` before committing any artifact.
 
 ## Safety and data boundaries
 
@@ -267,6 +267,8 @@ Generated and potentially sensitive workspaces such as `data/.local_data/`, `dat
 
 - [Dataset guidelines](docs/dataset/dataset_guidelines.md)
 - [Data workspace layout](docs/dataset/data_workspace_layout.md)
+- [Data workspace migration v0.1](docs/dataset/data_workspace_migration_v0.1.md)
+- [Data workspace layout v2 specification](docs/specs/data-workspace-layout-v2.md)
 - [Public-data review and promotion](docs/dataset/review_promotion_workflow.md)
 - [VerilogEval review workflow](docs/dataset/verilog_eval_review_workflow.md)
 - [Dataset release workflow](docs/dataset/release_workflow.md)

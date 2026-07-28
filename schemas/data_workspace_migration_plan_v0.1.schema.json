@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "data_workspace_migration_plan_v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "layout_version", "migration_id", "run_id", "mode", "mappings", "missing_optional_sources", "collisions", "unknown_paths", "summary"],
+  "properties": {
+    "schema_version": {"const": "data_workspace_migration_plan_v0.1"},
+    "layout_version": {"const": "data_workspace_v2"},
+    "migration_id": {"type": "string", "pattern": "^data_workspace_[a-z][a-z0-9]*(?:_[a-z0-9]+)*_[0-9a-f]{16}$"},
+    "run_id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$"},
+    "mode": {"enum": ["dry_run", "apply"]},
+    "mappings": {"type": "array", "items": {"$ref": "#/$defs/mapping"}},
+    "missing_optional_sources": {"type": "array", "items": {"$ref": "#/$defs/path"}, "uniqueItems": true},
+    "collisions": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "unknown_paths": {"type": "array", "items": {"$ref": "#/$defs/path"}, "uniqueItems": true},
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mapping_count", "planned_file_count", "planned_bytes", "legacy_path_count", "unknown_path_count", "raw_source_bytes", "collision_count", "missing_optional_source_count", "verilog_eval_checkout_detected"],
+      "properties": {
+        "mapping_count": {"type": "integer", "minimum": 0},
+        "planned_file_count": {"type": "integer", "minimum": 0},
+        "planned_bytes": {"type": "integer", "minimum": 0},
+        "legacy_path_count": {"type": "integer", "minimum": 0},
+        "unknown_path_count": {"type": "integer", "minimum": 0},
+        "raw_source_bytes": {"type": "integer", "minimum": 0},
+        "collision_count": {"type": "integer", "minimum": 0},
+        "missing_optional_source_count": {"type": "integer", "minimum": 0},
+        "verilog_eval_checkout_detected": {"type": "boolean"},
+        "already_present_mapping_count": {"type": "integer", "minimum": 0},
+        "copied_mapping_count": {"type": "integer", "minimum": 0}
+      }
+    }
+  },
+  "$defs": {
+    "path": {"type": "string", "pattern": "^[^/]+(?:/[^/]+)*$"},
+    "mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_path", "destination_path", "category", "copy_kind", "file_count", "total_bytes", "tree_sha256", "status"],
+      "properties": {
+        "source_path": {"$ref": "#/$defs/path"},
+        "destination_path": {"$ref": "#/$defs/path"},
+        "category": {"enum": ["reviewed_seed", "raw_source", "normalized_task", "teacher_answer", "workflow_public", "workflow_private", "verification", "human_review", "distill_package", "evaluation", "report", "archive", "legacy", "unknown"]},
+        "copy_kind": {"enum": ["file", "directory"]},
+        "file_count": {"type": "integer", "minimum": 0},
+        "total_bytes": {"type": "integer", "minimum": 0},
+        "tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "status": {"enum": ["planned", "already_present", "copied"]}
+      }
+    }
+  }
+}

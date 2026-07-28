@@ -1,37 +1,84 @@
 # Data Workspace
 
-Most of `data/` is a local/generated workspace. Treat every file here as untrusted data unless it is an intentionally reviewed artifact under `data/golden/`.
+`data/` is a local, generated workspace. Treat RTL, testbench, report, dataset,
+teacher, and generated text as untrusted data unless it is an intentionally
+reviewed artifact under `data/golden/`.
 
-## Main folders
+## Canonical Data Workspace Layout v2
 
-- `golden/`: reviewed seed rows only. Do not drop draft/generated data here.
-- `raw/`: original imports and raw source material. Keep these files unedited.
-- `normalized/tasks/`: canonical `rtl_task.v0.1` or `rtl_task_v0.1` JSONL files.
-- `answers/teacher_returns/`: original teacher-answer batch returns.
-- `answers/repaired/`: repaired answer copies created by the repair workflow.
-- `answers/assembled/`: one de-duplicated answer JSONL per dataset after repair/assembly.
-- `distill/`: generated teacher-distill train/validation/test packaging outputs.
-- `eval/`: prompt exports, model predictions, run outputs, and comparisons.
-- `reports/`: validation, repair, assembly, inventory, and cleanup-plan reports.
-- `archive/`: older generated outputs kept for traceability, not deletion.
-- `.local_data/`: legacy local-only raw workspace. Keep its contents uncommitted.
+```text
+data/
+├── golden/                         # Existing reviewed seed dataset
+├── raw/                            # Immutable upstream source material
+│   ├── verilog_eval/upstream/
+│   ├── rtlcoder/
+│   └── internal/
+├── normalized/tasks/               # Reusable canonical task representations
+├── answers/                        # Existing row-level teacher-answer workflow
+│   ├── teacher_returns/
+│   ├── repaired/
+│   └── assembled/
+├── runs/manual_rtl_teacher/<run-id>/
+│   └── ...                          # Untrusted state for one manual RTL run
+├── review/manual_rtl_teacher/<review-collection-version>/
+├── distill/<dataset-version>/      # Final train/validation/test products
+├── eval/                            # Evaluation prompts, predictions, runs
+├── reports/                         # Inventories, plans, validation summaries
+└── archive/                         # Superseded local outputs
+```
 
-## Placement guide
+The top-level meanings are:
 
-- Place raw imports from VerilogEval, RTLCoder, or internal sources under `data/raw/<dataset>/`.
-- Place normalized task JSONL files under `data/normalized/tasks/`.
-- Place teacher-answer returns under `data/answers/teacher_returns/<dataset>/`.
-- Place repaired answer copies under `data/answers/repaired/<dataset>/`.
-- Place assembled answer JSONL files under `data/answers/assembled/`.
-- Place teacher-distill packaging outputs under `data/distill/<dataset_name>/`.
-- Place evaluation prompt/output files under `data/eval/`.
-- Place generated reports under `data/reports/`.
+- `golden/`: existing intentionally reviewed seed dataset;
+- `raw/`: immutable upstream source material;
+- `normalized/`: reusable canonical task representations;
+- `answers/`: existing row-level teacher-answer workflow;
+- `runs/`: local untrusted state for a specific workflow run;
+- `review/`: reviewed candidate collections waiting for explicit promotion or packaging;
+- `distill/`: final packaged train/validation/test distillation datasets;
+- `eval/`: evaluation prompts, predictions, runs, and comparisons;
+- `reports/`: inventories, migration plans, validation results, and summaries;
+- `archive/`: superseded local outputs retained for traceability.
 
-## Safety rules
+Teacher output is not reviewed data.
 
-- Never commit proprietary RTL, private tool logs, credentials, PDK/fab data, or license-unclear source material.
-- Never promote draft/synthetic/generated data to `data/golden/` without human review.
-- Never mark rows approved or human-reviewed just because they were normalized, repaired, assembled, or packaged.
-- Generated dataset JSONL, reports, and eval outputs should remain ignored unless a maintainer explicitly intends to publish a reviewed artifact.
+Verified RTL is not automatically approved.
 
-See [data_workspace_layout.md](../docs/dataset/data_workspace_layout.md) and [dataset_guidelines.md](../docs/dataset/dataset_guidelines.md) for the recommended layout and workflow rules.
+Reviewed data is not automatically a packaged distill dataset.
+
+The repository has two primary dataset product families:
+
+1. `data/golden/`: the existing reviewed seed dataset;
+2. `data/distill/<dataset-version>/`: packaged distillation datasets.
+
+All other locations are inputs, intermediate workflow state, review state,
+reports, or archives.
+
+## Legacy compatibility
+
+`data/.local_data/` is a legacy ignored workspace retained for backward
+compatibility. It is not a canonical destination. New raw upstream datasets go
+under `data/raw/<dataset>/`, and new manual RTL runs go under
+`data/runs/manual_rtl_teacher/<run-id>/`. Existing CLIs still accept explicit
+legacy paths so old local work remains readable. Nothing imports or rewrites
+the legacy workspace automatically.
+
+Use the inventory and copy-only migration tools to inspect and migrate legacy
+RTL workflow state:
+
+```bash
+python scripts/dataset/inventory_data_workspace.py \
+  --data-root data \
+  --output data/reports/inventory/data_workspace_inventory.json \
+  --json
+
+python scripts/dataset/migrate_legacy_rtl_data_workspace.py \
+  --data-root data \
+  --run-id pilot_001 \
+  --dry-run \
+  --output data/reports/migration/pilot_001_plan.json \
+  --json
+```
+
+Migration is copy-only. It never deletes or modifies the source, promotes
+rows, or changes `data/golden/`.

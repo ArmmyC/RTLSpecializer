@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 from pathlib import Path
 
+import pytest
+
 from scripts.dataset.data_workspace import collect_data_workspace_inventory
+from scripts.dataset.data_workspace_layout import WorkspaceError, build_inventory, inventory_data_workspace
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -113,3 +118,59 @@ def test_inventory_writes_reports(tmp_path) -> None:
     assert output_md.exists()
     assert output_json.exists()
     assert json.loads(output_json.read_text(encoding="utf-8"))["files_scanned"] == 1
+
+
+def _write_v2(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_v2_inventory_classifies_known_and_unknown_paths(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_v2(data / "golden" / "golden.jsonl", '{"row": 1}\n')
+    _write_v2(data / "raw" / "verilog_eval" / "upstream" / "README.md", "source\n")
+    _write_v2(data / ".local_data" / "verilog-eval-main" / "dataset_spec-to-rtl" / "Prob001_ref.sv", "module ref; endmodule\n")
+    _write_v2(data / "distill" / "v0.1" / "train.jsonl", "{}\n")
+    _write_v2(data / "unknown" / "mystery.bin", "private\n")
+
+    result = build_inventory(data)
+    by_path = {entry["path"]: entry for entry in result["entries"]}
+    assert by_path["data/golden"]["category"] == "reviewed_seed"
+    assert by_path["data/raw/verilog_eval/upstream/README.md"]["category"] == "raw_source"
+    assert by_path["data/.local_data/verilog-eval-main/dataset_spec-to-rtl"]["legacy"] is True
+    assert by_path["data/distill/v0.1/train.jsonl"]["category"] == "distill_package"
+    assert "data/unknown/mystery.bin" in result["unknown_paths"]
+    assert all(not value.startswith("/") for value in result["unknown_paths"])
+    assert "module ref; endmodule" not in json.dumps(result)
+
+
+def test_v2_inventory_digests_and_hard_links_are_deterministic(tmp_path: Path) -> None:
+    first = tmp_path / "one" / "data"
+    second = tmp_path / "two" / "data"
+    _write_v2(first / "raw" / "a.txt", "same\n")
+    _write_v2(second / "raw" / "a.txt", "same\n")
+    os.link(first / "raw" / "a.txt", first / "raw" / "alias.txt")
+    os.link(second / "raw" / "a.txt", second / "raw" / "alias.txt")
+    left = build_inventory(first)
+    right = build_inventory(second)
+    left_by = {item["path"]: item for item in left["entries"]}
+    assert left_by["data/raw/a.txt"]["sha256"] == hashlib.sha256(b"same\n").hexdigest()
+    assert left_by["data/raw/a.txt"]["hard_link_count"] == 2
+    assert left["summary"]["hard_link_file_count"] == 2
+    assert json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+
+
+def test_v2_inventory_rejects_symlinks_and_output_collisions(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    _write_v2(data / "raw" / "file.txt", "x")
+    link = data / "raw" / "link.txt"
+    link.symlink_to(data / "raw" / "file.txt")
+    with pytest.raises(WorkspaceError, match="symlink"):
+        build_inventory(data)
+
+    link.unlink()
+    output = tmp_path / "inventory.json"
+    inventory_data_workspace(data, output)
+    with pytest.raises(WorkspaceError, match="already exists"):
+        inventory_data_workspace(data, output)
+    inventory_data_workspace(data, output, force=True)
