@@ -30,9 +30,24 @@ def test_init_creates_exact_deterministic_run_and_resume(tmp_path: Path) -> None
     assert "/" not in manifest["run_id"]
     report, code = validate_manual_rtl_run(run)
     assert code == 0, report
-    resumed = initialize_manual_rtl_run("pilot_001", "OtherDataset", runs_root, resume=True)
+    resumed = initialize_manual_rtl_run("pilot_001", "VerilogEval", runs_root, resume=True)
     assert resumed["status"] == "resumed"
     assert (run / "run_manifest.json").read_bytes() == manifest_bytes
+
+    with pytest.raises(WorkspaceError, match="source_dataset"):
+        initialize_manual_rtl_run("pilot_001", "RTLCoder", runs_root, resume=True)
+
+
+def test_resume_rejects_an_altered_manifest(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    initialize_manual_rtl_run("pilot_001", "VerilogEval", runs_root)
+    manifest_path = runs_root / "pilot_001" / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["max_attempts"] = 3
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match="exact manifest and structure"):
+        initialize_manual_rtl_run("pilot_001", "VerilogEval", runs_root, resume=True)
 
 
 @pytest.mark.parametrize("run_id", ["Pilot_001", "pilot-001", "../escape", "pilot/001"])

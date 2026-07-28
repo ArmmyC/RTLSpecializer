@@ -5,6 +5,19 @@ them into one `data/runs/manual_rtl_teacher/<run-id>/` layout. It is opt-in and
 copy-only. Sources remain untouched; no row is reviewed, approved, promoted, or
 made training-ready by this tool.
 
+## Required sequence
+
+Use this sequence for every migration:
+
+```text
+inventory
+→ migration dry-run
+→ inspect plan
+→ initialize canonical run
+→ migration apply
+→ validate canonical run
+```
+
 ## Inspect first
 
 ```bash
@@ -21,12 +34,29 @@ python scripts/dataset/migrate_legacy_rtl_data_workspace.py \
   --json
 ```
 
+Inspect the dry-run plan before creating the destination run. It lists known
+mappings, missing optional sources, unknown paths, hashes, and collisions.
+
 Dry-run is the default. Reports contain only repository-relative paths,
 categories, counts, sizes, hashes, collisions, and warnings. They do not
 contain RTL, testbench text, teacher responses, candidate code, logs, or
 credentials.
 
-## Apply after review
+## Initialize and apply after review
+
+Initialize the exact canonical run after the dry-run plan has been inspected:
+
+```bash
+python scripts/dataset/init_manual_rtl_run.py \
+  --run-id pilot_001 \
+  --source-dataset VerilogEval \
+  --runs-root data/runs/manual_rtl_teacher \
+  --json
+```
+
+`--apply` refuses an uninitialized run, a malformed manifest, an invalid
+canonical directory structure, or a run whose manifest identity does not
+match the requested run ID. Migration never initializes a run implicitly.
 
 ```bash
 python scripts/dataset/migrate_legacy_rtl_data_workspace.py \
@@ -37,12 +67,23 @@ python scripts/dataset/migrate_legacy_rtl_data_workspace.py \
   --json
 ```
 
+Validate the canonical run only after apply succeeds:
+
+```bash
+python scripts/dataset/validate_manual_rtl_run.py \
+  --run-root data/runs/manual_rtl_teacher/pilot_001 \
+  --json
+```
+
 Apply performs complete preflight, rejects source/destination symlinks and
 collisions, hashes sources before and after bounded streaming copies, stages
 new destination roots, verifies destination hashes, and atomically publishes
 the staged roots. A failed copy does not leave a partial destination tree.
 Existing identical files are `already_present`; different bytes, file/directory
-mismatches, unknown destination entries, and symlinks are hard failures.
+mismatches, unknown destination entries, and symlinks are hard failures. The
+destination run is validated before copying and again after publication; a
+failed post-copy validation rolls back the publication and does not write the
+applied report.
 
 Known source mappings include the VerilogEval `dataset_spec-to-rtl` checkout,
 its `LICENSE*` and `README*` metadata, and the legacy normalization, private

@@ -80,5 +80,35 @@ python scripts/dataset/migrate_legacy_rtl_data_workspace.py \
   --json
 ```
 
+Inspect the dry-run plan, then initialize the canonical run before applying.
+The required sequence is:
+
+```text
+inventory → migration dry-run → inspect plan → initialize canonical run
+→ migration apply → validate canonical run
+```
+
+```bash
+python scripts/dataset/init_manual_rtl_run.py \
+  --run-id pilot_001 \
+  --source-dataset VerilogEval \
+  --runs-root data/runs/manual_rtl_teacher \
+  --json
+
+python scripts/dataset/migrate_legacy_rtl_data_workspace.py \
+  --data-root data \
+  --run-id pilot_001 \
+  --apply \
+  --output data/reports/migration/pilot_001_applied.json \
+  --json
+
+python scripts/dataset/validate_manual_rtl_run.py \
+  --run-root data/runs/manual_rtl_teacher/pilot_001 \
+  --json
+```
+
+Migration `--apply` refuses an uninitialized or invalid canonical run; it
+does not initialize a run implicitly.
+
 Migration is copy-only. It never deletes or modifies the source, promotes
 rows, or changes `data/golden/`.

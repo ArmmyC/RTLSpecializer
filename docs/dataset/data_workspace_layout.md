@@ -75,6 +75,57 @@ The layout tools do not download data, call an LLM, execute RTL or testbenches,
 invoke RTLBench or EDA tools, inspect file contents as executable material, or
 automatically review, approve, promote, or package a candidate.
 
+## Migration sequence
+
+Follow this order:
+
+```text
+inventory
+→ migration dry-run
+→ inspect plan
+→ initialize canonical run
+→ migration apply
+→ validate canonical run
+```
+
+```bash
+python scripts/dataset/inventory_data_workspace.py \
+  --data-root data \
+  --output data/reports/inventory/data_workspace_inventory.json \
+  --json
+
+python scripts/dataset/migrate_legacy_rtl_data_workspace.py \
+  --data-root data \
+  --run-id pilot_001 \
+  --dry-run \
+  --output data/reports/migration/pilot_001_plan.json \
+  --json
+```
+
+Inspect the plan, then initialize and apply:
+
+```bash
+python scripts/dataset/init_manual_rtl_run.py \
+  --run-id pilot_001 \
+  --source-dataset VerilogEval \
+  --runs-root data/runs/manual_rtl_teacher \
+  --json
+
+python scripts/dataset/migrate_legacy_rtl_data_workspace.py \
+  --data-root data \
+  --run-id pilot_001 \
+  --apply \
+  --output data/reports/migration/pilot_001_applied.json \
+  --json
+
+python scripts/dataset/validate_manual_rtl_run.py \
+  --run-root data/runs/manual_rtl_teacher/pilot_001 \
+  --json
+```
+
+Migration `--apply` refuses an uninitialized or invalid canonical run and
+never initializes one implicitly.
+
 Use [data_workspace_migration_v0.1.md](data_workspace_migration_v0.1.md) for
 the safe copy-only migration procedure and
 [../../docs/specs/data-workspace-layout-v2.md](../specs/data-workspace-layout-v2.md)

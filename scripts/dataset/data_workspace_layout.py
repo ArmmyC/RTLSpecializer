@@ -15,7 +15,7 @@ import re
 import stat
 import tempfile
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 LAYOUT_VERSION = "data_workspace_v2"
@@ -585,6 +585,8 @@ def initialize_manual_rtl_run(run_id: str, source_dataset: str, runs_root: Path,
         report, code = validate_manual_rtl_run(run_root)
         if code:
             raise WorkspaceError("existing run does not match the exact manifest and structure")
+        if report["manifest"]["source_dataset"] != source_dataset:
+            raise WorkspaceError("existing run source_dataset does not match requested source_dataset")
         return {"ok": True, "status": "resumed", "run_id": run_id, "run_root": run_id, "manifest": report["manifest"]}
 
     manifest = _manifest(run_id, source_dataset)
@@ -1154,7 +1156,27 @@ def _remove_tree(path: Path) -> None:
         path.unlink()
 
 
-def _apply_mappings(data_root: Path, run_id: str) -> list[_Mapping]:
+def _canonical_run_root(data_root: Path, run_id: str) -> Path:
+    return _absolute(data_root) / "runs" / RUN_WORKFLOW / run_id
+
+
+def _require_valid_canonical_run(data_root: Path, run_id: str) -> None:
+    run_root = _canonical_run_root(data_root, run_id)
+    report, code = validate_manual_rtl_run(run_root)
+    if code:
+        detail = "; ".join(report["errors"]) or "manifest or directory structure is invalid"
+        raise WorkspaceError(
+            f"migration apply requires an initialized canonical run at "
+            f"data/runs/{RUN_WORKFLOW}/{run_id}/run_manifest.json: {detail}"
+        )
+
+
+def _apply_mappings(
+    data_root: Path,
+    run_id: str,
+    *,
+    post_publish_validate: Callable[[], None] | None = None,
+) -> list[_Mapping]:
     mappings, missing, covered = _collect_mappings(data_root, run_id)
     del missing, covered
     if any(item.status == "collision" for item in mappings):
@@ -1218,7 +1240,11 @@ def _apply_mappings(data_root: Path, run_id: str) -> list[_Mapping]:
         for destination_root, stage in sorted(staged.items(), key=lambda item: (-len(item[0].parts), item[0].as_posix())):
             backup: Path | None = None
             if destination_root.exists():
-                backup = Path(tempfile.mkdtemp(prefix=f".{destination_root.name}.migration-backup-", dir=os.fspath(destination_root.parent)))
+                # Keep backups outside canonical run roots so the post-copy
+                # validator observes the exact run structure. They remain on
+                # the same filesystem and are retained until validation and
+                # all publication steps succeed.
+                backup = Path(tempfile.mkdtemp(prefix=f".{destination_root.name}.migration-backup-", dir=os.fspath(data_root)))
                 _remove_tree(backup)
                 os.replace(destination_root, backup)
             backups[destination_root] = backup
@@ -1230,6 +1256,8 @@ def _apply_mappings(data_root: Path, run_id: str) -> list[_Mapping]:
                 raise
             published.append(destination_root)
             staged.pop(destination_root, None)
+        if post_publish_validate is not None:
+            post_publish_validate()
         for destination_root, backup in backups.items():
             if backup is not None:
                 _remove_tree(backup)
@@ -1255,6 +1283,10 @@ def _apply_mappings(data_root: Path, run_id: str) -> list[_Mapping]:
 
 
 def migrate_legacy_rtl_data_workspace(data_root: Path, run_id: str, *, apply: bool = False, output: Path | None = None, force: bool = False) -> dict[str, Any]:
+    if not isinstance(run_id, str) or not RUN_ID_RE.fullmatch(run_id):
+        raise WorkspaceError("run-id must match ^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+    if apply:
+        _require_valid_canonical_run(data_root, run_id)
     if output is not None:
         # Check report collisions before an apply can publish any destination.
         _safe_output_path(output, force=force)
@@ -1263,7 +1295,11 @@ def migrate_legacy_rtl_data_workspace(data_root: Path, run_id: str, *, apply: bo
     if plan["collisions"]:
         raise WorkspaceError("migration has destination collisions")
     if apply:
-        mappings = _apply_mappings(_absolute(data_root), run_id)
+        mappings = _apply_mappings(
+            _absolute(data_root),
+            run_id,
+            post_publish_validate=lambda: _require_valid_canonical_run(data_root, run_id),
+        )
         plan["mappings"] = [_mapping_report(item) for item in mappings]
         plan["summary"]["already_present_mapping_count"] = sum(item.status == "already_present" for item in mappings)
         plan["summary"]["copied_mapping_count"] = sum(item.status == "copied" for item in mappings)

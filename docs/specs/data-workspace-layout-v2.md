@@ -28,15 +28,19 @@ thin CLIs for inventory, run initialization, run validation, and copy-only
 legacy migration. Runtime dependencies are Python standard-library only.
 
 Initialization creates the exact empty run layout atomically. `--resume` is
-allowed only for a run whose manifest and required directories are already
-exact. Validation rejects symlinks, path escapes, misplaced attempt records,
-private artifact leakage into teacher-visible directories, legacy path strings,
-and approval claims inferred from verification.
+allowed only for a run whose requested run ID, source dataset, workflow,
+attempt limit, manifest path map, and required directories are already exact.
+Validation rejects symlinks, path escapes, misplaced attempt records, private
+artifact leakage into teacher-visible directories, legacy path strings, and
+approval claims inferred from verification.
 
-Migration defaults to dry-run. Apply requires a complete preflight, bounded
-streaming copy, source/destination hash agreement, temporary sibling staging,
-and atomic publication. It never deletes or modifies source bytes, overwrites
-conflicting destinations, follows symlinks, or migrates unknown paths.
+Migration defaults to dry-run. Apply requires an already initialized and valid
+canonical run, complete collision/source preflight, bounded streaming copy,
+source/destination hash agreement, temporary sibling staging, and atomic
+publication. It validates the run again before writing the applied report and
+rolls back if that validation fails. It never deletes or modifies source bytes,
+overwrites conflicting destinations, follows symlinks, or migrates unknown
+paths.
 
 ## Compatibility and safety
 
