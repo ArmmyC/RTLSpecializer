@@ -29,11 +29,19 @@ file is an input asset, not evidence that the implementation is correct.
 ## Export
 
 ```bash
+export RUN_ID=pilot_001
+export RUN_ROOT="data/runs/manual_rtl_teacher/${RUN_ID}"
+export VERILOG_EVAL_ROOT="data/raw/verilog_eval/upstream/dataset_spec-to-rtl"
+```
+
+```bash
 python scripts/dataset/export_rtl_generation_normalization_batches.py \
-  --input <local-verilog-eval-or-normalized-input> \
-  --output-dir data/review/rtl_generation_normalization_batches \
-  --private-output-dir data/.local_data/rtl_generation_verification_assets \
-  --batch-size 5 --limit 5 --json
+  --input "$VERILOG_EVAL_ROOT" \
+  --output-dir "$RUN_ROOT/normalization/packets" \
+  --private-output-dir "$RUN_ROOT/private_assets" \
+  --batch-size 5 \
+  --limit 5 \
+  --json
 ```
 
 The public batch contains a logical `source_label` from source metadata (for
@@ -42,7 +50,8 @@ raw specification text, and conservative top/interface/clock/reset hints. It
 does not contain a filesystem-derived `input` field. It contains no reference
 RTL, testbench, support-file contents, expected vectors, answers, reports, logs,
 or private workspace paths. Before writing, the exporter rejects exact,
-resolved, and repository-relative local input/output paths, `.local_data`,
+resolved, and repository-relative local input/output paths, the legacy
+`.local_data` workspace,
 absolute/Windows/workspace paths, and private content. Public provenance URLs
 remain allowed.
 
@@ -71,7 +80,7 @@ Validate the returned batch locally:
 python scripts/dataset/validate_rtl_generation_normalized_batch.py \
   --raw-batch <public-batch.json> \
   --normalized <returned-batch.json> \
-  --private-assets data/.local_data/rtl_generation_verification_assets/verification_assets.jsonl \
+  --private-assets "$RUN_ROOT/private_assets/verification_assets.jsonl" \
   --json
 ```
 
@@ -87,9 +96,9 @@ After validation, join the normalized tasks to private assets by `task_id`:
 ```bash
 python scripts/dataset/assemble_rtl_generation_inputs.py \
   --normalized <validated-normalized-json> \
-  --private-assets data/.local_data/rtl_generation_verification_assets/verification_assets.jsonl \
-  --tasks-output data/review/rtl_generation_pilot/generation_tasks.jsonl \
-  --assets-output data/review/rtl_generation_pilot/verification_assets.jsonl \
+  --private-assets "$RUN_ROOT/private_assets/verification_assets.jsonl" \
+  --tasks-output "$RUN_ROOT/tasks/generation_tasks.jsonl" \
+  --assets-output "$RUN_ROOT/tasks/verification_assets.jsonl" \
   --json
 ```
 

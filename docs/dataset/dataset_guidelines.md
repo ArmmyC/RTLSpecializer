@@ -64,11 +64,11 @@ Promotion rejects unedited import stubs, uncertain licenses, missing public prov
 
 ## Prepare a VerilogEval review batch
 
-For a first human-review public batch, stage VerilogEval locally under an ignored path such as `data/.local_data/verilog-eval-main/`, then run:
+For a first human-review public batch, stage VerilogEval locally under `data/raw/verilog_eval/upstream/`, then run:
 
 ```bash
 python scripts/dataset/prepare_verilog_eval_review_batch.py \
-  --input data/.local_data/verilog-eval-main \
+  --input data/raw/verilog_eval/upstream \
   --output-dir data/review/verilog_eval_batch_001 \
   --limit 10 \
   --license "<verified VerilogEval license/provenance note>" \

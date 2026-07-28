@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "data_workspace_inventory_v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "layout_version", "data_root", "entries", "summary", "unknown_paths"],
+  "properties": {
+    "schema_version": {"const": "data_workspace_inventory_v0.1"},
+    "layout_version": {"const": "data_workspace_v2"},
+    "data_root": {"type": "string", "pattern": "^[^/]+$"},
+    "entries": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/entry"}
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entry_count", "file_count", "directory_count", "total_bytes", "raw_source_bytes", "legacy_entry_count", "unknown_entry_count", "hard_link_file_count"],
+      "properties": {
+        "entry_count": {"type": "integer", "minimum": 0},
+        "file_count": {"type": "integer", "minimum": 0},
+        "directory_count": {"type": "integer", "minimum": 0},
+        "total_bytes": {"type": "integer", "minimum": 0},
+        "raw_source_bytes": {"type": "integer", "minimum": 0},
+        "legacy_entry_count": {"type": "integer", "minimum": 0},
+        "unknown_entry_count": {"type": "integer", "minimum": 0},
+        "hard_link_file_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "unknown_paths": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^[^/]+(?:/[^/]+)*$"},
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "entry_type", "category", "sensitivity", "legacy", "size_bytes", "file_count", "sha256", "recommended_path", "reason"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^[^/]+(?:/[^/]+)*$"},
+        "entry_type": {"enum": ["file", "directory", "special"]},
+        "category": {"enum": ["reviewed_seed", "raw_source", "normalized_task", "teacher_answer", "workflow_public", "workflow_private", "verification", "human_review", "distill_package", "evaluation", "report", "archive", "legacy", "unknown"]},
+        "sensitivity": {"enum": ["committed_public", "local_public", "private_local", "unknown"]},
+        "legacy": {"type": "boolean"},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "file_count": {"type": "integer", "minimum": 0},
+        "sha256": {"anyOf": [{"type": "null"}, {"type": "string", "pattern": "^[0-9a-f]{64}$"}]},
+        "recommended_path": {"anyOf": [{"type": "null"}, {"type": "string", "pattern": "^[^/]+(?:/[^/]+)*$"}]},
+        "reason": {"type": "string"},
+        "hard_link_count": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

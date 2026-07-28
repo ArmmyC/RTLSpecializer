@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from scripts.dataset.data_workspace_layout import (
+    CANONICAL_RUN_PATHS,
+    WorkspaceError,
+    initialize_manual_rtl_run,
+    validate_manual_rtl_run,
+)
+
+
+def test_init_creates_exact_deterministic_run_and_resume(tmp_path: Path) -> None:
+    runs_root = tmp_path / "data" / "runs" / "manual_rtl_teacher"
+    result = initialize_manual_rtl_run("pilot_001", "VerilogEval", runs_root)
+    assert result["status"] == "created"
+    run = runs_root / "pilot_001"
+    expected_dirs = {path for path in (run / relative for relative in {
+        "normalization", "teacher",
+        "normalization/packets", "normalization/responses", "tasks", "private_assets",
+        "teacher/packets", "teacher/responses", "verification", "repairs", "review", "reports",
+    })}
+    assert {path for path in run.rglob("*") if path.is_dir()} == expected_dirs
+    manifest_bytes = (run / "run_manifest.json").read_bytes()
+    manifest = json.loads(manifest_bytes)
+    assert manifest["paths"] == CANONICAL_RUN_PATHS
+    assert "/" not in manifest["run_id"]
+    report, code = validate_manual_rtl_run(run)
+    assert code == 0, report
+    resumed = initialize_manual_rtl_run("pilot_001", "VerilogEval", runs_root, resume=True)
+    assert resumed["status"] == "resumed"
+    assert (run / "run_manifest.json").read_bytes() == manifest_bytes
+
+    with pytest.raises(WorkspaceError, match="source_dataset"):
+        initialize_manual_rtl_run("pilot_001", "RTLCoder", runs_root, resume=True)
+
+
+def test_resume_rejects_an_altered_manifest(tmp_path: Path) -> None:
+    runs_root = tmp_path / "runs"
+    initialize_manual_rtl_run("pilot_001", "VerilogEval", runs_root)
+    manifest_path = runs_root / "pilot_001" / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["max_attempts"] = 3
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match="exact manifest and structure"):
+        initialize_manual_rtl_run("pilot_001", "VerilogEval", runs_root, resume=True)
+
+
+@pytest.mark.parametrize("run_id", ["Pilot_001", "pilot-001", "../escape", "pilot/001"])
+def test_init_rejects_unsafe_run_ids(tmp_path: Path, run_id: str) -> None:
+    with pytest.raises(WorkspaceError):
+        initialize_manual_rtl_run(run_id, "VerilogEval", tmp_path / "runs")
+
+
+def test_run_validation_enforces_private_boundary_and_attempt_folders(tmp_path: Path) -> None:
+    run = tmp_path / "runs" / "pilot_001"
+    initialize_manual_rtl_run("pilot_001", "VerilogEval", run.parent)
+    (run / "private_assets" / "workspace").mkdir()
+    (run / "private_assets" / "workspace" / "reference.sv").write_text("module ref; endmodule\n", encoding="utf-8")
+    (run / "private_assets" / "workspace" / "testbench.sv").write_text("module tb; endmodule\n", encoding="utf-8")
+    (run / "verification" / "attempt_01").mkdir()
+    valid, code = validate_manual_rtl_run(run)
+    assert code == 0, valid
+
+    (run / "teacher" / "packets" / "reference.sv").write_text("module ref; endmodule\n", encoding="utf-8")
+    invalid, code = validate_manual_rtl_run(run)
+    assert code == 1
+    assert any("private RTL" in error for error in invalid["errors"])
+
+
+def test_run_validation_rejects_leakage_and_wrong_records(tmp_path: Path) -> None:
+    run = tmp_path / "runs" / "pilot_001"
+    initialize_manual_rtl_run("pilot_001", "VerilogEval", run.parent)
+    (run / "normalization" / "packets" / "bad.json").write_text('{"path":"data/.local_data/secret"}\n', encoding="utf-8")
+    (run / "verification" / "attempt_05").mkdir()
+    (run / "normalization" / "packets" / "candidate_records.jsonl").write_text("{}\n", encoding="utf-8")
+    report, code = validate_manual_rtl_run(run)
+    assert code == 1
+    assert any("private/local path" in error or "invalid verification attempt" in error for error in report["errors"])
+    assert any("wrong folder" in error for error in report["errors"])

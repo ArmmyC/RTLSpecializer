@@ -7,7 +7,7 @@ This workflow prepares local raw VerilogEval tasks for manual normalization into
 Place a local VerilogEval checkout, conservative JSONL export, or manifest JSONL under a local path. Raw source data should stay local-only, for example:
 
 ```text
-data/.local_data/verilog-eval-main/
+data/raw/verilog_eval/upstream/
 ```
 
 Do not commit raw VerilogEval source files.
@@ -16,7 +16,7 @@ Do not commit raw VerilogEval source files.
 
 ```bash
 python scripts/dataset/export_verilog_eval_normalization_batches.py \
-  --input data/.local_data/verilog-eval-main \
+  --input data/raw/verilog_eval/upstream \
   --output-dir data/review/verilog_eval_normalization_batches \
   --batch-size 10 \
   --json

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "manual_rtl_run_manifest_v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "layout_version", "run_id", "workflow", "source_dataset", "max_attempts", "paths"],
+  "properties": {
+    "schema_version": {"const": "manual_rtl_run_manifest_v0.1"},
+    "layout_version": {"const": "data_workspace_v2"},
+    "run_id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$"},
+    "workflow": {"const": "manual_rtl_teacher"},
+    "source_dataset": {"type": "string", "minLength": 1},
+    "max_attempts": {"const": 4},
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["normalization_packets", "normalization_responses", "generation_tasks", "verification_assets", "private_assets", "teacher_packets", "teacher_responses", "candidate_records", "verification", "generation_attempts", "repairs", "review", "reports"],
+      "properties": {
+        "normalization_packets": {"const": "normalization/packets"},
+        "normalization_responses": {"const": "normalization/responses"},
+        "generation_tasks": {"const": "tasks/generation_tasks.jsonl"},
+        "verification_assets": {"const": "tasks/verification_assets.jsonl"},
+        "private_assets": {"const": "private_assets"},
+        "teacher_packets": {"const": "teacher/packets"},
+        "teacher_responses": {"const": "teacher/responses"},
+        "candidate_records": {"const": "teacher/candidate_records.jsonl"},
+        "verification": {"const": "verification"},
+        "generation_attempts": {"const": "verification/generation_attempts.jsonl"},
+        "repairs": {"const": "repairs"},
+        "review": {"const": "review"},
+        "reports": {"const": "reports"}
+      }
+    }
+  }
+}
