@@ -13,7 +13,8 @@ finished datasets.
 The implementation provides strict JSON contracts for:
 
 - `schemas/data_workspace_inventory_v0.1.schema.json`;
-- `schemas/data_workspace_migration_plan_v0.1.schema.json`; and
+- `schemas/data_workspace_migration_plan_v0.1.schema.json`;
+- `schemas/data_workspace_migration_plan_v0.2.schema.json`; and
 - `schemas/manual_rtl_run_manifest_v0.1.schema.json`.
 
 All paths in reports and manifests are normalized POSIX-relative paths. Reports
@@ -34,13 +35,23 @@ Validation rejects symlinks, path escapes, misplaced attempt records, private
 artifact leakage into teacher-visible directories, legacy path strings, and
 approval claims inferred from verification.
 
-Migration defaults to dry-run. Apply requires an already initialized and valid
-canonical run, complete collision/source preflight, bounded streaming copy,
-source/destination hash agreement, temporary sibling staging, and atomic
-publication. It validates the run again before writing the applied report and
-rolls back if that validation fails. It never deletes or modifies source bytes,
-overwrites conflicting destinations, follows symlinks, or migrates unknown
-paths.
+Migration defaults to dry-run and emits the
+`data_workspace_migration_plan_v0.2` report contract. The shipped v0.1 schema
+remains unchanged for validating historical reports. The current report
+separates genuinely unknown paths,
+unmapped legacy paths, explicitly out-of-scope paths, and grouped legacy
+subtrees. Apply requires an already initialized and valid canonical run,
+`blocking_unresolved_count == 0`, zero collisions, complete collision/source
+preflight, bounded streaming copy, source/destination hash agreement,
+temporary sibling staging, and atomic publication. It validates the run again
+before writing the applied report and rolls back if that validation fails. The
+useful VerilogEval checkout maps to `data/raw/verilog_eval/upstream/`; unrelated
+review, report, smoke, and processed workspaces remain out of scope for a
+manual RTL pilot. The tool never deletes or modifies source bytes, overwrites
+conflicting destinations, follows symlinks, or migrates unknown paths.
+
+No unresolved legacy path may be silently ignored. No explicitly out-of-scope
+historical path is pulled into `pilot_001`.
 
 ## Compatibility and safety
 

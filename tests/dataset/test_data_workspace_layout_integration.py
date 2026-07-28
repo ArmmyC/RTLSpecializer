@@ -33,6 +33,8 @@ def test_inventory_migrate_initialize_validate_inventory_integration(tmp_path: P
     sources_before = _hash_tree(data / ".local_data")
 
     initial = build_inventory(data)
+    (data / "unknown" / "keep.txt").unlink()
+    (data / "unknown").rmdir()
     dry = migrate_legacy_rtl_data_workspace(data, "pilot_001")
     initialize_manual_rtl_run("pilot_001", "VerilogEval", data / "runs/manual_rtl_teacher")
     applied = migrate_legacy_rtl_data_workspace(data, "pilot_001", apply=True)
@@ -40,13 +42,31 @@ def test_inventory_migrate_initialize_validate_inventory_integration(tmp_path: P
     final = build_inventory(data)
 
     validate(instance=initial, schema=__import__("json").loads((SCHEMA_ROOT / "data_workspace_inventory_v0.1.schema.json").read_text(encoding="utf-8")))
-    validate(instance=dry, schema=__import__("json").loads((SCHEMA_ROOT / "data_workspace_migration_plan_v0.1.schema.json").read_text(encoding="utf-8")))
-    validate(instance=applied, schema=__import__("json").loads((SCHEMA_ROOT / "data_workspace_migration_plan_v0.1.schema.json").read_text(encoding="utf-8")))
+    validate(instance=dry, schema=__import__("json").loads((SCHEMA_ROOT / "data_workspace_migration_plan_v0.2.schema.json").read_text(encoding="utf-8")))
+    validate(instance=applied, schema=__import__("json").loads((SCHEMA_ROOT / "data_workspace_migration_plan_v0.2.schema.json").read_text(encoding="utf-8")))
     validate(instance=json.loads((data / "runs/manual_rtl_teacher/pilot_001/run_manifest.json").read_text(encoding="utf-8")), schema=json.loads((SCHEMA_ROOT / "manual_rtl_run_manifest_v0.1.schema.json").read_text(encoding="utf-8")))
     assert code == 0, valid
     assert initial["summary"]["unknown_entry_count"] >= 1
     assert dry["mappings"]
+    assert dry["schema_version"] == "data_workspace_migration_plan_v0.2"
+    assert applied["schema_version"] == "data_workspace_migration_plan_v0.2"
+    assert dry["summary"]["blocking_unresolved_count"] == 0
     assert final["summary"]["raw_source_bytes"] >= initial["summary"]["raw_source_bytes"]
     assert _hash_tree(data / "golden") == golden_before
     assert _hash_tree(data / ".local_data") == sources_before
     assert all("/home/" not in path for path in dry["unknown_paths"])
+
+
+def test_migration_plan_v01_schema_remains_valid_for_old_report_shape(tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    shutil.copytree(FIXTURE, data)
+    (data / "unknown" / "keep.txt").unlink()
+    (data / "unknown").rmdir()
+    report = migrate_legacy_rtl_data_workspace(data, "pilot_001")
+    old_report = json.loads(json.dumps(report))
+    old_report["schema_version"] = "data_workspace_migration_plan_v0.1"
+    for key in ("unmapped_legacy_paths", "out_of_scope_paths", "legacy_subtrees"):
+        old_report.pop(key)
+    for key in ("unmapped_legacy_path_count", "out_of_scope_path_count", "blocking_unresolved_count"):
+        old_report["summary"].pop(key)
+    validate(instance=old_report, schema=json.loads((SCHEMA_ROOT / "data_workspace_migration_plan_v0.1.schema.json").read_text(encoding="utf-8")))

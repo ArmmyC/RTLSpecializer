@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterable
 
 LAYOUT_VERSION = "data_workspace_v2"
 INVENTORY_SCHEMA_VERSION = "data_workspace_inventory_v0.1"
-MIGRATION_SCHEMA_VERSION = "data_workspace_migration_plan_v0.1"
+MIGRATION_SCHEMA_VERSION = "data_workspace_migration_plan_v0.2"
 RUN_MANIFEST_SCHEMA_VERSION = "manual_rtl_run_manifest_v0.1"
 RUN_WORKFLOW = "manual_rtl_teacher"
 RUN_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
@@ -782,7 +782,7 @@ class _Mapping:
 
 
 KNOWN_DIRECTORY_MAPPINGS = (
-    (".local_data/verilog-eval-main/dataset_spec-to-rtl", "raw/verilog_eval/upstream/dataset_spec-to-rtl", "raw_source"),
+    (".local_data/verilog-eval-main", "raw/verilog_eval/upstream", "raw_source"),
     ("review/rtl_generation_normalization_batches", "runs/manual_rtl_teacher/{run_id}/normalization/packets", "workflow_public"),
     (".local_data/manual_task_normalization", "runs/manual_rtl_teacher/{run_id}/normalization/responses", "workflow_private"),
     (".local_data/rtl_generation_verification_assets", "runs/manual_rtl_teacher/{run_id}/private_assets", "workflow_private"),
@@ -796,6 +796,15 @@ KNOWN_FILE_MAPPINGS = (
     ("review/rtl_generation_pilot/verification_assets.jsonl", "runs/manual_rtl_teacher/{run_id}/tasks/verification_assets.jsonl", "workflow_private"),
     ("review/rtl_generation_pilot/candidate_records.jsonl", "runs/manual_rtl_teacher/{run_id}/teacher/candidate_records.jsonl", "workflow_public"),
     ("review/rtl_generation_pilot/generation_attempts.jsonl", "runs/manual_rtl_teacher/{run_id}/verification/generation_attempts.jsonl", "verification"),
+)
+
+OUT_OF_SCOPE_PREFIXES = (
+    "drafts",
+    "processed",
+    "heldout",
+    "raw_public",
+    ".local_data/rtl_generation_verification_assets_v0_1_smoke",
+    ".local_data/rtl_generation_verification_assets_v0_1_smoke2",
 )
 
 
@@ -975,21 +984,6 @@ def _collect_mappings(data_root: Path, run_id: str) -> tuple[list[_Mapping], lis
             continue
         add(source_relative, destination_relative, kind, source, destination)
 
-    checkout = data_root / ".local_data" / "verilog-eval-main"
-    if checkout.exists() and not checkout.is_symlink():
-        for pattern in ("LICENSE*", "README*"):
-            matches = sorted(item for item in checkout.glob(pattern) if item.is_file())
-            if not matches:
-                missing.append(f"{_root_label(data_root)}/.local_data/verilog-eval-main/{pattern}")
-            for source in matches:
-                relative = source.relative_to(data_root).as_posix()
-                destination_relative = "raw/verilog_eval/upstream/" + source.name
-                add(relative, destination_relative, "raw_source", source, data_root / destination_relative)
-    else:
-        missing.extend([
-            f"{_root_label(data_root)}/.local_data/verilog-eval-main/LICENSE*",
-            f"{_root_label(data_root)}/.local_data/verilog-eval-main/README*",
-        ])
     all_files = [item for mapping in mappings for item in mapping.files]
     for mapping in mappings:
         additional = [
@@ -1021,16 +1015,114 @@ def _collect_mappings(data_root: Path, run_id: str) -> tuple[list[_Mapping], lis
     return mappings, sorted(set(missing)), covered
 
 
-def _migration_unknown_paths(data_root: Path, covered: set[str]) -> tuple[list[str], dict[str, Any]]:
+def _relative_display_path(data_root: Path, display_path: str) -> str:
+    prefix = f"{_root_label(data_root)}/"
+    if display_path == _root_label(data_root):
+        return ""
+    if not display_path.startswith(prefix):
+        raise WorkspaceError(f"migration report path is outside the data root: {display_path}")
+    return display_path[len(prefix):]
+
+
+def _path_has_forbidden_component(relative: str) -> bool:
+    return any(_forbidden_source_name(part) for part in relative.split("/"))
+
+
+def _is_out_of_scope_legacy_path(relative: str) -> bool:
+    if relative == ".local_data" or relative == "review":
+        return True
+    if relative.startswith("review/") and not (
+        relative == "review/manual_rtl_teacher" or relative.startswith("review/manual_rtl_teacher/")
+    ):
+        return True
+    if any(relative == prefix or relative.startswith(prefix + "/") for prefix in OUT_OF_SCOPE_PREFIXES):
+        return True
+    if relative.startswith(".local_data/verilog-eval-main/"):
+        return _path_has_forbidden_component(relative[len(".local_data/verilog-eval-main/"):])
+    return False
+
+
+def _legacy_subtree(relative: str) -> str:
+    parts = relative.split("/")
+    if parts[0] in {".local_data", "review"} and len(parts) > 1:
+        return "/".join(parts[:2])
+    return parts[0]
+
+
+def _migration_path_buckets(data_root: Path, covered: set[str]) -> tuple[dict[str, Any], dict[str, Any]]:
     inventory = build_inventory(data_root)
-    unknown: list[str] = []
+    buckets = {
+        "unknown_paths": [],
+        "unmapped_legacy_paths": [],
+        "out_of_scope_paths": [],
+    }
+    groups: dict[str, dict[str, Any]] = {}
     for entry in inventory["entries"]:
         path = entry["path"]
+        relative = _relative_display_path(data_root, path)
         if path in covered:
+            classification = "mapped"
+        elif _is_out_of_scope_legacy_path(relative):
+            classification = "out_of_scope"
+        elif entry["category"] == "unknown":
+            classification = "unknown"
+        elif entry["legacy"] or entry["category"] == "legacy":
+            classification = "unmapped_legacy"
+        else:
             continue
-        if entry["category"] == "unknown" or entry["legacy"]:
-            unknown.append(path)
-    return sorted(set(unknown)), inventory
+
+        buckets_key = {
+            "unknown": "unknown_paths",
+            "unmapped_legacy": "unmapped_legacy_paths",
+            "out_of_scope": "out_of_scope_paths",
+        }.get(classification)
+        if buckets_key is not None:
+            buckets[buckets_key].append(path)
+
+        subtree = _legacy_subtree(relative)
+        group = groups.setdefault(subtree, {
+            "path": f"{_root_label(data_root)}/{subtree}",
+            "classifications": set(),
+            "path_count": 0,
+            "file_count": 0,
+            "directory_count": 0,
+            "total_bytes": 0,
+            "mapped_path_count": 0,
+            "unmapped_legacy_path_count": 0,
+            "out_of_scope_path_count": 0,
+            "unknown_path_count": 0,
+        })
+        group["classifications"].add(classification)
+        group["path_count"] += 1
+        if entry["entry_type"] == "file":
+            group["file_count"] += 1
+            group["total_bytes"] += entry["size_bytes"]
+        elif entry["entry_type"] == "directory":
+            group["directory_count"] += 1
+        count_key = {
+            "mapped": "mapped_path_count",
+            "unmapped_legacy": "unmapped_legacy_path_count",
+            "out_of_scope": "out_of_scope_path_count",
+            "unknown": "unknown_path_count",
+        }[classification]
+        group[count_key] += 1
+
+    for key in buckets:
+        buckets[key] = sorted(set(buckets[key]))
+    legacy_subtrees = []
+    for group in sorted(groups.values(), key=lambda item: item["path"]):
+        classifications = group.pop("classifications")
+        group["classification"] = next(iter(classifications)) if len(classifications) == 1 else "mixed"
+        group["recommended_action"] = {
+            "mapped": "migrate_to_destination",
+            "out_of_scope": "keep_out_of_scope",
+            "unmapped_legacy": "review_mapping",
+            "unknown": "resolve_before_apply",
+            "mixed": "review_mapped_and_excluded_paths",
+        }[group["classification"]]
+        legacy_subtrees.append(group)
+    buckets["legacy_subtrees"] = legacy_subtrees
+    return buckets, inventory
 
 
 def _mapping_report(mapping: _Mapping) -> dict[str, Any]:
@@ -1046,13 +1138,23 @@ def _mapping_report(mapping: _Mapping) -> dict[str, Any]:
     }
 
 
-def _migration_id(run_id: str, mappings: list[_Mapping], missing: list[str], unknown: list[str]) -> str:
+def _migration_id(
+    run_id: str,
+    mappings: list[_Mapping],
+    missing: list[str],
+    unknown: list[str],
+    unmapped_legacy: list[str],
+    out_of_scope: list[str],
+) -> str:
     identity = {
         "layout_version": LAYOUT_VERSION,
+        "schema_version": MIGRATION_SCHEMA_VERSION,
         "run_id": run_id,
         "mappings": [{"source": item.source_display, "destination": item.destination_display, "hash": item.tree_sha256} for item in mappings],
         "missing": missing,
         "unknown": unknown,
+        "unmapped_legacy": unmapped_legacy,
+        "out_of_scope": out_of_scope,
     }
     return f"data_workspace_{run_id}_{_sha256_bytes(_json_bytes(identity))[:16]}"
 
@@ -1064,7 +1166,10 @@ def build_migration_plan(data_root: Path, run_id: str, *, mode: str = "dry_run")
         raise WorkspaceError("migration mode must be dry_run or apply")
     root = _absolute(data_root)
     mappings, missing, covered = _collect_mappings(root, run_id)
-    unknown, inventory = _migration_unknown_paths(root, covered)
+    buckets, inventory = _migration_path_buckets(root, covered)
+    unknown = buckets["unknown_paths"]
+    unmapped_legacy = buckets["unmapped_legacy_paths"]
+    out_of_scope = buckets["out_of_scope_paths"]
     collisions = sorted({f"{item.source_display}: {item.status}" for item in mappings if item.status == "collision"})
     summary = {
         "mapping_count": len(mappings),
@@ -1072,21 +1177,27 @@ def build_migration_plan(data_root: Path, run_id: str, *, mode: str = "dry_run")
         "planned_bytes": sum(item.total_bytes for item in mappings),
         "legacy_path_count": inventory["summary"]["legacy_entry_count"],
         "unknown_path_count": len(unknown),
+        "unmapped_legacy_path_count": len(unmapped_legacy),
+        "out_of_scope_path_count": len(out_of_scope),
+        "blocking_unresolved_count": len(unknown) + len(unmapped_legacy),
         "raw_source_bytes": inventory["summary"]["raw_source_bytes"],
         "collision_count": len(collisions),
         "missing_optional_source_count": len(missing),
-        "verilog_eval_checkout_detected": bool((root / ".local_data" / "verilog-eval-main" / "dataset_spec-to-rtl").is_dir()),
+        "verilog_eval_checkout_detected": bool((root / ".local_data" / "verilog-eval-main").is_dir()),
     }
     return {
         "schema_version": MIGRATION_SCHEMA_VERSION,
         "layout_version": LAYOUT_VERSION,
-        "migration_id": _migration_id(run_id, mappings, missing, unknown),
+        "migration_id": _migration_id(run_id, mappings, missing, unknown, unmapped_legacy, out_of_scope),
         "run_id": run_id,
         "mode": mode,
         "mappings": [_mapping_report(item) for item in mappings],
         "missing_optional_sources": missing,
         "collisions": collisions,
         "unknown_paths": unknown,
+        "unmapped_legacy_paths": unmapped_legacy,
+        "out_of_scope_paths": out_of_scope,
+        "legacy_subtrees": buckets["legacy_subtrees"],
         "summary": summary,
     }
 
@@ -1294,6 +1405,11 @@ def migrate_legacy_rtl_data_workspace(data_root: Path, run_id: str, *, apply: bo
     plan = build_migration_plan(data_root, run_id, mode=mode)
     if plan["collisions"]:
         raise WorkspaceError("migration has destination collisions")
+    if apply and plan["summary"]["blocking_unresolved_count"]:
+        raise WorkspaceError(
+            "migration has blocking unresolved paths; inspect unknown_paths and "
+            "unmapped_legacy_paths before apply"
+        )
     if apply:
         mappings = _apply_mappings(
             _absolute(data_root),

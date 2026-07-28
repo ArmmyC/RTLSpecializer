@@ -124,7 +124,20 @@ python scripts/dataset/validate_manual_rtl_run.py \
 ```
 
 Migration `--apply` refuses an uninitialized or invalid canonical run and
-never initializes one implicitly.
+never initializes one implicitly. Current migration reports use
+`data_workspace_migration_plan_v0.2`; the v0.1 schema remains unchanged for
+historical reports. `unknown_paths` plus `unmapped_legacy_paths` are blocking
+unresolved paths, while `out_of_scope_paths` are informational.
+
+Migration plans distinguish genuinely unknown paths from recognized legacy
+paths that are unmapped or explicitly out of scope. Only
+`summary.blocking_unresolved_count` and collisions block apply. The full useful
+VerilogEval checkout is the raw-source migration; older review datasets,
+reports, smoke outputs, and processed/heldout workspaces remain outside a
+manual RTL pilot.
+
+No unresolved legacy path may be silently ignored. No explicitly out-of-scope
+historical path is pulled into `pilot_001`.
 
 Use [data_workspace_migration_v0.1.md](data_workspace_migration_v0.1.md) for
 the safe copy-only migration procedure and
