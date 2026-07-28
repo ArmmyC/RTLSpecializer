@@ -108,13 +108,19 @@ python scripts/dataset/validate_manual_rtl_run.py \
 ```
 
 Migration `--apply` refuses an uninitialized or invalid canonical run; it
-does not initialize a run implicitly.
+does not initialize a run implicitly. Current migration reports use the
+`data_workspace_migration_plan_v0.2` contract. `unknown_paths` plus
+`unmapped_legacy_paths` are blocking unresolved paths; `out_of_scope_paths`
+are informational and non-blocking.
 
 Migration reports separate genuinely unknown paths from understood legacy paths
-that are unmapped or explicitly out of scope. Only collisions and
-`summary.blocking_unknown_count` block apply. The useful VerilogEval checkout
+that are unmapped or explicitly out of scope. Collisions and
+`summary.blocking_unresolved_count` block apply. The useful VerilogEval checkout
 maps to `data/raw/verilog_eval/upstream/`; older review, report, smoke, and
 processed workspaces are not pulled into a manual RTL pilot.
+
+No unresolved legacy path may be silently ignored. No explicitly out-of-scope
+historical path is pulled into `pilot_001`.
 
 Migration is copy-only. It never deletes or modifies the source, promotes
 rows, or changes `data/golden/`.

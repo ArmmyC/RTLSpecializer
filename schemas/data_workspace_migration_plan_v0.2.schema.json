@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "data_workspace_migration_plan_v0.1",
+  "$id": "data_workspace_migration_plan_v0.2",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "layout_version", "migration_id", "run_id", "mode", "mappings", "missing_optional_sources", "collisions", "unknown_paths", "summary"],
+  "required": ["schema_version", "layout_version", "migration_id", "run_id", "mode", "mappings", "missing_optional_sources", "collisions", "unknown_paths", "unmapped_legacy_paths", "out_of_scope_paths", "legacy_subtrees", "summary"],
   "properties": {
-    "schema_version": {"const": "data_workspace_migration_plan_v0.1"},
+    "schema_version": {"const": "data_workspace_migration_plan_v0.2"},
     "layout_version": {"const": "data_workspace_v2"},
     "migration_id": {"type": "string", "pattern": "^data_workspace_[a-z][a-z0-9]*(?:_[a-z0-9]+)*_[0-9a-f]{16}$"},
     "run_id": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$"},
@@ -14,16 +14,22 @@
     "missing_optional_sources": {"type": "array", "items": {"$ref": "#/$defs/path"}, "uniqueItems": true},
     "collisions": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "unknown_paths": {"type": "array", "items": {"$ref": "#/$defs/path"}, "uniqueItems": true},
+    "unmapped_legacy_paths": {"type": "array", "items": {"$ref": "#/$defs/path"}, "uniqueItems": true},
+    "out_of_scope_paths": {"type": "array", "items": {"$ref": "#/$defs/path"}, "uniqueItems": true},
+    "legacy_subtrees": {"type": "array", "items": {"$ref": "#/$defs/legacy_subtree"}},
     "summary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mapping_count", "planned_file_count", "planned_bytes", "legacy_path_count", "unknown_path_count", "raw_source_bytes", "collision_count", "missing_optional_source_count", "verilog_eval_checkout_detected"],
+      "required": ["mapping_count", "planned_file_count", "planned_bytes", "legacy_path_count", "unknown_path_count", "unmapped_legacy_path_count", "out_of_scope_path_count", "blocking_unresolved_count", "raw_source_bytes", "collision_count", "missing_optional_source_count", "verilog_eval_checkout_detected"],
       "properties": {
         "mapping_count": {"type": "integer", "minimum": 0},
         "planned_file_count": {"type": "integer", "minimum": 0},
         "planned_bytes": {"type": "integer", "minimum": 0},
         "legacy_path_count": {"type": "integer", "minimum": 0},
         "unknown_path_count": {"type": "integer", "minimum": 0},
+        "unmapped_legacy_path_count": {"type": "integer", "minimum": 0},
+        "out_of_scope_path_count": {"type": "integer", "minimum": 0},
+        "blocking_unresolved_count": {"type": "integer", "minimum": 0},
         "raw_source_bytes": {"type": "integer", "minimum": 0},
         "collision_count": {"type": "integer", "minimum": 0},
         "missing_optional_source_count": {"type": "integer", "minimum": 0},
@@ -48,6 +54,24 @@
         "total_bytes": {"type": "integer", "minimum": 0},
         "tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "status": {"enum": ["planned", "already_present", "copied"]}
+      }
+    },
+    "legacy_subtree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "classification", "recommended_action", "path_count", "file_count", "directory_count", "total_bytes", "mapped_path_count", "unmapped_legacy_path_count", "out_of_scope_path_count", "unknown_path_count"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "classification": {"enum": ["mapped", "unmapped_legacy", "out_of_scope", "unknown", "mixed"]},
+        "recommended_action": {"enum": ["migrate_to_destination", "review_mapping", "keep_out_of_scope", "resolve_before_apply", "review_mapped_and_excluded_paths"]},
+        "path_count": {"type": "integer", "minimum": 0},
+        "file_count": {"type": "integer", "minimum": 0},
+        "directory_count": {"type": "integer", "minimum": 0},
+        "total_bytes": {"type": "integer", "minimum": 0},
+        "mapped_path_count": {"type": "integer", "minimum": 0},
+        "unmapped_legacy_path_count": {"type": "integer", "minimum": 0},
+        "out_of_scope_path_count": {"type": "integer", "minimum": 0},
+        "unknown_path_count": {"type": "integer", "minimum": 0}
       }
     }
   }

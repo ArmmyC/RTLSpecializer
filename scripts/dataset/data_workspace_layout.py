@@ -20,7 +20,7 @@ from typing import Any, Callable, Iterable
 
 LAYOUT_VERSION = "data_workspace_v2"
 INVENTORY_SCHEMA_VERSION = "data_workspace_inventory_v0.1"
-MIGRATION_SCHEMA_VERSION = "data_workspace_migration_plan_v0.1"
+MIGRATION_SCHEMA_VERSION = "data_workspace_migration_plan_v0.2"
 RUN_MANIFEST_SCHEMA_VERSION = "manual_rtl_run_manifest_v0.1"
 RUN_WORKFLOW = "manual_rtl_teacher"
 RUN_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
@@ -1148,6 +1148,7 @@ def _migration_id(
 ) -> str:
     identity = {
         "layout_version": LAYOUT_VERSION,
+        "schema_version": MIGRATION_SCHEMA_VERSION,
         "run_id": run_id,
         "mappings": [{"source": item.source_display, "destination": item.destination_display, "hash": item.tree_sha256} for item in mappings],
         "missing": missing,
@@ -1178,7 +1179,7 @@ def build_migration_plan(data_root: Path, run_id: str, *, mode: str = "dry_run")
         "unknown_path_count": len(unknown),
         "unmapped_legacy_path_count": len(unmapped_legacy),
         "out_of_scope_path_count": len(out_of_scope),
-        "blocking_unknown_count": len(unknown),
+        "blocking_unresolved_count": len(unknown) + len(unmapped_legacy),
         "raw_source_bytes": inventory["summary"]["raw_source_bytes"],
         "collision_count": len(collisions),
         "missing_optional_source_count": len(missing),
@@ -1404,8 +1405,11 @@ def migrate_legacy_rtl_data_workspace(data_root: Path, run_id: str, *, apply: bo
     plan = build_migration_plan(data_root, run_id, mode=mode)
     if plan["collisions"]:
         raise WorkspaceError("migration has destination collisions")
-    if apply and plan["summary"]["blocking_unknown_count"]:
-        raise WorkspaceError("migration has blocking unknown paths; inspect the dry-run classification before apply")
+    if apply and plan["summary"]["blocking_unresolved_count"]:
+        raise WorkspaceError(
+            "migration has blocking unresolved paths; inspect unknown_paths and "
+            "unmapped_legacy_paths before apply"
+        )
     if apply:
         mappings = _apply_mappings(
             _absolute(data_root),

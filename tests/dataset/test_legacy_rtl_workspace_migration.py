@@ -108,7 +108,7 @@ def test_dry_run_is_deterministic_and_does_not_copy_sources(tmp_path: Path) -> N
     assert plan["mode"] == "dry_run"
     assert plan["summary"]["mapping_count"] == 12
     assert plan["collisions"] == []
-    assert plan["summary"]["blocking_unknown_count"] == 2
+    assert plan["summary"]["blocking_unresolved_count"] == 2
     assert plan["unknown_paths"] == ["data/unknown", "data/unknown/keep.txt"]
     assert plan["unmapped_legacy_paths"] == []
     assert any(item["path"] == "data/.local_data/verilog-eval-main" and item["classification"] == "mapped" for item in plan["legacy_subtrees"])
@@ -124,6 +124,22 @@ def test_apply_is_copy_only_and_every_mapped_file_hash_matches(tmp_path: Path, m
     _add_forbidden_source_files(data)
     before = _file_hashes(data)
     dry_run = build_migration_plan(data, "pilot_001")
+    checkout_group = next(
+        item for item in dry_run["legacy_subtrees"]
+        if item["path"] == "data/.local_data/verilog-eval-main"
+    )
+    assert checkout_group["classification"] == "mixed"
+    assert checkout_group["mapped_path_count"] > 0
+    assert checkout_group["out_of_scope_path_count"] > 0
+    assert all(
+        forbidden not in {item["source_path"] for item in dry_run["mappings"]}
+        for forbidden in (
+            "data/.local_data/verilog-eval-main/.git/config",
+            "data/.local_data/verilog-eval-main/.cache/index",
+            "data/.local_data/verilog-eval-main/credentials.json",
+            "data/.local_data/verilog-eval-main/scratch.tmp",
+        )
+    )
     initialize_manual_rtl_run("pilot_001", "VerilogEval", data / "runs/manual_rtl_teacher")
     report = migrate_legacy_rtl_data_workspace(data, "pilot_001", apply=True)
     assert report["mode"] == "apply"
@@ -163,8 +179,12 @@ def test_apply_is_copy_only_and_every_mapped_file_hash_matches(tmp_path: Path, m
 
 def test_apply_rejects_blocking_unknown_but_not_out_of_scope_paths(tmp_path: Path) -> None:
     data = _copy_fixture(tmp_path)
+    plan = build_migration_plan(data, "pilot_001")
+    assert plan["summary"]["blocking_unresolved_count"] == (
+        len(plan["unknown_paths"]) + len(plan["unmapped_legacy_paths"])
+    )
     initialize_manual_rtl_run("pilot_001", "VerilogEval", data / "runs/manual_rtl_teacher")
-    with pytest.raises(WorkspaceError, match="blocking unknown paths"):
+    with pytest.raises(WorkspaceError, match="blocking unresolved paths"):
         migrate_legacy_rtl_data_workspace(data, "pilot_001", apply=True)
     assert not (data / "raw").exists()
 
@@ -173,12 +193,41 @@ def test_apply_rejects_blocking_unknown_but_not_out_of_scope_paths(tmp_path: Pat
     old_review.parent.mkdir(parents=True)
     old_review.write_text("old review state\n", encoding="utf-8")
     plan = build_migration_plan(data2, "pilot_001")
-    assert plan["summary"]["blocking_unknown_count"] == 0
+    assert plan["summary"]["blocking_unresolved_count"] == 0
+    assert plan["summary"]["blocking_unresolved_count"] == (
+        len(plan["unknown_paths"]) + len(plan["unmapped_legacy_paths"])
+    )
     assert "data/review/old_review_dataset/rows.jsonl" in plan["out_of_scope_paths"]
     initialize_manual_rtl_run("pilot_001", "VerilogEval", data2 / "runs/manual_rtl_teacher")
     report = migrate_legacy_rtl_data_workspace(data2, "pilot_001", apply=True)
     assert report["collisions"] == []
     assert not (data2 / "runs/manual_rtl_teacher/pilot_001" / "review" / "old_review_dataset").exists()
+
+
+def test_apply_rejects_unmapped_legacy_before_copy(tmp_path: Path) -> None:
+    data = _copy_apply_fixture(tmp_path)
+    source = data / ".local_data" / "unclassified_old_workspace" / "foo.json"
+    source.parent.mkdir(parents=True)
+    source.write_text("unclassified legacy state\n", encoding="utf-8")
+    source_hashes = _file_hashes(data / ".local_data")
+
+    plan = build_migration_plan(data, "pilot_001")
+    assert plan["unknown_paths"] == []
+    assert plan["unmapped_legacy_paths"]
+    assert plan["summary"]["unmapped_legacy_path_count"] > 0
+    assert plan["summary"]["blocking_unresolved_count"] == (
+        len(plan["unknown_paths"]) + len(plan["unmapped_legacy_paths"])
+    )
+    assert plan["summary"]["blocking_unresolved_count"] > 0
+
+    initialize_manual_rtl_run("pilot_001", "VerilogEval", data / "runs/manual_rtl_teacher")
+    report_path = tmp_path / "unmapped.json"
+    with pytest.raises(WorkspaceError, match="blocking unresolved paths"):
+        migrate_legacy_rtl_data_workspace(data, "pilot_001", apply=True, output=report_path)
+
+    assert _file_hashes(data / ".local_data") == source_hashes
+    assert not (data / "raw").exists()
+    assert not report_path.exists()
 
 
 def test_apply_requires_an_initialized_canonical_run(tmp_path: Path) -> None:
