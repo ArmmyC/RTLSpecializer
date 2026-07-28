@@ -33,6 +33,8 @@ def test_inventory_migrate_initialize_validate_inventory_integration(tmp_path: P
     sources_before = _hash_tree(data / ".local_data")
 
     initial = build_inventory(data)
+    (data / "unknown" / "keep.txt").unlink()
+    (data / "unknown").rmdir()
     dry = migrate_legacy_rtl_data_workspace(data, "pilot_001")
     initialize_manual_rtl_run("pilot_001", "VerilogEval", data / "runs/manual_rtl_teacher")
     applied = migrate_legacy_rtl_data_workspace(data, "pilot_001", apply=True)
@@ -46,6 +48,7 @@ def test_inventory_migrate_initialize_validate_inventory_integration(tmp_path: P
     assert code == 0, valid
     assert initial["summary"]["unknown_entry_count"] >= 1
     assert dry["mappings"]
+    assert dry["summary"]["blocking_unknown_count"] == 0
     assert final["summary"]["raw_source_bytes"] >= initial["summary"]["raw_source_bytes"]
     assert _hash_tree(data / "golden") == golden_before
     assert _hash_tree(data / ".local_data") == sources_before

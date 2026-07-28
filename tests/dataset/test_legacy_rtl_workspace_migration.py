@@ -26,6 +26,13 @@ def _copy_fixture(tmp_path: Path) -> Path:
     return data
 
 
+def _copy_apply_fixture(tmp_path: Path) -> Path:
+    data = _copy_fixture(tmp_path)
+    (data / "unknown" / "keep.txt").unlink()
+    (data / "unknown").rmdir()
+    return data
+
+
 def _file_hashes(root: Path) -> dict[str, str]:
     result: dict[str, str] = {}
     for path in sorted(root.rglob("*")):
@@ -55,6 +62,7 @@ EXPECTED_MAPPED_FILES = (
     (".local_data/verilog-eval-main/dataset_spec-to-rtl/Prob001_demo_prompt.txt", "raw/verilog_eval/upstream/dataset_spec-to-rtl/Prob001_demo_prompt.txt"),
     (".local_data/verilog-eval-main/dataset_spec-to-rtl/Prob001_demo_ref.sv", "raw/verilog_eval/upstream/dataset_spec-to-rtl/Prob001_demo_ref.sv"),
     (".local_data/verilog-eval-main/dataset_spec-to-rtl/Prob001_demo_test.sv", "raw/verilog_eval/upstream/dataset_spec-to-rtl/Prob001_demo_test.sv"),
+    (".local_data/verilog-eval-main/dataset_code-complete-iccad2023/Prob001_demo_prompt.txt", "raw/verilog_eval/upstream/dataset_code-complete-iccad2023/Prob001_demo_prompt.txt"),
     ("review/rtl_generation_normalization_batches/batch_001.json", "runs/manual_rtl_teacher/pilot_001/normalization/packets/batch_001.json"),
     (".local_data/manual_task_normalization/batch_001_response.json", "runs/manual_rtl_teacher/pilot_001/normalization/responses/batch_001_response.json"),
     (".local_data/rtl_generation_verification_assets/verification_assets.jsonl", "runs/manual_rtl_teacher/pilot_001/private_assets/verification_assets.jsonl"),
@@ -75,6 +83,10 @@ def _add_forbidden_source_files(data: Path) -> None:
         ".local_data/verilog-eval-main/dataset_spec-to-rtl/.cache/index",
         ".local_data/verilog-eval-main/dataset_spec-to-rtl/credentials.json",
         ".local_data/verilog-eval-main/dataset_spec-to-rtl/scratch.tmp",
+        ".local_data/verilog-eval-main/.git/config",
+        ".local_data/verilog-eval-main/.cache/index",
+        ".local_data/verilog-eval-main/credentials.json",
+        ".local_data/verilog-eval-main/scratch.tmp",
     ):
         path = data / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,8 +106,13 @@ def test_dry_run_is_deterministic_and_does_not_copy_sources(tmp_path: Path) -> N
     before = _file_hashes(data)
     plan = build_migration_plan(data, "pilot_001")
     assert plan["mode"] == "dry_run"
-    assert plan["summary"]["mapping_count"] == 14
+    assert plan["summary"]["mapping_count"] == 12
     assert plan["collisions"] == []
+    assert plan["summary"]["blocking_unknown_count"] == 2
+    assert plan["unknown_paths"] == ["data/unknown", "data/unknown/keep.txt"]
+    assert plan["unmapped_legacy_paths"] == []
+    assert any(item["path"] == "data/.local_data/verilog-eval-main" and item["classification"] == "mapped" for item in plan["legacy_subtrees"])
+    assert any(item["path"] == "data/unknown" and item["classification"] == "unknown" for item in plan["legacy_subtrees"])
     assert plan["migration_id"] == build_migration_plan(data, "pilot_001")["migration_id"]
     assert not (data / "raw" / "verilog_eval").exists()
     assert _file_hashes(data) == before
@@ -103,7 +120,7 @@ def test_dry_run_is_deterministic_and_does_not_copy_sources(tmp_path: Path) -> N
 
 
 def test_apply_is_copy_only_and_every_mapped_file_hash_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    data = _copy_fixture(tmp_path)
+    data = _copy_apply_fixture(tmp_path)
     _add_forbidden_source_files(data)
     before = _file_hashes(data)
     dry_run = build_migration_plan(data, "pilot_001")
@@ -111,7 +128,7 @@ def test_apply_is_copy_only_and_every_mapped_file_hash_matches(tmp_path: Path, m
     report = migrate_legacy_rtl_data_workspace(data, "pilot_001", apply=True)
     assert report["mode"] == "apply"
     assert report["collisions"] == []
-    assert report["summary"]["mapping_count"] == 14
+    assert report["summary"]["mapping_count"] == 12
     assert dry_run["summary"]["planned_file_count"] == len(EXPECTED_MAPPED_FILES)
     after = _file_hashes(data)
     for path, digest in before.items():
@@ -144,6 +161,26 @@ def test_apply_is_copy_only_and_every_mapped_file_hash_matches(tmp_path: Path, m
     } == destination_hashes
 
 
+def test_apply_rejects_blocking_unknown_but_not_out_of_scope_paths(tmp_path: Path) -> None:
+    data = _copy_fixture(tmp_path)
+    initialize_manual_rtl_run("pilot_001", "VerilogEval", data / "runs/manual_rtl_teacher")
+    with pytest.raises(WorkspaceError, match="blocking unknown paths"):
+        migrate_legacy_rtl_data_workspace(data, "pilot_001", apply=True)
+    assert not (data / "raw").exists()
+
+    data2 = _copy_apply_fixture(tmp_path / "out_of_scope")
+    old_review = data2 / "review" / "old_review_dataset" / "rows.jsonl"
+    old_review.parent.mkdir(parents=True)
+    old_review.write_text("old review state\n", encoding="utf-8")
+    plan = build_migration_plan(data2, "pilot_001")
+    assert plan["summary"]["blocking_unknown_count"] == 0
+    assert "data/review/old_review_dataset/rows.jsonl" in plan["out_of_scope_paths"]
+    initialize_manual_rtl_run("pilot_001", "VerilogEval", data2 / "runs/manual_rtl_teacher")
+    report = migrate_legacy_rtl_data_workspace(data2, "pilot_001", apply=True)
+    assert report["collisions"] == []
+    assert not (data2 / "runs/manual_rtl_teacher/pilot_001" / "review" / "old_review_dataset").exists()
+
+
 def test_apply_requires_an_initialized_canonical_run(tmp_path: Path) -> None:
     data = _copy_fixture(tmp_path)
     report_path = data / "reports" / "migration" / "applied.json"
@@ -174,7 +211,7 @@ def test_apply_rejects_invalid_canonical_run_before_copy(tmp_path: Path, mutatio
 
 
 def test_apply_rolls_back_after_staging_publication_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    data = _copy_fixture(tmp_path)
+    data = _copy_apply_fixture(tmp_path)
     initialize_manual_rtl_run("pilot_001", "VerilogEval", data / "runs/manual_rtl_teacher")
     before = _tree_snapshot(data)
     report_path = tmp_path / "applied.json"
@@ -202,7 +239,7 @@ def test_apply_rolls_back_after_staging_publication_failure(tmp_path: Path, monk
 
 
 def test_post_publish_validation_failure_uses_the_same_rollback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    data = _copy_fixture(tmp_path)
+    data = _copy_apply_fixture(tmp_path)
     initialize_manual_rtl_run("pilot_001", "VerilogEval", data / "runs/manual_rtl_teacher")
     before = _tree_snapshot(data)
     report_path = tmp_path / "post-validation-failure.json"

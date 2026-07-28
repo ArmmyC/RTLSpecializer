@@ -34,13 +34,17 @@ Validation rejects symlinks, path escapes, misplaced attempt records, private
 artifact leakage into teacher-visible directories, legacy path strings, and
 approval claims inferred from verification.
 
-Migration defaults to dry-run. Apply requires an already initialized and valid
-canonical run, complete collision/source preflight, bounded streaming copy,
-source/destination hash agreement, temporary sibling staging, and atomic
-publication. It validates the run again before writing the applied report and
-rolls back if that validation fails. It never deletes or modifies source bytes,
-overwrites conflicting destinations, follows symlinks, or migrates unknown
-paths.
+Migration defaults to dry-run. Its report separates genuinely unknown paths,
+unmapped legacy paths, explicitly out-of-scope paths, and grouped legacy
+subtrees. Apply requires an already initialized and valid canonical run,
+`blocking_unknown_count == 0`, zero collisions, complete collision/source
+preflight, bounded streaming copy, source/destination hash agreement,
+temporary sibling staging, and atomic publication. It validates the run again
+before writing the applied report and rolls back if that validation fails. The
+useful VerilogEval checkout maps to `data/raw/verilog_eval/upstream/`; unrelated
+review, report, smoke, and processed workspaces remain out of scope for a
+manual RTL pilot. The tool never deletes or modifies source bytes, overwrites
+conflicting destinations, follows symlinks, or migrates unknown paths.
 
 ## Compatibility and safety
 
