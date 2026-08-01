@@ -72,6 +72,80 @@ def test_run_validation_enforces_private_boundary_and_attempt_folders(tmp_path: 
     assert any("private RTL" in error for error in invalid["errors"])
 
 
+def test_run_validation_accepts_nested_verification_workspace(tmp_path: Path) -> None:
+    run = tmp_path / "runs" / "pilot_001"
+    initialize_manual_rtl_run("pilot_001", "VerilogEval", run.parent)
+
+    attempt = run / "verification" / "attempt_01"
+    attempt.mkdir()
+    (attempt / "candidate_manifest.jsonl").write_text("{}\n", encoding="utf-8")
+    (attempt / "verification_plan.jsonl").write_text("{}\n", encoding="utf-8")
+    (attempt / "run_instructions.md").write_text("manual handoff\n", encoding="utf-8")
+    workspace = attempt / "workspace" / "rtlgen_synthetic_example_attempt_01"
+    (workspace / "support" / "nested").mkdir(parents=True)
+    (workspace / "candidate.sv").write_text("module TopModule; endmodule\n", encoding="utf-8")
+    (workspace / "testbench.sv").write_text("module tb; endmodule\n", encoding="utf-8")
+    (workspace / "support" / "helper.svh").write_text("// support\n", encoding="utf-8")
+
+    for attempt_number in ("02", "03", "04"):
+        (run / "verification" / f"attempt_{attempt_number}" / "workspace").mkdir(parents=True)
+
+    report, code = validate_manual_rtl_run(run)
+    assert code == 0, report
+    assert report["ok"] is True
+    assert report["errors"] == []
+    assert not any(path.name == "reference.sv" for path in (run / "verification").rglob("*"))
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "verification/attempt_00",
+        "verification/attempt_05",
+        "verification/attempt_1",
+        "verification/attempt_01_extra",
+        "verification/random",
+        "verification/attempt_05/workspace",
+        "verification/attempt_01/unexpected_directory",
+    ],
+)
+def test_run_validation_rejects_invalid_verification_directories(tmp_path: Path, relative: str) -> None:
+    run = tmp_path / "runs" / "pilot_001"
+    initialize_manual_rtl_run("pilot_001", "VerilogEval", run.parent)
+    (run / relative).mkdir(parents=True)
+
+    report, code = validate_manual_rtl_run(run)
+    assert code == 1
+    assert report["ok"] is False
+    assert any("verification" in error for error in report["errors"])
+
+
+@pytest.mark.parametrize(
+    ("relative", "expected_code"),
+    [
+        ("repairs/attempt_02/nested", 0),
+        ("repairs/attempt_01/nested", 1),
+        ("repairs/attempt_05/nested", 1),
+        ("repairs/attempt_2", 1),
+        ("repairs/random", 1),
+    ],
+)
+def test_run_validation_enforces_repair_attempt_directories(
+    tmp_path: Path, relative: str, expected_code: int
+) -> None:
+    run = tmp_path / "runs" / "pilot_001"
+    initialize_manual_rtl_run("pilot_001", "VerilogEval", run.parent)
+    (run / relative).mkdir(parents=True)
+
+    report, code = validate_manual_rtl_run(run)
+    assert code == expected_code
+    assert report["ok"] is (expected_code == 0)
+    if expected_code:
+        assert any("repair" in error or "unexpected directory" in error for error in report["errors"])
+    else:
+        assert report["errors"] == []
+
+
 def test_run_validation_rejects_leakage_and_wrong_records(tmp_path: Path) -> None:
     run = tmp_path / "runs" / "pilot_001"
     initialize_manual_rtl_run("pilot_001", "VerilogEval", run.parent)

@@ -26,6 +26,9 @@ RUN_WORKFLOW = "manual_rtl_teacher"
 RUN_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
+VERIFICATION_ATTEMPT_ROOT_RE = re.compile(r"verification/attempt_0[1-4]")
+VERIFICATION_WORKSPACE_DIR_RE = re.compile(r"verification/attempt_0[1-4]/workspace(?:/.*)?")
+REPAIR_ATTEMPT_DIR_RE = re.compile(r"repairs/attempt_0[2-4](?:/.*)?")
 
 CATEGORIES = (
     "reviewed_seed",
@@ -673,6 +676,17 @@ def _try_json(raw: bytes) -> Any:
         return None
 
 
+def _is_valid_verification_directory(relative: str) -> bool:
+    return bool(
+        VERIFICATION_ATTEMPT_ROOT_RE.fullmatch(relative)
+        or VERIFICATION_WORKSPACE_DIR_RE.fullmatch(relative)
+    )
+
+
+def _is_valid_repair_directory(relative: str) -> bool:
+    return bool(REPAIR_ATTEMPT_DIR_RE.fullmatch(relative))
+
+
 def validate_manual_rtl_run(run_root: Path) -> tuple[dict[str, Any], int]:
     errors: list[str] = []
     root = _absolute(run_root)
@@ -716,15 +730,13 @@ def validate_manual_rtl_run(run_root: Path) -> tuple[dict[str, Any], int]:
                     continue
                 errors.append(f"unexpected file in run: {relative}")
             elif path.is_dir():
-                if relative.startswith("verification/attempt_"):
-                    if not re.fullmatch(r"verification/attempt_0[1-4]", relative):
-                        errors.append(f"invalid verification attempt directory: {relative}")
-                elif relative.startswith("repairs/attempt_"):
-                    if not re.fullmatch(r"repairs/attempt_0[2-4]", relative):
-                        errors.append(f"invalid repair attempt directory: {relative}")
+                if relative.startswith("verification/attempt_") and not _is_valid_verification_directory(relative):
+                    errors.append(f"invalid verification attempt directory: {relative}")
+                elif relative.startswith("repairs/attempt_") and not _is_valid_repair_directory(relative):
+                    errors.append(f"invalid repair attempt directory: {relative}")
                 elif relative.count("/") == 0 or relative in {"normalization", "teacher"} or relative in {"normalization/packets", "normalization/responses", "tasks", "private_assets", "private_assets/workspace", "teacher/packets", "teacher/responses", "verification", "repairs", "review", "reports"}:
                     continue
-                elif not (relative.startswith("private_assets/workspace/") or relative.startswith("reports/") or re.fullmatch(r"verification/attempt_0[1-4]/.*", relative) or re.fullmatch(r"repairs/attempt_0[2-4]/.*", relative)):
+                elif not (relative.startswith("private_assets/workspace/") or relative.startswith("reports/") or _is_valid_verification_directory(relative) or _is_valid_repair_directory(relative)):
                     errors.append(f"unexpected directory in run: {relative}")
         errors.extend(_teacher_visible_checks(root, paths))
         # The manifest itself is also a privacy boundary even though it is not
