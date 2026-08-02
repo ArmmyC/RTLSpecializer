@@ -26,6 +26,20 @@ paths in `verification_assets.jsonl`. A normalized VerilogEval
 RTLCoder rows without testbenches are not executable-ready. A reference RTL
 file is an input asset, not evidence that the implementation is correct.
 
+`executable_ready` also requires a deterministic verification dependency
+closure. The testbench must declare `tb`, instantiate the expected candidate
+top, and resolve every other probable module/interface dependency through the
+testbench or an explicitly declared support file. Package imports must resolve
+through the same candidate-visible inputs. Ambiguous dependency analysis is
+held for interface review.
+
+Reference RTL is never converted automatically into candidate-visible support.
+When a testbench dependency exists only in private reference material, the
+asset is marked `needs_testbench` with a generic private readiness reason. The
+operator must author a corrected testbench from the public specification and
+interface, create a new versioned run, and preserve the old attempt history as
+immutable evidence.
+
 ## Export
 
 ```bash

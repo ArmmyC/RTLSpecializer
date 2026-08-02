@@ -59,6 +59,13 @@ python scripts/dataset/assemble_rtl_generation_inputs.py \
 Reference RTL and testbenches remain private. The task and verification-asset
 manifests are not approval records.
 
+An asset is executable-ready only after static dependency closure has been
+established without using reference RTL as candidate-visible support. A
+reference-only testbench dependency requires a corrected, versioned asset and
+a new run; existing attempt history is immutable. The preparation tooling
+never extracts implementation logic or copies reference RTL to repair such an
+asset.
+
 ## 2. Export teacher packets and validate returns
 
 ```bash

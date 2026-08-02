@@ -5,8 +5,196 @@ import re
 from dataclasses import replace
 from pathlib import Path
 
-from scripts.dataset.rtl_generation_preparation import SourceRow, _task_id, export_generation_normalization_batches
+from scripts.dataset.rtl_generation_preparation import (
+    SourceRow,
+    _readiness,
+    _task_id,
+    _verification_dependency_report,
+    export_generation_normalization_batches,
+)
 from tests.dataset.rtl_generation_test_helpers import load_batch, make_checkout
+
+
+def _dependency_row(
+    testbench: str,
+    *,
+    reference: str = "module ReferenceOnly; endmodule\n",
+    support: dict[str, bytes] | None = None,
+) -> SourceRow:
+    return SourceRow(
+        source_id="synthetic_dependency_case",
+        source_dataset="synthetic",
+        design_family="combinational",
+        specification=(
+            "Implement module named TopModule with the following interface.\n"
+            "- input a\n"
+            "- output y\n"
+        ),
+        reference_rtl=reference,
+        testbench=testbench,
+        support_files=support or {},
+        license="MIT",
+        provenance={"public_dataset_name": "synthetic"},
+        top_module_hint="TopModule",
+        interface_hints=[
+            {"name": "a", "direction": "input"},
+            {"name": "y", "direction": "output"},
+        ],
+    )
+
+
+def _self_contained_testbench(extra: str = "") -> str:
+    return (
+        "module tb;\n"
+        f"{extra}"
+        "  logic a;\n"
+        "  logic y;\n"
+        "  TopModule dut(.a(a), .y(y));\n"
+        "  initial $display(\"mismatch_count_v1: 0\");\n"
+        "endmodule\n"
+    )
+
+
+def test_dependency_closure_accepts_self_contained_testbench() -> None:
+    row = _dependency_row(_self_contained_testbench())
+    assert _readiness(row) == ("executable_ready", [])
+    report = _verification_dependency_report(row)
+    assert report.unresolved_modules == frozenset()
+    assert report.unresolved_packages == frozenset()
+
+
+def test_dependency_closure_accepts_explicit_support_module() -> None:
+    row = _dependency_row(
+        _self_contained_testbench("  Helper helper(.a(a), .y(y));\n"),
+        support={"helper.sv": b"module Helper(input a, output y); endmodule\n"},
+    )
+    assert _readiness(row) == ("executable_ready", [])
+
+
+def test_reference_only_helper_downgrades_readiness_without_copying_reference() -> None:
+    row = _dependency_row(
+        _self_contained_testbench("  ReferenceHelper helper();\n"),
+        reference=(
+            "module ReferenceOnly; endmodule\n"
+            "module ReferenceHelper; endmodule\n"
+        ),
+    )
+    readiness, reasons = _readiness(row)
+    assert readiness == "needs_testbench"
+    assert reasons == [
+        "testbench depends on a non-candidate module that is available only in private reference material",
+    ]
+    assert row.support_files == {}
+
+
+def test_missing_helper_downgrades_readiness() -> None:
+    readiness, reasons = _readiness(
+        _dependency_row(_self_contained_testbench("  MissingHelper helper();\n"))
+    )
+    assert readiness == "needs_testbench"
+    assert reasons == ["testbench has an unresolved non-candidate dependency"]
+
+
+def test_unresolved_package_requires_interface_review() -> None:
+    row = _dependency_row(
+        "import MissingPackage::*;\n" + _self_contained_testbench()
+    )
+    readiness, reasons = _readiness(row)
+    assert readiness == "needs_interface_review"
+    assert reasons == ["testbench has unresolved package dependencies"]
+
+
+def test_package_and_interface_dependencies_resolve_from_support() -> None:
+    row = _dependency_row(
+        "import HelperPackage::*;\n"
+        + _self_contained_testbench("  HelperInterface bus();\n"),
+        support={
+            "helper.sv": (
+                b"package HelperPackage; endpackage\n"
+                b"interface HelperInterface; endinterface\n"
+            ),
+        },
+    )
+    assert _readiness(row) == ("executable_ready", [])
+
+
+def test_dependency_lexer_ignores_comments_strings_and_declarations() -> None:
+    row = _dependency_row(
+        """module tb;
+  // MissingInComment fake();
+  string text = "MissingInString fake();";
+  function void helper(input logic value);
+  endfunction
+  logic a;
+  logic y;
+  TopModule dut(.a(a), .y(y));
+endmodule
+"""
+    )
+    report = _verification_dependency_report(row)
+    assert report.probable_instantiations == ("TopModule",)
+    assert report.unresolved_modules == frozenset()
+
+
+def test_reference_bytes_cannot_be_repackaged_as_support() -> None:
+    reference = "module ReferenceOnly; endmodule\n"
+    readiness, reasons = _readiness(
+        _dependency_row(
+            _self_contained_testbench(),
+            reference=reference,
+            support={"copied.sv": reference.encode("utf-8")},
+        )
+    )
+    assert readiness == "needs_testbench"
+    assert reasons == ["support files must not contain reference RTL bytes"]
+
+
+def test_public_source_id_directory_component_is_not_a_path_leak(tmp_path) -> None:
+    source_root = tmp_path / "verilog_eval_assetfix_v1" / "prob001_zero"
+    source_root.mkdir(parents=True)
+    source_path = source_root / "source.json"
+    source_path.write_text(
+        json.dumps([{
+            "source_id": "Prob001_zero",
+            "source_dataset": "VerilogEval_assetfix_v1",
+            "design_family": "combinational",
+            "specification": "Implement module named TopModule. - output zero",
+            "artifacts": {
+                "rtl_code": "module ReferenceOnly; endmodule",
+                "testbench": "module tb; TopModule dut(); endmodule",
+                "support_files": {},
+            },
+            "license": "MIT",
+            "provenance": {
+                "public_dataset_name": "VerilogEval",
+                "public_dataset_url": "https://example.invalid/verilog-eval",
+                "source_commit": None,
+                "license": "MIT",
+                "original_source_id": "Prob001_zero",
+            },
+            "design_context": {
+                "target_module_name": "TopModule",
+                "interface_ports_from_prompt": [{
+                    "name": "zero",
+                    "direction": "output",
+                    "declaration": "output zero",
+                    "packed_range": None,
+                    "width_bits": 1,
+                    "signed": False,
+                    "description": None,
+                }],
+            },
+        }]),
+        encoding="utf-8",
+    )
+    result, code = export_generation_normalization_batches(
+        source_path,
+        tmp_path / "public",
+        tmp_path / "private",
+        batch_size=1,
+        limit=1,
+    )
+    assert code == 0, result
 
 
 def test_manual_normalization_prompt_matches_generation_task_schema() -> None:

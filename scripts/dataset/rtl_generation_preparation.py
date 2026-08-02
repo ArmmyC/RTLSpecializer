@@ -120,6 +120,315 @@ class SourceRow:
     warnings: list[str] = field(default_factory=list)
 
 
+_SV_IDENTIFIER_RE = re.compile(r"^(?:\\[^\s]+|[A-Za-z_][A-Za-z0-9_$]*)$")
+_SV_TOKEN_RE = re.compile(
+    r"(?:\\[^\s]+|\$?[A-Za-z_][A-Za-z0-9_$]*|::|==|!=|<=|>=|&&|\|\||\+\+|--|[{}()\[\];,#.:@=+*/%!?&|<>~'\-])"
+)
+_SV_KEYWORDS = {
+    "always", "always_comb", "always_ff", "always_latch", "and", "assign",
+    "automatic", "begin", "bit", "buf", "byte", "case", "checker", "class",
+    "clocking", "const", "constraint", "continue", "cover", "covergroup",
+    "default", "disable", "do", "else", "end", "endchecker", "endclass",
+    "endclocking", "endfunction", "endgenerate", "endgroup", "endmodule",
+    "endpackage", "endprimitive", "endprogram", "endproperty", "endsequence",
+    "endtask", "endinterface", "for", "foreach", "fork", "function", "generate",
+    "genvar", "if", "iff", "ifnone", "import", "inout", "input", "inside",
+    "integer", "interface", "intersect", "join", "local", "localparam", "logic",
+    "longint", "macromodule", "modport", "module", "negedge", "new", "nocase",
+    "nonblocking", "or", "output", "package", "parameter", "posedge", "primitive",
+    "program", "property", "pullup", "pulldown", "real", "ref", "reg", "release",
+    "repeat", "return", "sequence", "shortint", "signed", "static", "string",
+    "struct", "super", "task", "time", "timeprecision", "timeunit", "tri", "typedef",
+    "union", "unsigned", "var", "virtual", "void", "wait", "while", "wire", "with",
+    "within", "xnor", "xor",
+}
+_SV_DECLARATION_KEYWORDS = {
+    "checker": "checker",
+    "interface": "interface",
+    "module": "module",
+    "package": "package",
+    "primitive": "primitive",
+    "program": "program",
+}
+_SV_PRIMITIVES = {
+    "and", "buf", "bufif0", "bufif1", "cmos", "nand", "nmos", "nor", "not",
+    "notif0", "notif1", "pmos", "rcmos", "rnmos", "rpmos", "rtran", "rtranif0",
+    "rtranif1", "tran", "tranif0", "tranif1", "xnor", "xor",
+}
+
+
+@dataclass(frozen=True)
+class _VerificationDependencyReport:
+    testbench_modules: frozenset[str]
+    testbench_interfaces: frozenset[str]
+    testbench_packages: frozenset[str]
+    support_modules: frozenset[str]
+    support_interfaces: frozenset[str]
+    support_packages: frozenset[str]
+    probable_instantiations: tuple[str, ...]
+    package_imports: tuple[str, ...]
+    unresolved_modules: frozenset[str]
+    unresolved_packages: frozenset[str]
+    ambiguous: bool
+    reference_only_modules: frozenset[str]
+
+
+def _strip_sv_comments_and_strings(text: str) -> tuple[str, bool]:
+    """Remove comments/strings while preserving token boundaries."""
+    output: list[str] = []
+    index = 0
+    state = "code"
+    ambiguous = False
+    while index < len(text):
+        char = text[index]
+        if state == "code":
+            if text.startswith("//", index):
+                output.extend((" ", " "))
+                index += 2
+                state = "line"
+            elif text.startswith("/*", index):
+                output.extend((" ", " "))
+                index += 2
+                state = "block"
+            elif char == '"':
+                output.append(" ")
+                index += 1
+                state = "string"
+            else:
+                output.append(char)
+                index += 1
+        elif state == "line":
+            if char == "\n":
+                output.append("\n")
+                state = "code"
+            else:
+                output.append(" ")
+            index += 1
+        elif state == "block":
+            if text.startswith("*/", index):
+                output.extend((" ", " "))
+                index += 2
+                state = "code"
+            else:
+                output.append("\n" if char == "\n" else " ")
+                index += 1
+        else:
+            if char == "\\" and index + 1 < len(text):
+                output.extend((" ", " "))
+                index += 2
+            elif char == '"':
+                output.append(" ")
+                index += 1
+                state = "code"
+            else:
+                output.append("\n" if char == "\n" else " ")
+                index += 1
+    if state != "code":
+        ambiguous = True
+    return "".join(output), ambiguous
+
+
+def _sv_tokens(text: str) -> tuple[list[str], bool]:
+    without_comments, ambiguous = _strip_sv_comments_and_strings(text)
+    tokens = _SV_TOKEN_RE.findall(without_comments)
+    return tokens, ambiguous or any(token.startswith("\\") for token in tokens)
+
+
+def _sv_identifier(value: str) -> bool:
+    return bool(_SV_IDENTIFIER_RE.fullmatch(value)) and value.casefold() not in _SV_KEYWORDS
+
+
+def _sv_declarations(tokens: list[str]) -> dict[str, set[str]]:
+    declarations = {kind: set() for kind in _SV_DECLARATION_KEYWORDS.values()}
+    for index, token in enumerate(tokens):
+        kind = _SV_DECLARATION_KEYWORDS.get(token.casefold())
+        if kind is None:
+            continue
+        name_index = index + 1
+        if kind == "module" and name_index < len(tokens) and tokens[name_index].casefold() == "automatic":
+            name_index += 1
+        if name_index < len(tokens) and _sv_identifier(tokens[name_index]):
+            declarations[kind].add(tokens[name_index])
+    return declarations
+
+
+def _sv_declaration_count(tokens: list[str], kind: str, name: str) -> int:
+    """Count exact declarations without exposing source text in diagnostics."""
+    count = 0
+    for index, token in enumerate(tokens[:-1]):
+        if token.casefold() != kind.casefold():
+            continue
+        name_index = index + 1
+        if kind.casefold() == "module" and tokens[name_index].casefold() == "automatic":
+            name_index += 1
+        if name_index < len(tokens) and tokens[name_index] == name:
+            count += 1
+    return count
+
+
+def _sv_skip_parenthesized(tokens: list[str], index: int) -> int:
+    if index >= len(tokens) or tokens[index] != "(":
+        return index
+    depth = 0
+    while index < len(tokens):
+        if tokens[index] == "(":
+            depth += 1
+        elif tokens[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    return len(tokens)
+
+
+def _sv_scope_before(tokens: list[str]) -> list[tuple[str, ...]]:
+    end_for = {
+        "endchecker": "checker",
+        "endmodule": "module",
+        "endinterface": "interface",
+        "endpackage": "package",
+        "endprimitive": "primitive",
+        "endprogram": "program",
+    }
+    scopes: list[str] = []
+    before: list[tuple[str, ...]] = []
+    for index, token in enumerate(tokens):
+        before.append(tuple(scopes))
+        kind = _SV_DECLARATION_KEYWORDS.get(token.casefold())
+        if kind is not None:
+            scopes.append(kind)
+        elif token.casefold() in end_for:
+            expected = end_for[token.casefold()]
+            if expected in scopes:
+                while scopes:
+                    current = scopes.pop()
+                    if current == expected:
+                        break
+    return before
+
+
+def _sv_probable_instantiations(tokens: list[str]) -> tuple[list[str], bool]:
+    scopes = _sv_scope_before(tokens)
+    instances: list[str] = []
+    ambiguous = False
+    index = 0
+    while index + 2 < len(tokens):
+        type_name = tokens[index]
+        if not _sv_identifier(type_name) or not scopes[index] or scopes[index][-1] not in {"module", "interface", "program", "checker"}:
+            index += 1
+            continue
+        instance_index = index + 1
+        if tokens[instance_index] == "#":
+            instance_index += 1
+            if instance_index >= len(tokens) or tokens[instance_index] != "(":
+                ambiguous = True
+                index += 1
+                continue
+            instance_index = _sv_skip_parenthesized(tokens, instance_index)
+        if (
+            instance_index + 1 < len(tokens)
+            and _sv_identifier(tokens[instance_index])
+            and tokens[instance_index + 1] == "("
+            and type_name.casefold() not in _SV_PRIMITIVES
+        ):
+            previous = tokens[index - 1].casefold() if index else ""
+            if (
+                not type_name.startswith("$")
+                and previous not in {
+                    "module", "interface", "package", "program", "checker", "primitive",
+                    "function", "task", "class", "typedef", "void", "logic", "wire", "reg",
+                    "bit", "byte", "int", "integer", "longint", "shortint", "string", "time",
+                    "real", "signed", "unsigned", "var", "static", "automatic", "ref", "input",
+                    "output", "inout", "begin", "end", "else", "if", "while", "for", "foreach",
+                    "case", "return", "assign", "always", "always_comb", "always_ff", "initial",
+                    "do", "fork", "join", "wait", "assert", "cover",
+                }
+            ):
+                instances.append(type_name)
+                index = instance_index + 1
+                continue
+        index += 1
+    return instances, ambiguous
+
+
+def _sv_package_imports(tokens: list[str]) -> tuple[list[str], bool]:
+    imports: list[str] = []
+    ambiguous = False
+    for index, token in enumerate(tokens[:-1]):
+        if token.casefold() == "import":
+            if _sv_identifier(tokens[index + 1]):
+                imports.append(tokens[index + 1])
+            else:
+                ambiguous = True
+    return imports, ambiguous
+
+
+def _support_texts(row: SourceRow) -> Iterable[str]:
+    for content in row.support_files.values():
+        try:
+            yield content.decode("utf-8")
+        except UnicodeDecodeError:
+            yield ""
+
+
+def _verification_dependency_report(row: SourceRow) -> _VerificationDependencyReport:
+    testbench_tokens, testbench_ambiguous = _sv_tokens(row.testbench or "")
+    testbench_decl = _sv_declarations(testbench_tokens)
+    testbench_instances, instance_ambiguous = _sv_probable_instantiations(testbench_tokens)
+    package_imports, import_ambiguous = _sv_package_imports(testbench_tokens)
+    support_decl = {kind: set() for kind in ("module", "interface", "package")}
+    support_ambiguous = False
+    for support_text in _support_texts(row):
+        tokens, ambiguous = _sv_tokens(support_text)
+        parsed = _sv_declarations(tokens)
+        for kind in support_decl:
+            support_decl[kind].update(parsed[kind])
+        support_ambiguous = support_ambiguous or ambiguous
+
+    declared_modules = testbench_decl["module"] | support_decl["module"]
+    declared_interfaces = testbench_decl["interface"] | support_decl["interface"]
+    declared_packages = testbench_decl["package"] | support_decl["package"]
+    expected_top = row.top_module_hint
+    unresolved_modules = frozenset(
+        type_name
+        for type_name in testbench_instances
+        if type_name != expected_top
+        and type_name not in declared_modules
+        and type_name not in declared_interfaces
+    )
+    unresolved_packages = frozenset(
+        package_name for package_name in package_imports if package_name not in declared_packages
+    )
+    reference_decl = _sv_declarations(_sv_tokens(row.reference_rtl or "")[0])
+    reference_only = frozenset(unresolved_modules & reference_decl["module"])
+    return _VerificationDependencyReport(
+        testbench_modules=frozenset(testbench_decl["module"]),
+        testbench_interfaces=frozenset(testbench_decl["interface"]),
+        testbench_packages=frozenset(testbench_decl["package"]),
+        support_modules=frozenset(support_decl["module"]),
+        support_interfaces=frozenset(support_decl["interface"]),
+        support_packages=frozenset(support_decl["package"]),
+        probable_instantiations=tuple(testbench_instances),
+        package_imports=tuple(package_imports),
+        unresolved_modules=unresolved_modules,
+        unresolved_packages=unresolved_packages,
+        ambiguous=testbench_ambiguous or instance_ambiguous or import_ambiguous or support_ambiguous,
+        reference_only_modules=reference_only,
+    )
+
+
+def _support_reference_safety_errors(row: SourceRow) -> list[str]:
+    reference = _text_bytes(row.reference_rtl)
+    if not reference:
+        return []
+    errors: list[str] = []
+    for content in row.support_files.values():
+        if content == reference or (content and content in reference):
+            errors.append("support files must not contain reference RTL bytes")
+            break
+    return errors
+
+
 def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -341,6 +650,37 @@ def _readiness(row: SourceRow) -> tuple[str, list[str]]:
         return "needs_testbench", ["testbench is missing"]
     if not row.provenance:
         return "invalid", ["provenance is missing"]
+
+    dependency = _verification_dependency_report(row)
+    if _support_reference_safety_errors(row):
+        return "needs_testbench", [
+            "support files must not contain reference RTL bytes",
+        ]
+    if dependency.ambiguous:
+        return "needs_interface_review", [
+            "verification dependency analysis is ambiguous",
+        ]
+
+    testbench_tokens, _ = _sv_tokens(row.testbench)
+    if (
+        _sv_declaration_count(testbench_tokens, "module", "tb") != 1
+        or dependency.probable_instantiations.count(row.top_module_hint) != 1
+    ):
+        return "needs_testbench", [
+            "testbench must declare tb and instantiate the expected candidate top",
+        ]
+    if dependency.unresolved_packages:
+        return "needs_interface_review", [
+            "testbench has unresolved package dependencies",
+        ]
+    if dependency.unresolved_modules:
+        if dependency.reference_only_modules:
+            return "needs_testbench", [
+                "testbench depends on a non-candidate module that is available only in private reference material",
+            ]
+        return "needs_testbench", [
+            "testbench has an unresolved non-candidate dependency",
+        ]
     return "executable_ready", reasons
 
 
@@ -660,6 +1000,17 @@ def _public_leak_errors(
             if value and (value.decode("utf-8", errors="ignore") in serialized or any(value.decode("utf-8", errors="ignore") in public_value for public_value in public_strings)):
                 errors.append(f"support file content would be present in public batch: {name}")
     path_values: set[str] = set()
+    public_identity_markers = {
+        marker.casefold()
+        for row in rows
+        for marker in (
+            row.source_id,
+            row.source_dataset,
+            row.provenance.get("public_dataset_name"),
+            row.provenance.get("original_source_id"),
+        )
+        if isinstance(marker, str) and marker
+    }
     if private_root is not None:
         path_values.update(_path_variants(private_root))
         path_values.update({private_root.name, "workspace"})
@@ -669,6 +1020,8 @@ def _public_leak_errors(
         # legitimate provenance values and are handled separately below.
         path_values.update(part for part in input_path.parts[-2:] if part not in {"/", "", "data", ".local_data"} and len(part) > 2)
     for value in sorted(path_values, key=len, reverse=True):
+        if value.casefold() in public_identity_markers:
+            continue
         if value and any(value in public_value and "://" not in public_value for public_value in public_strings):
             errors.append("local input or private workspace path would be present in public batch")
             break
