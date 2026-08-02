@@ -13,7 +13,7 @@ def make_checkout(root: Path, *, rows: int = 3, with_support: bool = False) -> P
         source_id = f"Prob{index:03d}_task"
         prompt = f"Implement module named TopModule with the following interface.\n - input clk\n - input d\n - output q\nTask {index}.\n"
         rtl = f"module RefModule(input clk, input d, output reg q); always @(posedge clk) q <= d; endmodule\n"
-        testbench = f"module tb_{index}; // synthetic checker text\nendmodule\n"
+        testbench = f"module tb; TopModule dut(); // synthetic checker text\nendmodule\n"
         (dataset / f"{source_id}_prompt.txt").write_text(prompt, encoding="utf-8")
         (dataset / f"{source_id}_ref.sv").write_text(rtl, encoding="utf-8")
         (dataset / f"{source_id}_test.sv").write_text(testbench, encoding="utf-8")
