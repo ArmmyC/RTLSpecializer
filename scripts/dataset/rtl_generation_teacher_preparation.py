@@ -17,6 +17,7 @@ from typing import Any
 
 from scripts.dataset.rtl_manual_teacher_verification import (
     PACKET_SCHEMA_VERSION,
+    SHA256_RE,
     WorkflowError,
     _contains_symlink,
     _generation_markdown,
