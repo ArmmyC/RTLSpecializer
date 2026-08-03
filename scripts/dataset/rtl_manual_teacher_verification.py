@@ -135,6 +135,33 @@ PLAN_FIELDS = {
     "workspace_paths",
     "expected_hashes",
     "qualification_binding",
+    "teacher_generation_binding",
+}
+TEACHER_GENERATION_HANDOFF_BINDING_FIELDS = {
+    "schema_version",
+    "teacher_generation_binding_sha256",
+    "packet_validation_report_sha256",
+    "task_id",
+    "source_id",
+    "candidate_id",
+    "attempt",
+    "top_module",
+    "normalization_packet_sha256",
+    "normalization_response_sha256",
+    "qualified_task_list_sha256",
+    "qualification_binding_sha256",
+    "qualification_evidence_sha256",
+    "qualification_runner_sidecar_sha256",
+    "corrected_testbench_sha256",
+    "task_record_sha256",
+    "asset_record_sha256",
+    "correction_version",
+    "source_commit",
+    "source_tree_sha256",
+    "frozen_split_sha256",
+    "qualification_passed",
+    "reference_rtl_supplied",
+    "support_files",
 }
 QUALIFICATION_BINDING_FIELDS = {
     "binding_schema_version",
@@ -1054,8 +1081,9 @@ def _plan_row(
     support_paths: list[str],
     hashes: dict[str, Any],
     qualification_binding: dict[str, Any] | None = None,
+    teacher_generation_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    plan = {
         "schema_version": PLAN_SCHEMA_VERSION,
         "candidate_id": record["candidate_id"],
         "task_id": task["task_id"],
@@ -1070,6 +1098,9 @@ def _plan_row(
         "expected_hashes": hashes,
         "qualification_binding": qualification_binding,
     }
+    if teacher_generation_binding is not None:
+        plan["teacher_generation_binding"] = teacher_generation_binding
+    return plan
 
 
 def _plan_qualification_binding(row: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
@@ -1165,6 +1196,7 @@ def prepare_candidate_verification(
     attempt: int | None = None,
     candidate_ids: Iterable[str] | None = None,
     qualification_binding_path: Path | None = None,
+    teacher_generation_binding_path: Path | None = None,
 ) -> tuple[dict[str, Any], int]:
     stage: Path | None = None
     backup: Path | None = None
@@ -1174,6 +1206,8 @@ def prepare_candidate_verification(
         records = _load_candidate_records(candidates_path)
         qualification_report: dict[str, Any] | None = None
         qualification_rows: dict[str, dict[str, Any]] = {}
+        if qualification_binding_path is not None and teacher_generation_binding_path is not None:
+            raise WorkflowError("legacy qualification binding and teacher-generation binding are mutually exclusive")
         if qualification_binding_path is not None:
             from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
 
@@ -1187,6 +1221,8 @@ def prepare_candidate_verification(
         input_paths = (tasks_path, assets_path, candidates_path, private_assets_root)
         if qualification_binding_path is not None:
             input_paths = (*input_paths, qualification_binding_path)
+        if teacher_generation_binding_path is not None:
+            input_paths = (*input_paths, teacher_generation_binding_path)
         if _output_aliases_inputs(output_dir, input_paths):
             raise WorkflowError("output directory aliases an input or private asset root")
         if output_dir.exists():
@@ -1244,6 +1280,7 @@ def prepare_candidate_verification(
                 "support_files": [{"path": path, "sha256": _sha256_bytes(content)} for path, (_, content) in zip(support_paths, support)],
             }
             qualification_binding = None
+            teacher_generation_binding = None
             if qualification_report is not None:
                 binding_row = qualification_rows.get(task["task_id"])
                 if binding_row is None:
@@ -1252,8 +1289,36 @@ def prepare_candidate_verification(
                     raise WorkflowError(f"qualification/testbench hash mismatch: {task['task_id']}")
                 qualification_binding = _plan_qualification_binding(binding_row, qualification_report)
                 _validate_qualification_binding(qualification_binding, f"qualification binding {task['task_id']}")
+            if teacher_generation_binding_path is not None:
+                from scripts.dataset.rtl_generation_teacher_preparation import (
+                    validate_teacher_generation_handoff,
+                )
+
+                teacher_generation_binding = validate_teacher_generation_handoff(
+                    run_root=teacher_generation_binding_path.resolve().parents[1],
+                    binding_path=teacher_generation_binding_path,
+                    tasks_path=tasks_path,
+                    assets_path=assets_path,
+                    private_assets_root=private_assets_root,
+                    candidate_record=record,
+                    task=task,
+                    asset=asset,
+                )
+                _validate_teacher_generation_binding_object(
+                    teacher_generation_binding,
+                    f"teacher-generation binding {task['task_id']}",
+                )
             manifest_rows.append(_candidate_manifest_row(record, task, candidate_path, testbench_path, support_paths))
-            plan_rows.append(_plan_row(record, task, candidate_path, testbench_path, support_paths, hashes, qualification_binding))
+            plan_rows.append(_plan_row(
+                record,
+                task,
+                candidate_path,
+                testbench_path,
+                support_paths,
+                hashes,
+                qualification_binding,
+                teacher_generation_binding,
+            ))
             _write_staged_file(workspace / candidate_path, candidate_bytes)
             _write_staged_file(workspace / testbench_path, testbench)
             for path, (_, content) in zip(support_paths, support):
@@ -1285,7 +1350,7 @@ def prepare_candidate_verification(
         if backup is not None:
             _remove_tree(backup)
             backup = None
-        report = {"ok": True, "prepared_candidates": len(selected), "manifest": _display_path(output_dir / "candidate_manifest.jsonl"), "plan": _display_path(output_dir / "verification_plan.jsonl"), "workspace": _display_path(output_dir / "workspace"), "reference_copied": False, "qualification_binding": _display_path(qualification_binding_path) if qualification_binding_path is not None else None, "errors": [], "warnings": []}
+        report = {"ok": True, "prepared_candidates": len(selected), "manifest": _display_path(output_dir / "candidate_manifest.jsonl"), "plan": _display_path(output_dir / "verification_plan.jsonl"), "workspace": _display_path(output_dir / "workspace"), "reference_copied": False, "qualification_binding": _display_path(qualification_binding_path) if qualification_binding_path is not None else None, "teacher_generation_binding": _display_path(teacher_generation_binding_path) if teacher_generation_binding_path is not None else None, "errors": [], "warnings": []}
         return report, 0
     except (WorkflowError, OSError) as exc:
         if backup is not None and not output_dir.exists():
@@ -1359,9 +1424,50 @@ def _validate_qualification_binding(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
+def _validate_teacher_generation_binding_object(value: Any, label: str) -> dict[str, Any]:
+    _strict_fields(value, TEACHER_GENERATION_HANDOFF_BINDING_FIELDS, label)
+    if value["schema_version"] != "rtl_generation_teacher_handoff_binding_v0.1":
+        raise WorkflowError(f"{label} has the wrong binding schema")
+    for field in (
+        "teacher_generation_binding_sha256",
+        "packet_validation_report_sha256",
+        "normalization_packet_sha256",
+        "normalization_response_sha256",
+        "qualified_task_list_sha256",
+        "qualification_binding_sha256",
+        "qualification_evidence_sha256",
+        "qualification_runner_sidecar_sha256",
+        "corrected_testbench_sha256",
+        "task_record_sha256",
+        "asset_record_sha256",
+        "source_tree_sha256",
+        "frozen_split_sha256",
+    ):
+        if not isinstance(value[field], str) or SHA256_RE.fullmatch(value[field]) is None:
+            raise WorkflowError(f"{label}.{field} is invalid")
+    if not isinstance(value["source_commit"], str) or re.fullmatch(r"[0-9a-f]{40}", value["source_commit"]) is None:
+        raise WorkflowError(f"{label}.source_commit is invalid")
+    for field in ("task_id", "source_id", "candidate_id", "top_module", "correction_version"):
+        if not isinstance(value[field], str) or not value[field].strip():
+            raise WorkflowError(f"{label}.{field} must be a non-empty string")
+    if type(value["attempt"]) is not int or value["attempt"] != 1:
+        raise WorkflowError(f"{label}.attempt must be 1")
+    if value["candidate_id"] != f"{value['task_id']}_attempt_01":
+        raise WorkflowError(f"{label}.candidate_id is not deterministic")
+    if value["correction_version"] != "assetfix_v003":
+        raise WorkflowError(f"{label}.correction_version is invalid")
+    if value["qualification_passed"] is not True or value["reference_rtl_supplied"] is not False:
+        raise WorkflowError(f"{label} has an unsafe qualification state")
+    if value["support_files"] != []:
+        raise WorkflowError(f"{label}.support_files must be empty")
+    return value
+
+
 def _validate_plan(plan: Any, label: str) -> dict[str, Any]:
     if isinstance(plan, dict) and "qualification_binding" not in plan:
         plan = {**plan, "qualification_binding": None}
+    if isinstance(plan, dict) and "teacher_generation_binding" not in plan:
+        plan = {**plan, "teacher_generation_binding": None}
     _strict_fields(plan, PLAN_FIELDS, label)
     if plan["schema_version"] != PLAN_SCHEMA_VERSION or plan["verification_profile"] != PROFILE or plan["testbench_top"] != TESTBENCH_TOP or plan["simulation_result_contract"] != SIMULATION_CONTRACT:
         raise WorkflowError(f"{label} has an unsupported verification contract")
@@ -1373,6 +1479,11 @@ def _validate_plan(plan: Any, label: str) -> dict[str, Any]:
         raise WorkflowError(f"{label}.candidate_id is not deterministic")
     if plan["qualification_binding"] is not None:
         _validate_qualification_binding(plan["qualification_binding"], f"{label}.qualification_binding")
+    if plan["teacher_generation_binding"] is not None:
+        _validate_teacher_generation_binding_object(
+            plan["teacher_generation_binding"],
+            f"{label}.teacher_generation_binding",
+        )
     _identifier(plan["top_module"], f"{label}.top_module")
     if plan["requested_checks"] != REQUESTED_CHECKS:
         raise WorkflowError(f"{label}.requested_checks is invalid")

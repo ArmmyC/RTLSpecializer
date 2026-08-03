@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attempt", type=int, choices=range(1, 5))
     parser.add_argument("--candidate-id", action="append", default=[])
     parser.add_argument("--qualification-binding", type=Path)
+    parser.add_argument("--teacher-generation-binding", type=Path)
     parser.add_argument("--overwrite", "--force", dest="overwrite", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
@@ -30,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
         args.output_dir, overwrite=args.overwrite, attempt=args.attempt,
         candidate_ids=args.candidate_id,
         qualification_binding_path=args.qualification_binding,
+        teacher_generation_binding_path=args.teacher_generation_binding,
     )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))

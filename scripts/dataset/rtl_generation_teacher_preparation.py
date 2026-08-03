@@ -416,6 +416,113 @@ def packet_set_sha256(packet_dir: Path) -> tuple[str, list[dict[str, str]]]:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest(), files
 
 
+def _canonical_row_sha256(row: dict[str, Any]) -> str:
+    encoded = (json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def validate_teacher_generation_handoff(
+    *,
+    run_root: Path,
+    binding_path: Path,
+    tasks_path: Path,
+    assets_path: Path,
+    private_assets_root: Path,
+    candidate_record: dict[str, Any],
+    task: dict[str, Any],
+    asset: dict[str, Any],
+) -> dict[str, Any]:
+    """Bind one candidate to the validated qualified-16 teacher lineage."""
+
+    del run_root  # The sibling report location is anchored by binding_path.
+    binding = _load_object(binding_path, "teacher-generation binding")
+    if binding.get("schema_version") != BINDING_SCHEMA_VERSION:
+        raise TeacherPreparationError("teacher-generation binding schema mismatch")
+    packet_validation_path = binding_path.parent / "teacher_generation_packet_validation.json"
+    packet_report = _load_object(packet_validation_path, "teacher-generation packet validation report")
+    binding_hash = sha256_file(binding_path)
+    packet_report_hash = sha256_file(packet_validation_path)
+    if packet_report.get("ok") is not True or packet_report.get("teacher_response_allowed") is not True:
+        raise TeacherPreparationError("teacher-generation packet validation has not passed")
+    if packet_report.get("binding_sha256") != binding_hash:
+        raise TeacherPreparationError("packet validation report is bound to a different teacher binding")
+    if binding.get("task_count") != QUALIFIED_TASK_COUNT or binding.get("split") != TRAIN_SPLIT:
+        raise TeacherPreparationError("teacher-generation binding task or split count is invalid")
+    if binding.get("qualification_passed") is not True or binding.get("reference_rtl_supplied") is not False:
+        raise TeacherPreparationError("teacher-generation binding is not qualified and private-safe")
+    if binding.get("support_file_count") != 0 or binding.get("correction_version") != CORRECTION_VERSION:
+        raise TeacherPreparationError("teacher-generation binding asset contract is invalid")
+    if candidate_record.get("task_id") != task.get("task_id") or candidate_record.get("source_id") != task.get("source_id"):
+        raise TeacherPreparationError("candidate/task identity mismatch")
+    if candidate_record.get("attempt") != 1 or candidate_record.get("candidate_id") != f"{task['task_id']}_attempt_01":
+        raise TeacherPreparationError("candidate is not deterministic attempt 1")
+    candidate = candidate_record.get("candidate")
+    if not isinstance(candidate, dict) or candidate.get("top_module") != task.get("top_module"):
+        raise TeacherPreparationError("candidate top-module identity mismatch")
+    candidate_hash = hashlib.sha256(str(candidate.get("rtl", "")).encode("utf-8")).hexdigest()
+    if candidate_record.get("candidate_sha256") != candidate_hash:
+        raise TeacherPreparationError("candidate hash mismatch")
+    identities = binding.get("qualified_order")
+    identity = next((row for row in identities if row.get("task_id") == task.get("task_id")), None) if isinstance(identities, list) else None
+    if identity is None or identity.get("source_id") != task.get("source_id") or identity.get("top_module") != task.get("top_module"):
+        raise TeacherPreparationError("task is not in the qualified teacher order")
+    packet_rows = packet_report.get("packets")
+    packet = next((row for row in packet_rows if row.get("task_id") == task.get("task_id")), None) if isinstance(packet_rows, list) else None
+    if packet is None or packet.get("source_id") != task.get("source_id") or packet.get("top_module") != task.get("top_module"):
+        raise TeacherPreparationError("task is not in the validated teacher packet set")
+    if candidate_record.get("packet_id") != packet.get("packet_id"):
+        raise TeacherPreparationError("candidate packet identity mismatch")
+    hashes = binding.get("artifact_hashes")
+    if not isinstance(hashes, dict):
+        raise TeacherPreparationError("teacher-generation binding artifact hashes are missing")
+    required_artifacts = (
+        "normalization_packet",
+        "normalization_response",
+        "qualified_task_list",
+        "qualification_evidence",
+        "qualification_runner_sidecar",
+    )
+    for field in required_artifacts:
+        if not isinstance(hashes.get(field), str) or SHA256_RE.fullmatch(hashes[field]) is None:
+            raise TeacherPreparationError(f"teacher-generation binding artifact hash is invalid: {field}")
+    if not isinstance(asset.get("support_files"), list) or asset.get("support_files") != []:
+        raise TeacherPreparationError("qualified asset declares support files")
+    testbench_path = private_assets_root / asset["testbench_path"]
+    testbench_hash = sha256_file(testbench_path)
+    if testbench_hash != asset.get("input_hashes", {}).get("testbench_sha256"):
+        raise TeacherPreparationError("private corrected testbench hash does not match the asset record")
+    if asset.get("verification_readiness") != "executable_ready" or asset.get("readiness_reasons") != []:
+        raise TeacherPreparationError("asset is not executable-ready")
+    task_hash = _canonical_row_sha256(task)
+    asset_hash = _canonical_row_sha256(asset)
+    return {
+        "schema_version": "rtl_generation_teacher_handoff_binding_v0.1",
+        "teacher_generation_binding_sha256": binding_hash,
+        "packet_validation_report_sha256": packet_report_hash,
+        "task_id": task["task_id"],
+        "source_id": task["source_id"],
+        "candidate_id": candidate_record["candidate_id"],
+        "attempt": 1,
+        "top_module": task["top_module"],
+        "normalization_packet_sha256": hashes["normalization_packet"],
+        "normalization_response_sha256": hashes["normalization_response"],
+        "qualified_task_list_sha256": hashes["qualified_task_list"],
+        "qualification_binding_sha256": binding["qualification_binding_sha256"],
+        "qualification_evidence_sha256": hashes["qualification_evidence"],
+        "qualification_runner_sidecar_sha256": hashes["qualification_runner_sidecar"],
+        "corrected_testbench_sha256": testbench_hash,
+        "task_record_sha256": task_hash,
+        "asset_record_sha256": asset_hash,
+        "correction_version": binding["correction_version"],
+        "source_commit": binding["source_commit"],
+        "source_tree_sha256": binding["source_tree_sha256"],
+        "frozen_split_sha256": binding["frozen_split_sha256"],
+        "qualification_passed": True,
+        "reference_rtl_supplied": False,
+        "support_files": [],
+    }
+
+
 def validate_teacher_packet_set(
     run_root: Path,
     *,
@@ -528,5 +635,6 @@ __all__ = [
     "create_teacher_generation_binding",
     "packet_set_sha256",
     "sha256_file",
+    "validate_teacher_generation_handoff",
     "validate_teacher_packet_set",
 ]

@@ -19,6 +19,10 @@ from scripts.dataset.rtl_generation_teacher_preparation import (
     packet_set_sha256,
     validate_teacher_packet_set,
 )
+from scripts.dataset.rtl_manual_teacher_verification import (
+    _plan_row,
+    _validate_plan,
+)
 from tests.dataset.manual_rtl_teacher_helpers import FIXTURE_ROOT
 
 
@@ -179,3 +183,53 @@ def test_packet_validation_rejects_order_and_extra_entries(tmp_path: Path) -> No
     )
     assert code != 0
     assert "unexpected" in report["errors"][0]
+
+
+def test_teacher_generation_binding_is_preserved_in_verification_plan() -> None:
+    digest = "a" * 64
+    binding = {
+        "schema_version": "rtl_generation_teacher_handoff_binding_v0.1",
+        "teacher_generation_binding_sha256": digest,
+        "packet_validation_report_sha256": digest,
+        "task_id": "task_001",
+        "source_id": "Source001",
+        "candidate_id": "task_001_attempt_01",
+        "attempt": 1,
+        "top_module": "TopModule",
+        "normalization_packet_sha256": digest,
+        "normalization_response_sha256": digest,
+        "qualified_task_list_sha256": digest,
+        "qualification_binding_sha256": digest,
+        "qualification_evidence_sha256": digest,
+        "qualification_runner_sidecar_sha256": digest,
+        "corrected_testbench_sha256": digest,
+        "task_record_sha256": digest,
+        "asset_record_sha256": digest,
+        "correction_version": "assetfix_v003",
+        "source_commit": "b" * 40,
+        "source_tree_sha256": digest,
+        "frozen_split_sha256": digest,
+        "qualification_passed": True,
+        "reference_rtl_supplied": False,
+        "support_files": [],
+    }
+    plan = _plan_row(
+        {
+            "candidate_id": "task_001_attempt_01",
+            "task_id": "task_001",
+            "source_id": "Source001",
+            "attempt": 1,
+        },
+        {"task_id": "task_001", "source_id": "Source001", "top_module": "TopModule"},
+        "task_001_attempt_01/candidate.sv",
+        "task_001_attempt_01/testbench.sv",
+        [],
+        {"candidate_rtl_sha256": digest, "testbench_sha256": digest, "support_files": []},
+        teacher_generation_binding=binding,
+    )
+    assert _validate_plan(plan, "synthetic plan")["teacher_generation_binding"] == binding
+
+    invalid = dict(plan)
+    invalid["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v002"}
+    with pytest.raises(ValueError, match="correction_version"):
+        _validate_plan(invalid, "synthetic plan")
