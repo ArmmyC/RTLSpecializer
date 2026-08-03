@@ -1,0 +1,23 @@
+{
+  "schema_version": "rtl_dataset_packaging_failure_v0.1",
+  "package_id": "rtl_generation_smoke_v001",
+  "status": "failed_partial_package",
+  "consumable": false,
+  "package_exit_code": 1,
+  "partial_package_tree_sha256": "69440f512d73c574f1b3ef4b007f3305ebaa6b0477af878114f0f9151dc89c93",
+  "failure_category": "packaging_control_defect",
+  "failures": [
+    {
+      "code": "qualification_report_hash_mismatch",
+      "root_cause": "packager provenance binding defect"
+    },
+    {
+      "code": "smoke_task_order_mismatch",
+      "root_cause": "validator read messages[1] instead of messages[1].content"
+    }
+  ],
+  "protected_inputs_changed": false,
+  "rtlbench_executed": false,
+  "model_executed": false,
+  "recovery_package": "rtl_generation_smoke_v001_retry_01"
+}

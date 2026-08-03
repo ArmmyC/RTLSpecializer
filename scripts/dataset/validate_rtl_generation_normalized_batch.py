@@ -17,9 +17,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--raw-batch", required=True, type=Path)
     parser.add_argument("--normalized", required=True, type=Path)
     parser.add_argument("--private-assets", type=Path)
+    parser.add_argument(
+        "--strict-response",
+        action="store_true",
+        help="require returned JSON to contain only a top-level rows array",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    result, code = validate_generation_normalized_batch(args.raw_batch, args.normalized, args.private_assets)
+    result, code = validate_generation_normalized_batch(
+        args.raw_batch,
+        args.normalized,
+        args.private_assets,
+        require_response_object=args.strict_response,
+    )
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

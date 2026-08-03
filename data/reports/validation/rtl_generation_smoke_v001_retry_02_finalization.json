@@ -1,0 +1,12 @@
+{
+  "complete_run_validation": "passed",
+  "consumable": true,
+  "content_review": "passed",
+  "ok": true,
+  "package_id": "rtl_generation_smoke_v001_retry_02",
+  "pre_finalization_freeze": "passed",
+  "promotion_allowed": false,
+  "row_files_unchanged": true,
+  "schema_version": "rtl_dataset_packaging_finalization_v0.1",
+  "staged_validation": "passed"
+}

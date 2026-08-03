@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_verification_asset_correction_row_v0.1.schema.json",
+  "title": "RTL verification asset correction row v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_dataset", "source_id", "task_id", "split", "design_family", "top_module", "upstream_commit", "original_prompt_sha256", "original_reference_rtl_sha256", "original_testbench_sha256", "corrected_testbench_sha256", "correction_version", "correction_reason", "authoring_method", "reference_modified", "reference_copied_to_support", "testbench_path", "support_files", "dependency_closure", "verification_readiness", "negative_mutation_validation"],
+  "properties": {
+    "schema_version": {"const": "rtl_verification_asset_correction_row_v0.1"},
+    "source_dataset": {"const": "VerilogEval"},
+    "source_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "split": {"const": "train"},
+    "design_family": {"type": "string", "minLength": 1},
+    "top_module": {"const": "TopModule"},
+    "upstream_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "original_prompt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "original_reference_rtl_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "original_testbench_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "corrected_testbench_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "correction_version": {"const": "assetfix_v002"},
+    "correction_reason": {"type": "string", "minLength": 1},
+    "authoring_method": {"const": "trusted_manual_public_spec"},
+    "reference_modified": {"const": false},
+    "reference_copied_to_support": {"const": false},
+    "testbench_path": {"type": "string", "pattern": "^tasks/[^/]+/testbench\\.sv$"},
+    "support_files": {"const": []},
+    "dependency_closure": {"const": "passed"},
+    "verification_readiness": {"const": "executable_ready"},
+    "negative_mutation_validation": {"type": "object", "additionalProperties": false, "required": ["schema_version", "validated_offline", "execution_deferred", "oracle_basis", "cases"], "properties": {"schema_version": {"const": "rtl_correction_negative_mutation_contract_v0.1"}, "validated_offline": {"const": true}, "execution_deferred": {"const": true}, "oracle_basis": {"const": "public_specification_only"}, "cases": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["name", "witness", "distinguishing_case_count"], "properties": {"name": {"type": "string", "minLength": 1}, "witness": {"type": "string", "minLength": 1}, "distinguishing_case_count": {"type": "integer", "minimum": 1}}}}}}
+  }
+}

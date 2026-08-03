@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from scripts.dataset.rtl_manual_teacher_verification import export_teacher_generation_packets, validate_teacher_candidate_batch
+from scripts.dataset.rtl_manual_teacher_verification import (
+    export_teacher_generation_packets,
+    validate_teacher_candidate_batch,
+    validate_teacher_candidate_response_set,
+)
 from tests.dataset.manual_rtl_teacher_helpers import FIXTURE_ROOT
 
 
@@ -41,3 +45,36 @@ def test_fenced_response_and_reference_copy_are_rejected(tmp_path: Path) -> None
     result, code = validate_teacher_candidate_batch(packet_dir / "packet_0001.json", copied, private_assets_path=FIXTURE_ROOT / "verification_assets.jsonl", private_assets_root=FIXTURE_ROOT / "private_assets")
     assert code != 0
     assert "private" in result["errors"][0].lower()
+
+
+def test_response_set_publishes_only_after_all_responses_validate(tmp_path: Path) -> None:
+    packet_dir = tmp_path / "packets"
+    result, code = export_teacher_generation_packets(FIXTURE_ROOT / "generation_tasks.jsonl", packet_dir)
+    assert code == 0, result
+    response_dir = tmp_path / "responses"
+    response_dir.mkdir()
+    response = response_dir / "packet_0001_response.json"
+    response.write_bytes((FIXTURE_ROOT / "responses/valid_initial_response.json").read_bytes())
+    output = tmp_path / "candidates.jsonl"
+    result, code = validate_teacher_candidate_response_set(
+        packet_dir,
+        response_dir,
+        private_assets_path=FIXTURE_ROOT / "verification_assets.jsonl",
+        private_assets_root=FIXTURE_ROOT / "private_assets",
+        output_path=output,
+    )
+    assert code == 0, result
+    assert result["packet_count"] == result["response_count"] == result["validated_candidates"] == 1
+    assert output.is_file()
+
+    output.unlink()
+    response.write_text("{\"rows\": []}\n", encoding="utf-8")
+    result, code = validate_teacher_candidate_response_set(
+        packet_dir,
+        response_dir,
+        private_assets_path=FIXTURE_ROOT / "verification_assets.jsonl",
+        private_assets_root=FIXTURE_ROOT / "private_assets",
+        output_path=output,
+    )
+    assert code != 0
+    assert not output.exists()

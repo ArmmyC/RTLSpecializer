@@ -24,6 +24,39 @@ def test_valid_normalized_batch_is_accepted(tmp_path) -> None:
     assert code == 0, report
 
 
+def test_strict_normalization_response_requires_only_rows_object(tmp_path) -> None:
+    raw, normalized, assets, _ = _export_one(tmp_path)
+    rows = json.loads(normalized.read_text(encoding="utf-8"))
+
+    report, code = validate_generation_normalized_batch(
+        raw,
+        normalized,
+        assets,
+        require_response_object=True,
+    )
+    assert code == 1
+    assert any("top-level rows" in error for error in report["errors"])
+
+    normalized.write_text(json.dumps({"rows": rows}) + "\n", encoding="utf-8")
+    report, code = validate_generation_normalized_batch(
+        raw,
+        normalized,
+        assets,
+        require_response_object=True,
+    )
+    assert code == 0, report
+
+    normalized.write_text(json.dumps({"rows": rows, "provider": "local"}) + "\n", encoding="utf-8")
+    report, code = validate_generation_normalized_batch(
+        raw,
+        normalized,
+        assets,
+        require_response_object=True,
+    )
+    assert code == 1
+    assert any("only the top-level rows" in error for error in report["errors"])
+
+
 def test_validator_rejects_changed_text_ids_unknown_fields_and_private_content(tmp_path) -> None:
     raw, normalized, assets, _ = _export_one(tmp_path)
     rows = json.loads(normalized.read_text(encoding="utf-8"))

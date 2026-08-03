@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_source_license_report_v0.1.schema.json",
+  "title": "RTL source license report v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_commit", "inventory_sha256", "license_files", "rows_with_usable_license", "rows_with_unusable_or_missing_license", "rows"],
+  "properties": {
+    "schema_version": {"const": "rtl_source_license_report_v0.1"},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "inventory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "license_files": {"type": "array", "items": {"type": "object"}},
+    "rows_with_usable_license": {"type": "integer", "minimum": 0},
+    "rows_with_unusable_or_missing_license": {"type": "integer", "minimum": 0},
+    "rows": {"type": "array", "items": {"type": "object"}}
+  }
+}

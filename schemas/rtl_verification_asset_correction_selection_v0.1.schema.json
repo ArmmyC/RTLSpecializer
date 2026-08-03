@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_verification_asset_correction_selection_v0.1.schema.json",
+  "title": "RTL verification asset correction selection v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_dataset", "source_commit", "base_inventory_sha256", "base_split_sha256", "correction_version", "requested_count", "selected_count", "selection_algorithm", "rows", "errors"],
+  "properties": {
+    "schema_version": {"const": "rtl_verification_asset_correction_selection_v0.1"},
+    "ok": {"type": "boolean"},
+    "source_dataset": {"const": "VerilogEval"},
+    "source_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "base_inventory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "base_split_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "correction_version": {"const": "assetfix_v002"},
+    "requested_count": {"const": 5},
+    "selected_count": {"const": 5},
+    "selection_algorithm": {"type": "string", "minLength": 1},
+    "rows": {"type": "array", "minItems": 5, "maxItems": 5, "items": {"type": "object", "additionalProperties": false, "required": ["source_id", "task_id", "split", "current_readiness", "blocking_reason", "selection_reason", "selection_role", "design_family", "behavior_categories"], "properties": {"source_id": {"type": "string"}, "task_id": {"type": "string"}, "split": {"const": "train"}, "current_readiness": {"const": "needs_testbench"}, "blocking_reason": {"const": "reference_only_dependency"}, "selection_reason": {"const": "bounded smoke correction"}, "selection_role": {"type": "string"}, "design_family": {"type": "string"}, "behavior_categories": {"type": "array", "items": {"type": "string"}}}}},
+    "errors": {"type": "array", "maxItems": 0, "items": {"type": "string"}}
+  }
+}

@@ -87,6 +87,7 @@ LICENSE_PLACEHOLDER_RE = re.compile(
     re.IGNORECASE,
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 ASSET_FIELDS = {
     "schema_version", "task_id", "source_id", "top_module",
@@ -320,8 +321,11 @@ def _sv_probable_instantiations(tokens: list[str]) -> tuple[list[str], bool]:
         instance_index = index + 1
         if tokens[instance_index] == "#":
             instance_index += 1
+            # Procedural delay controls commonly appear as ``#5`` after an
+            # identifier. Only ``Type #(params) instance(...)`` is a
+            # parameterized instantiation candidate; a non-parenthesized
+            # delay must not poison the whole dependency analysis.
             if instance_index >= len(tokens) or tokens[instance_index] != "(":
-                ambiguous = True
                 index += 1
                 continue
             instance_index = _sv_skip_parenthesized(tokens, instance_index)
@@ -1196,10 +1200,35 @@ def export_generation_normalization_batches(
     limit: int | None = None,
     start_index: int = 0,
     force: bool = False,
+    source_commit: str | None = None,
+    source_ids: Iterable[str] | None = None,
+    correction_manifest: Path | None = None,
+    correction_root: Path | None = None,
 ) -> tuple[dict[str, Any], int]:
     errors: list[str] = []
     rows, discovery_errors = discover_source_rows(input_path)
     errors.extend(discovery_errors)
+    if source_commit is not None:
+        if not SOURCE_COMMIT_RE.fullmatch(source_commit):
+            errors.append("source_commit must be exactly 40 lowercase hexadecimal characters")
+        else:
+            for row in rows:
+                existing = row.provenance.get("source_commit") if isinstance(row.provenance, dict) else None
+                if existing not in (None, "", source_commit):
+                    errors.append(f"source commit mismatch for source_id: {row.source_id}")
+                row.source_commit = source_commit
+                row.provenance["source_commit"] = source_commit
+    requested_ids = list(source_ids) if source_ids is not None else None
+    if requested_ids is not None:
+        if not requested_ids:
+            errors.append("source-ID allowlist must not be empty")
+        if len(requested_ids) != len(set(requested_ids)):
+            errors.append("source-ID allowlist contains duplicates")
+        rows_by_id = {row.source_id: row for row in rows}
+        missing_ids = sorted(set(requested_ids) - set(rows_by_id))
+        if missing_ids:
+            errors.append(f"source-ID allowlist contains missing IDs: {missing_ids}")
+        rows = [rows_by_id[source_id] for source_id in requested_ids if source_id in rows_by_id]
     if batch_size < 1: errors.append("--batch-size must be at least 1")
     if start_index < 0: errors.append("--start-index must be at least 0")
     if limit is not None and limit < 1: errors.append("--limit must be at least 1")
@@ -1207,7 +1236,12 @@ def export_generation_normalization_batches(
     if output_dir.resolve() == private_output_dir.resolve() or _is_within(output_dir, private_output_dir) or _is_within(private_output_dir, output_dir):
         errors.append("public and private output directories must be separate")
     errors.extend(_source_duplicate_errors(rows))
-    rows = sorted(rows, key=lambda item: (item.source_id, item.source_dataset, _json_bytes(item.provenance)))
+    # An explicit allowlist is an operator-authored packet order. Preserve it
+    # byte-for-byte so the returned normalization rows can be checked by
+    # position as well as by identity. Unbounded exports retain deterministic
+    # source ordering for compatibility with the original workflow.
+    if requested_ids is None:
+        rows = sorted(rows, key=lambda item: (item.source_id, item.source_dataset, _json_bytes(item.provenance)))
     selected = rows[start_index:]
     if limit is not None: selected = selected[:limit]
     if not selected: errors.append("no source rows remain after applying start-index/limit")
@@ -1216,19 +1250,34 @@ def export_generation_normalization_batches(
             errors.append(f"missing specification for source_id: {row.source_id}")
         if not row.reference_rtl:
             errors.append(f"missing reference RTL for source_id: {row.source_id}")
+    private_selected = selected
+    correction_count = 0
+    if (correction_manifest is None) != (correction_root is None):
+        errors.append("correction_manifest and correction_root must be supplied together")
+    elif correction_manifest is not None and correction_root is not None:
+        from scripts.dataset.rtl_generation_asset_corrections import overlay_source_rows
+
+        private_selected, correction_errors, correction_rows = overlay_source_rows(
+            selected,
+            correction_manifest,
+            correction_root,
+        )
+        errors.extend(correction_errors)
+        correction_count = len(correction_rows)
     tasks = [(row, _task_id(row)) for row in selected]
+    private_tasks = [(row, _task_id(row)) for row in private_selected]
     task_ids = [task_id for _, task_id in tasks]
     if len(task_ids) != len(set(task_ids)): errors.append("duplicate deterministic task_id")
     batch_count = (len(tasks) + batch_size - 1) // batch_size if tasks else 0
     public_paths = [output_dir / f"batch_{i:03d}.json" for i in range(1, batch_count + 1)]
     private_files = [private_output_dir / "verification_assets.jsonl"]
-    for row, task_id in tasks:
+    for row, task_id in private_tasks:
         private_files.append(private_output_dir / "workspace" / task_id / "reference.sv")
         if row.testbench is not None: private_files.append(private_output_dir / "workspace" / task_id / "testbench.sv")
         private_files.extend(private_output_dir / "workspace" / task_id / "support" / name for name in row.support_files)
     errors.extend(_prepare_public_output(output_dir, public_paths, force))
     errors.extend(_prepare_private_output(private_output_dir, private_files, force))
-    for row, _ in tasks:
+    for row, _ in private_tasks:
         for support_name in row.support_files:
             if Path(support_name).is_absolute() or ".." in Path(support_name).parts or Path(support_name).name != support_name:
                 errors.append(f"unsafe support file path: {support_name}")
@@ -1239,7 +1288,7 @@ def export_generation_normalization_batches(
     if errors:
         result = {"ok":False,"input":_relative_display(input_path),"output_dir":_relative_display(output_dir),"private_output_dir":_relative_display(private_output_dir),"exported_rows":0,"batch_files":[],"errors":sorted(set(errors)),"warnings":[]}
         return result, 1
-    assets = [_asset_record(row, task_id) for row, task_id in tasks]
+    assets = [_asset_record(row, task_id) for row, task_id in private_tasks]
     payloads: list[tuple[Path, dict[str, Any]]] = []
     for index, offset in enumerate(range(0, len(tasks), batch_size), 1):
         batch_tasks = tasks[offset:offset + batch_size]
@@ -1266,14 +1315,14 @@ def export_generation_normalization_batches(
         for path, payload in payloads:
             _atomic_write(path, (json.dumps(payload,ensure_ascii=False,indent=2)+"\n").encode("utf-8"))
         _atomic_write(private_output_dir / "verification_assets.jsonl", asset_bytes)
-        for row, task_id in tasks:
+        for row, task_id in private_tasks:
             workspace = private_output_dir / "workspace" / task_id
             _atomic_write(workspace / "reference.sv", _text_bytes(row.reference_rtl))
             if row.testbench is not None: _atomic_write(workspace / "testbench.sv", _text_bytes(row.testbench))
             for name, content in sorted(row.support_files.items()): _atomic_write(workspace / "support" / name, content)
     except (OSError, ValueError) as exc:
         return {"ok":False,"input":_relative_display(input_path),"output_dir":_relative_display(output_dir),"private_output_dir":_relative_display(private_output_dir),"exported_rows":0,"batch_files":[],"errors":[f"could not write outputs: {exc}"],"warnings":[]}, 1
-    return {"ok":True,"input":_relative_display(input_path),"output_dir":_relative_display(output_dir),"private_output_dir":_relative_display(private_output_dir),"batch_size":batch_size,"start_index":start_index,"limit":limit,"exported_rows":len(tasks),"batch_files":[_relative_display(path) for path,_ in payloads],"private_assets":_relative_display(private_output_dir/"verification_assets.jsonl"),"readiness_categories":dict(sorted(Counter(_readiness(row)[0] for row,_ in tasks).items())),"errors":[],"warnings":[]}, 0
+    return {"ok":True,"input":_relative_display(input_path),"output_dir":_relative_display(output_dir),"private_output_dir":_relative_display(private_output_dir),"batch_size":batch_size,"start_index":start_index,"limit":limit,"exported_rows":len(tasks),"batch_files":[_relative_display(path) for path,_ in payloads],"private_assets":_relative_display(private_output_dir/"verification_assets.jsonl"),"readiness_categories":dict(sorted(Counter(_readiness(row)[0] for row,_ in private_tasks).items())),"corrections_applied":correction_count,"public_correction_bytes_excluded":correction_count > 0,"errors":[],"warnings":[]}, 0
 
 
 def _load_json(path: Path) -> tuple[Any | None, list[str]]:
@@ -1282,9 +1331,21 @@ def _load_json(path: Path) -> tuple[Any | None, list[str]]:
     except (OSError, UnicodeError, json.JSONDecodeError) as exc: return None, [f"could not read JSON {path}: {exc}"]
 
 
-def _normalized_rows(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
-    rows = value if isinstance(value, list) else value.get("rows") if isinstance(value, dict) else None
-    if not isinstance(rows, list): return [], ["normalized input must be an array or object with rows"]
+def _normalized_rows(
+    value: Any,
+    *,
+    require_response_object: bool = False,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if require_response_object:
+        if not isinstance(value, dict):
+            return [], ["normalized response must be an object with only a top-level rows array"]
+        if set(value) != {"rows"}:
+            return [], ["normalized response must contain only the top-level rows field"]
+        rows = value.get("rows")
+    else:
+        rows = value if isinstance(value, list) else value.get("rows") if isinstance(value, dict) else None
+    if not isinstance(rows, list):
+        return [], ["normalized input must be an array or object with rows"]
     errors=[]; result=[]
     for index,row in enumerate(rows,1):
         if not isinstance(row,dict): errors.append(f"normalized row {index} must be an object")
@@ -1494,13 +1555,22 @@ def _load_assets(path: Path) -> tuple[dict[str,dict[str,Any]], list[str]]:
     return records, errors
 
 
-def validate_generation_normalized_batch(raw_batch_path: Path, normalized_path: Path, private_assets_path: Path | None = None) -> tuple[dict[str,Any], int]:
+def validate_generation_normalized_batch(
+    raw_batch_path: Path,
+    normalized_path: Path,
+    private_assets_path: Path | None = None,
+    *,
+    require_response_object: bool = False,
+) -> tuple[dict[str,Any], int]:
     raw_value, errors=_load_json(raw_batch_path)
     raw_rows, raw_errors=_raw_rows(raw_value)
     errors.extend(raw_errors)
     normalized_value, normalized_errors=_load_json(normalized_path)
     errors.extend(normalized_errors)
-    normalized_rows, row_errors=_normalized_rows(normalized_value)
+    normalized_rows, row_errors=_normalized_rows(
+        normalized_value,
+        require_response_object=require_response_object,
+    )
     errors.extend(row_errors)
     assets=None
     if private_assets_path is not None:
@@ -1511,7 +1581,7 @@ def validate_generation_normalized_batch(raw_batch_path: Path, normalized_path: 
     for index,(raw,task) in enumerate(zip(raw_rows,normalized_rows),1):
         row_errors_all.extend(f"row {index}: {item}" for item in _task_shape_errors(task,raw,assets))
     errors.extend(row_errors_all)
-    report={"ok":not errors,"raw_batch":_relative_display(raw_batch_path),"normalized":_relative_display(normalized_path),"rows":len(normalized_rows),"errors":sorted(set(errors)),"row_errors":row_errors_all}
+    report={"ok":not errors,"raw_batch":_relative_display(raw_batch_path),"normalized":_relative_display(normalized_path),"rows":len(normalized_rows),"errors":sorted(set(errors)),"row_errors":row_errors_all,"response_object_required":require_response_object}
     return report, 0 if report["ok"] else 1
 
 
@@ -1757,8 +1827,11 @@ def assemble_generation_inputs(normalized_path: Path, private_assets_path: Path,
     if assets_output.exists() and force and not _managed_jsonl(assets_output,VERIFICATION_ASSET_SCHEMA_VERSION): errors.append("refusing to replace unknown asset output")
     if errors:
         return {"ok":False,"tasks_output":_relative_display(tasks_output),"assets_output":_relative_display(assets_output),"rows":len(tasks),"unused_private_asset_count":unused_private_asset_count,"errors":sorted(set(errors))},1
-    task_bytes=b"".join(json.dumps(t,ensure_ascii=False,separators=(",", ":"),sort_keys=True).encode()+b"\n" for t in sorted(tasks,key=lambda x:(str(x.get('task_id')),str(x.get('source_id')))))
-    asset_bytes=b"".join(json.dumps(selected_assets[t],ensure_ascii=False,separators=(",", ":"),sort_keys=True).encode()+b"\n" for t in sorted(task_ids))
+    # Normalized response order is part of the packet contract. Preserve it
+    # through assembly so a five-task exchange can be audited positionally.
+    ordered_task_ids = [str(task.get("task_id")) for task in tasks]
+    task_bytes=b"".join(json.dumps(t,ensure_ascii=False,separators=(",", ":"),sort_keys=True).encode()+b"\n" for t in tasks)
+    asset_bytes=b"".join(json.dumps(selected_assets[t],ensure_ascii=False,separators=(",", ":"),sort_keys=True).encode()+b"\n" for t in ordered_task_ids)
     try:
         _atomic_write(tasks_output,task_bytes); _atomic_write(assets_output,asset_bytes)
     except OSError as exc:

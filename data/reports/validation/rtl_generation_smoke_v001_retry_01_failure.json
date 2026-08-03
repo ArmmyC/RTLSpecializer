@@ -1,0 +1,23 @@
+{
+  "schema_version": "rtl_dataset_packaging_failure_v0.1",
+  "package_id": "rtl_generation_smoke_v001_retry_01",
+  "parent_package_id": "rtl_generation_smoke_v001",
+  "status": "failed_partial_package",
+  "consumable": false,
+  "package_exit_code": 1,
+  "package_tree_sha256": "afb69831660268b9eb29b59944a40de878e54ebdb89b9c30e49210130a3dcbcd",
+  "failure_category": "packaging_control_defect",
+  "failures": [
+    {
+      "code": "privacy_detector_metadata_key_false_positive",
+      "root_cause": "package privacy scan matched the allowed verification.rtlbench_commit metadata key instead of content values"
+    }
+  ],
+  "qualification_report_hash_match": true,
+  "pinned_task_order_match": true,
+  "protected_inputs_changed": false,
+  "rtlbench_executed": false,
+  "model_executed": false,
+  "recovery_invocation_consumed": true,
+  "next_action": "obtain a new recovery authorization before any further package invocation"
+}

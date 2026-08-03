@@ -1,0 +1,25 @@
+{
+  "schema_version": "rtl_dataset_packaging_recovery_authorization_v0.1",
+  "authorization_status": "one_recovery_invocation_authorized",
+  "original_package_id": "rtl_generation_smoke_v001",
+  "original_status": "failed_partial_package",
+  "original_consumable": false,
+  "original_partial_package_preserved": true,
+  "original_partial_package_tree_sha256": "69440f512d73c574f1b3ef4b007f3305ebaa6b0477af878114f0f9151dc89c93",
+  "recovery_package": "rtl_generation_smoke_v001_retry_01",
+  "recovery_reason": "packaging_source_defect",
+  "source_defects_fixed": true,
+  "regression_tests_passed": true,
+  "regression_tests": [
+    "qualification_report_hash_uses_canonical_report",
+    "package_task_records_read_user_content",
+    "pinned_smoke_order_rejects_reordered_tasks",
+    "five_row_synthetic_recovery_completes_packager_validator_path"
+  ],
+  "synthetic_end_to_end_passed": true,
+  "canonical_inputs_preflighted": true,
+  "input_attestation_sha256": "0cdc1db2f77c8d1b7286372aae7aee89e1fb2ac54a21f0c04088357aea82842f",
+  "authorized_invocation_count": 1,
+  "rtlbench_executed_during_recovery": false,
+  "model_executed_during_recovery": false
+}

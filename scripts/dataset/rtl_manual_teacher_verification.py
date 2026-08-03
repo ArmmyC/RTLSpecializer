@@ -64,6 +64,14 @@ FAILURE_CATEGORIES = {
     "internal_error",
     "partial_failure",
 }
+# Only failures attributable to the candidate itself may produce a repair
+# packet.  Asset, runner, and infrastructure outcomes must return to their
+# owning workflow rather than being sent back to the RTL teacher.
+REPAIRABLE_FAILURE_CATEGORIES = frozenset({
+    "compile_failure",
+    "functional_mismatch",
+    "timeout",
+})
 PACKET_ID_RE = re.compile(r"^rtl_teacher_(initial|repair)_batch_(\d{4})_([0-9a-f]{12})$")
 STATUS_REASONS = {
     None,
@@ -126,6 +134,24 @@ PLAN_FIELDS = {
     "requested_checks",
     "workspace_paths",
     "expected_hashes",
+    "qualification_binding",
+}
+QUALIFICATION_BINDING_FIELDS = {
+    "binding_schema_version",
+    "qualification_source",
+    "qualification_result",
+    "correction_version",
+    "source_commit",
+    "source_tree_sha256",
+    "frozen_split_sha256",
+    "qualification_report_sha256",
+    "qualification_manifest_sha256",
+    "mutation_evidence_sha256",
+    "runner_sidecar_sha256",
+    "corrected_testbench_sha256",
+    "task_record_sha256",
+    "asset_record_sha256",
+    "reference_supplied",
 }
 ATTEMPT_FIELDS = {
     "schema_version",
@@ -532,6 +558,12 @@ def _prepare_output_files(output_dir: Path, names: list[str], overwrite: bool) -
         raise WorkflowError(f"output directory contains a symlink: {output_dir}")
     if output_dir.exists() and not output_dir.is_dir():
         raise WorkflowError(f"output directory is not a directory: {output_dir}")
+    if not output_dir.exists():
+        _ensure_directory(output_dir, "output directory")
+    try:
+        os.chmod(output_dir, 0o700)
+    except OSError as exc:
+        raise WorkflowError(f"could not secure output directory: {output_dir}") from exc
     if output_dir.exists():
         if _tree_has_symlink(output_dir):
             raise WorkflowError(f"output directory contains a symlink: {output_dir}")
@@ -883,6 +915,105 @@ def validate_teacher_candidate_batch(
         return {"ok": False, "validated_candidates": 0, "rejected_candidates": 1, "errors": [_report_error(exc)], "warnings": []}, 1
 
 
+def validate_teacher_candidate_response_set(
+    packet_dir: Path,
+    response_dir: Path,
+    *,
+    private_assets_path: Path | None = None,
+    private_assets_root: Path | None = None,
+    output_path: Path | None = None,
+    overwrite: bool = False,
+) -> tuple[dict[str, Any], int]:
+    """Validate a complete initial packet/response set before publication.
+
+    Each packet is validated independently with the existing strict validator,
+    but candidate records are published only after every response succeeds.
+    This prevents a malformed later response from leaving a partial batch in
+    ``candidate_records.jsonl``.
+    """
+
+    try:
+        if private_assets_path is None or private_assets_root is None:
+            raise WorkflowError("private-assets and private-assets-root are required")
+        if _contains_symlink(packet_dir) or packet_dir.is_symlink() or not packet_dir.is_dir():
+            raise WorkflowError("packet directory is missing, symlinked, or not a directory")
+        if _contains_symlink(response_dir) or response_dir.is_symlink() or not response_dir.is_dir():
+            raise WorkflowError("response directory is missing, symlinked, or not a directory")
+        packet_paths = sorted(packet_dir.glob("packet_*.json"), key=lambda path: path.name)
+        response_paths = sorted(response_dir.glob("packet_*_response.json"), key=lambda path: path.name)
+        if not packet_paths:
+            raise WorkflowError("no teacher packet JSON files found")
+        if any(path.is_symlink() or not path.is_file() or _is_hard_link(path) for path in packet_paths + response_paths):
+            raise WorkflowError("packet or response set contains an unsafe file")
+        expected_response_names = {f"{path.stem}_response.json" for path in packet_paths}
+        actual_response_names = {path.name for path in response_paths}
+        if actual_response_names != expected_response_names:
+            missing = sorted(expected_response_names - actual_response_names)
+            extra = sorted(actual_response_names - expected_response_names)
+            raise WorkflowError(f"packet/response set mismatch; missing={missing}, extra={extra}")
+        if output_path is not None:
+            if _is_alias(output_path, packet_dir) or _is_alias(output_path, response_dir) or _is_alias(output_path, private_assets_path):
+                raise WorkflowError("candidate output aliases an input")
+            if _contains_symlink(output_path) or output_path.is_symlink() or _is_hard_link(output_path):
+                raise WorkflowError("candidate output must not be a symlink or hard-link")
+            if output_path.exists() and not overwrite:
+                raise WorkflowError(f"output already exists: {output_path}; use --overwrite")
+
+        records: list[dict[str, Any]] = []
+        packet_ids: list[str] = []
+        task_ids: list[str] = []
+        with tempfile.TemporaryDirectory(prefix=".candidate-batch-") as temporary:
+            temporary_root = Path(temporary)
+            for packet_path in packet_paths:
+                response_path = response_dir / f"{packet_path.stem}_response.json"
+                temporary_output = temporary_root / f"{packet_path.stem}.jsonl"
+                report, code = validate_teacher_candidate_batch(
+                    packet_path,
+                    response_path,
+                    private_assets_path=private_assets_path,
+                    private_assets_root=private_assets_root,
+                    output_path=temporary_output,
+                )
+                if code != 0 or report.get("ok") is not True:
+                    raise WorkflowError(f"{packet_path.name} response failed strict validation: {report.get('errors', ['unknown validation error'])}")
+                packet = _load_packet(packet_path)
+                batch_records = _load_candidate_records(temporary_output)
+                if packet["packet_kind"] != "initial" or packet["target_attempt"] != 1:
+                    raise WorkflowError(f"{packet_path.name} is not an initial attempt-1 packet")
+                if len(batch_records) != packet["row_count"]:
+                    raise WorkflowError(f"{packet_path.name} record count does not match packet")
+                packet_ids.append(packet["packet_id"])
+                records.extend(batch_records)
+                task_ids.extend(record["task_id"] for record in batch_records)
+
+        if len(records) != len(task_ids) or len(task_ids) != len(set(task_ids)):
+            raise WorkflowError("candidate response set contains duplicate task identities")
+        if output_path is not None:
+            _atomic_write(output_path, b"".join(_json_bytes(record) for record in records))
+        return {
+            "ok": True,
+            "packet_count": len(packet_paths),
+            "response_count": len(response_paths),
+            "validated_candidates": len(records),
+            "rejected_candidates": 0,
+            "packet_ids": packet_ids,
+            "task_ids": task_ids,
+            "output": _display_path(output_path),
+            "errors": [],
+            "warnings": [],
+        }, 0
+    except (WorkflowError, UnicodeError) as exc:
+        return {
+            "ok": False,
+            "packet_count": 0,
+            "response_count": 0,
+            "validated_candidates": 0,
+            "rejected_candidates": 0,
+            "errors": [_report_error(exc)],
+            "warnings": [],
+        }, 1
+
+
 def _asset_for_task(asset: dict[str, Any], task: dict[str, Any], private_root: Path) -> tuple[bytes, bytes, list[tuple[str, bytes]]]:
     errors = _verify_asset_integrity(task, asset, private_root)
     if errors:
@@ -915,7 +1046,15 @@ def _candidate_manifest_row(record: dict[str, Any], task: dict[str, Any], candid
     }
 
 
-def _plan_row(record: dict[str, Any], task: dict[str, Any], candidate_path: str, testbench_path: str, support_paths: list[str], hashes: dict[str, Any]) -> dict[str, Any]:
+def _plan_row(
+    record: dict[str, Any],
+    task: dict[str, Any],
+    candidate_path: str,
+    testbench_path: str,
+    support_paths: list[str],
+    hashes: dict[str, Any],
+    qualification_binding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "schema_version": PLAN_SCHEMA_VERSION,
         "candidate_id": record["candidate_id"],
@@ -929,6 +1068,27 @@ def _plan_row(record: dict[str, Any], task: dict[str, Any], candidate_path: str,
         "requested_checks": dict(REQUESTED_CHECKS),
         "workspace_paths": {"candidate_rtl_path": candidate_path, "testbench_path": testbench_path, "support_files": support_paths},
         "expected_hashes": hashes,
+        "qualification_binding": qualification_binding,
+    }
+
+
+def _plan_qualification_binding(row: dict[str, Any], report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "binding_schema_version": "rtl_generation_qualification_binding_v0.1",
+        "qualification_source": row["qualification_source"],
+        "qualification_result": row["qualification_result"],
+        "correction_version": report["correction_version"],
+        "source_commit": report["source_commit"],
+        "source_tree_sha256": report["source_tree_sha256"],
+        "frozen_split_sha256": report["frozen_split_sha256"],
+        "qualification_report_sha256": row["qualification_report_sha256"],
+        "qualification_manifest_sha256": report["qualification_manifest_sha256"],
+        "mutation_evidence_sha256": row["mutation_evidence_sha256"],
+        "runner_sidecar_sha256": row["runner_sidecar_sha256"],
+        "corrected_testbench_sha256": row["corrected_testbench_sha256"],
+        "task_record_sha256": row["task_record_sha256"],
+        "asset_record_sha256": row["asset_record_sha256"],
+        "reference_supplied": row["reference_supplied"],
     }
 
 
@@ -1004,6 +1164,7 @@ def prepare_candidate_verification(
     overwrite: bool = False,
     attempt: int | None = None,
     candidate_ids: Iterable[str] | None = None,
+    qualification_binding_path: Path | None = None,
 ) -> tuple[dict[str, Any], int]:
     stage: Path | None = None
     backup: Path | None = None
@@ -1011,12 +1172,22 @@ def prepare_candidate_verification(
         tasks = _load_tasks(tasks_path)
         assets = _load_assets(assets_path, private_assets_root)
         records = _load_candidate_records(candidates_path)
+        qualification_report: dict[str, Any] | None = None
+        qualification_rows: dict[str, dict[str, Any]] = {}
+        if qualification_binding_path is not None:
+            from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
+
+            qualification_report = validate_binding_report(qualification_binding_path)
+            qualification_rows = {row["task_id"]: row for row in qualification_report["rows"]}
         if _is_dangerous_root(output_dir):
             raise WorkflowError(f"refusing dangerous output root: {_display_path(output_dir)}")
         output_parent = _ensure_directory(output_dir.parent, "output parent")
         if output_dir.is_symlink():
             raise WorkflowError(f"output directory must not be a symlink: {output_dir}")
-        if _output_aliases_inputs(output_dir, (tasks_path, assets_path, candidates_path, private_assets_root)):
+        input_paths = (tasks_path, assets_path, candidates_path, private_assets_root)
+        if qualification_binding_path is not None:
+            input_paths = (*input_paths, qualification_binding_path)
+        if _output_aliases_inputs(output_dir, input_paths):
             raise WorkflowError("output directory aliases an input or private asset root")
         if output_dir.exists():
             if not overwrite:
@@ -1072,8 +1243,17 @@ def prepare_candidate_verification(
                 "testbench_sha256": _sha256_bytes(testbench),
                 "support_files": [{"path": path, "sha256": _sha256_bytes(content)} for path, (_, content) in zip(support_paths, support)],
             }
+            qualification_binding = None
+            if qualification_report is not None:
+                binding_row = qualification_rows.get(task["task_id"])
+                if binding_row is None:
+                    raise WorkflowError(f"missing qualification binding for {task['task_id']}")
+                if binding_row["corrected_testbench_sha256"] != hashes["testbench_sha256"]:
+                    raise WorkflowError(f"qualification/testbench hash mismatch: {task['task_id']}")
+                qualification_binding = _plan_qualification_binding(binding_row, qualification_report)
+                _validate_qualification_binding(qualification_binding, f"qualification binding {task['task_id']}")
             manifest_rows.append(_candidate_manifest_row(record, task, candidate_path, testbench_path, support_paths))
-            plan_rows.append(_plan_row(record, task, candidate_path, testbench_path, support_paths, hashes))
+            plan_rows.append(_plan_row(record, task, candidate_path, testbench_path, support_paths, hashes, qualification_binding))
             _write_staged_file(workspace / candidate_path, candidate_bytes)
             _write_staged_file(workspace / testbench_path, testbench)
             for path, (_, content) in zip(support_paths, support):
@@ -1105,7 +1285,7 @@ def prepare_candidate_verification(
         if backup is not None:
             _remove_tree(backup)
             backup = None
-        report = {"ok": True, "prepared_candidates": len(selected), "manifest": _display_path(output_dir / "candidate_manifest.jsonl"), "plan": _display_path(output_dir / "verification_plan.jsonl"), "workspace": _display_path(output_dir / "workspace"), "reference_copied": False, "errors": [], "warnings": []}
+        report = {"ok": True, "prepared_candidates": len(selected), "manifest": _display_path(output_dir / "candidate_manifest.jsonl"), "plan": _display_path(output_dir / "verification_plan.jsonl"), "workspace": _display_path(output_dir / "workspace"), "reference_copied": False, "qualification_binding": _display_path(qualification_binding_path) if qualification_binding_path is not None else None, "errors": [], "warnings": []}
         return report, 0
     except (WorkflowError, OSError) as exc:
         if backup is not None and not output_dir.exists():
@@ -1153,7 +1333,35 @@ def _status(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
+def _validate_qualification_binding(value: Any, label: str) -> dict[str, Any]:
+    _strict_fields(value, QUALIFICATION_BINDING_FIELDS, label)
+    if value["binding_schema_version"] != "rtl_generation_qualification_binding_v0.1":
+        raise WorkflowError(f"{label} has the wrong binding schema")
+    if value["qualification_source"] != "asset_qualification_retry_01" or value["qualification_result"] != "passed":
+        raise WorkflowError(f"{label} is not a passed retry qualification")
+    if value["correction_version"] != "assetfix_v002" or value["reference_supplied"] is not False:
+        raise WorkflowError(f"{label} has an unsafe qualification binding")
+    patterns = {
+        "source_commit": r"^[0-9a-f]{40}$",
+        "source_tree_sha256": r"^[0-9a-f]{64}$",
+        "frozen_split_sha256": r"^[0-9a-f]{64}$",
+        "qualification_report_sha256": r"^[0-9a-f]{64}$",
+        "qualification_manifest_sha256": r"^[0-9a-f]{64}$",
+        "mutation_evidence_sha256": r"^[0-9a-f]{64}$",
+        "runner_sidecar_sha256": r"^[0-9a-f]{64}$",
+        "corrected_testbench_sha256": r"^[0-9a-f]{64}$",
+        "task_record_sha256": r"^[0-9a-f]{64}$",
+        "asset_record_sha256": r"^[0-9a-f]{64}$",
+    }
+    for key, pattern in patterns.items():
+        if not isinstance(value[key], str) or re.fullmatch(pattern, value[key]) is None:
+            raise WorkflowError(f"{label}.{key} is invalid")
+    return value
+
+
 def _validate_plan(plan: Any, label: str) -> dict[str, Any]:
+    if isinstance(plan, dict) and "qualification_binding" not in plan:
+        plan = {**plan, "qualification_binding": None}
     _strict_fields(plan, PLAN_FIELDS, label)
     if plan["schema_version"] != PLAN_SCHEMA_VERSION or plan["verification_profile"] != PROFILE or plan["testbench_top"] != TESTBENCH_TOP or plan["simulation_result_contract"] != SIMULATION_CONTRACT:
         raise WorkflowError(f"{label} has an unsupported verification contract")
@@ -1163,6 +1371,8 @@ def _validate_plan(plan: Any, label: str) -> dict[str, Any]:
         raise WorkflowError(f"{label}.attempt is invalid")
     if plan["candidate_id"] != f"{plan['task_id']}_attempt_{plan['attempt']:02d}":
         raise WorkflowError(f"{label}.candidate_id is not deterministic")
+    if plan["qualification_binding"] is not None:
+        _validate_qualification_binding(plan["qualification_binding"], f"{label}.qualification_binding")
     _identifier(plan["top_module"], f"{label}.top_module")
     if plan["requested_checks"] != REQUESTED_CHECKS:
         raise WorkflowError(f"{label}.requested_checks is invalid")
@@ -1594,6 +1804,8 @@ def export_teacher_repair_packets(
             latest = max(failed, key=lambda row: row["attempt"])
             if latest["attempt"] >= max_attempts:
                 continue
+            if latest["failure_category"] not in REPAIRABLE_FAILURE_CATEGORIES:
+                continue
             candidate = by_task_candidate.get((task["task_id"], latest["attempt"]))
             if candidate is None:
                 raise WorkflowError(f"missing candidate record for failed attempt {latest['candidate_id']}")
@@ -1648,6 +1860,7 @@ def export_teacher_repair_packets(
 # Short aliases make the reusable module convenient for tests and callers.
 export_rtl_teacher_generation_packets = export_teacher_generation_packets
 validate_rtl_teacher_candidate_batch = validate_teacher_candidate_batch
+validate_rtl_teacher_candidate_response_set = validate_teacher_candidate_response_set
 prepare_rtl_candidate_verification = prepare_candidate_verification
 ingest_rtl_candidate_evidence = ingest_candidate_evidence
 export_rtl_teacher_repair_packets = export_teacher_repair_packets

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_source_duplicate_report_v0.1.schema.json",
+  "title": "RTL source duplicate report v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_commit", "inventory_sha256", "duplicate_source_id_count", "rows"],
+  "properties": {
+    "schema_version": {"const": "rtl_source_duplicate_report_v0.1"},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "inventory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "duplicate_source_id_count": {"type": "integer", "minimum": 0},
+    "rows": {"type": "array", "items": {"type": "object"}}
+  }
+}

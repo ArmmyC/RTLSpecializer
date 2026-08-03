@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_verification_asset_correction_v0.1.schema.json",
+  "title": "RTL verification asset correction manifest v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_dataset", "source_commit", "base_inventory_sha256", "base_split_sha256", "correction_version", "correction_manifest_sha256", "corrected_inventory_sha256", "row_count", "rows", "readiness_counts", "reference_modified", "reference_copied_to_support", "dependency_closure_passed", "verification_readiness", "negative_mutation_execution", "errors"],
+  "properties": {
+    "schema_version": {"const": "rtl_verification_asset_correction_v0.1"},
+    "ok": {"type": "boolean"},
+    "source_dataset": {"const": "VerilogEval"},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "source_tree_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "base_inventory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "base_split_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "correction_version": {"const": "assetfix_v002"},
+    "selection_report_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "correction_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "corrected_inventory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "row_count": {"const": 5},
+    "rows": {"type": "array", "minItems": 5, "maxItems": 5, "items": {"$ref": "rtl_verification_asset_correction_row_v0.1.schema.json"}},
+    "readiness_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "reference_modified": {"const": false},
+    "reference_copied_to_support": {"const": false},
+    "dependency_closure_passed": {"const": true},
+    "verification_readiness": {"const": "executable_ready"},
+    "negative_mutation_execution": {"const": "deferred_to_isolated_verification"},
+    "errors": {"type": "array", "maxItems": 0, "items": {"type": "string"}}
+  }
+}

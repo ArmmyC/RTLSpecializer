@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_generation_qualification_binding_v0.1.schema.json",
+  "title": "RTL generation qualification binding v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "run_id", "source_commit", "source_tree_sha256",
+    "frozen_split_sha256", "correction_version", "qualification_source",
+    "qualification_result", "mutation_rows", "detected_mutations",
+    "reference_supplied", "qualification_report_sha256",
+    "qualification_manifest_sha256", "mutation_evidence_sha256",
+    "runner_sidecar_sha256", "correction_manifest_sha256",
+    "original_failed_qualification_report_sha256",
+    "original_failure_analysis_sha256", "rows",
+    "teacher_private_assets_manifest_sha256", "errors"
+  ],
+  "properties": {
+    "schema_version": {"const": "rtl_generation_qualification_binding_v0.1"},
+    "run_id": {"type": "string", "minLength": 1},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "source_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "frozen_split_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "correction_version": {"const": "assetfix_v002"},
+    "qualification_source": {"const": "asset_qualification_retry_01"},
+    "qualification_result": {"const": "passed"},
+    "mutation_rows": {"const": 10},
+    "detected_mutations": {"const": 10},
+    "reference_supplied": {"const": false},
+    "qualification_report_sha256": {"$ref": "#/$defs/sha256"},
+    "qualification_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "mutation_evidence_sha256": {"$ref": "#/$defs/sha256"},
+    "runner_sidecar_sha256": {"$ref": "#/$defs/sha256"},
+    "correction_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "original_failed_qualification_report_sha256": {"$ref": "#/$defs/sha256"},
+    "original_failure_analysis_sha256": {"$ref": "#/$defs/sha256"},
+    "teacher_private_assets_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "rows": {"type": "array", "minItems": 5, "maxItems": 5, "items": {"$ref": "#/$defs/row"}},
+    "errors": {"type": "array", "maxItems": 0}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_id", "task_id", "qualification_source", "qualification_result",
+        "mutation_rows", "detected_mutations", "reference_supplied",
+        "corrected_testbench_sha256", "qualification_report_sha256",
+        "mutation_evidence_sha256", "runner_sidecar_sha256",
+        "task_record_sha256", "asset_record_sha256", "original_reference_rtl_sha256"
+      ],
+      "properties": {
+        "source_id": {"type": "string", "minLength": 1},
+        "task_id": {"type": "string", "minLength": 1},
+        "qualification_source": {"const": "asset_qualification_retry_01"},
+        "qualification_result": {"const": "passed"},
+        "mutation_rows": {"type": "integer", "minimum": 1},
+        "detected_mutations": {"type": "integer", "minimum": 1},
+        "reference_supplied": {"const": false},
+        "corrected_testbench_sha256": {"$ref": "#/$defs/sha256"},
+        "qualification_report_sha256": {"$ref": "#/$defs/sha256"},
+        "mutation_evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "runner_sidecar_sha256": {"$ref": "#/$defs/sha256"},
+        "task_record_sha256": {"$ref": "#/$defs/sha256"},
+        "asset_record_sha256": {"$ref": "#/$defs/sha256"},
+        "original_reference_rtl_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

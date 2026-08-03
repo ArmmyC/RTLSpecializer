@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtlbench_mutation_runner_identity_v0.1.schema.json",
+  "title": "RTLBench mutation runner identity v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "profile",
+    "runtime",
+    "runtime_mode",
+    "rootless",
+    "network_policy",
+    "image_id",
+    "rtlbench_commit",
+    "manifest_sha256",
+    "workspace_tree_sha256",
+    "evidence_sha256",
+    "partial_evidence_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "rtlbench_mutation_runner_identity_v0.1"},
+    "profile": {"const": "pilot-docker"},
+    "runtime": {"const": "docker"},
+    "runtime_mode": {"const": "rootful-daemon"},
+    "rootless": {"const": false},
+    "network_policy": {"const": "none"},
+    "image_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "rtlbench_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "workspace_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "partial_evidence_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+  }
+}
