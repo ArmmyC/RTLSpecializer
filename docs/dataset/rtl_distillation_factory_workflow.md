@@ -111,6 +111,37 @@ python scripts/dataset/select_rtl_generation_smoke.py \
   --json
 ```
 
+## 2b. Select the bounded batch-20 correction set
+
+The five-row smoke controls remain immutable. The next correction selection is
+created with the separate batch-20 selector and a new correction version:
+
+```bash
+python scripts/dataset/select_rtl_generation_correction_batch.py \
+  --inventory data/reports/inventory/verilog_eval_v001_rows.jsonl \
+  --split-manifest data/reports/validation/verilog_eval_v001_split.json \
+  --source-acquisition data/reports/inventory/verilog_eval_v001_acquisition.json \
+  --ids-output data/reports/validation/verilog_eval_v002_asset_correction_ids.txt \
+  --report-output data/reports/validation/verilog_eval_v002_asset_correction_selection.json \
+  --json
+```
+
+This report is train-only, excludes the five smoke IDs, and binds the source
+commit, source-tree hash, base inventory hash, and frozen split hash. It is a
+selection record only; no corrected testbench exists until the next manually
+authored asset-correction phase.
+
+The smoke package has a separate human-review gate. The existing automated
+content review does not count as human review. A reviewer-supplied record can
+be checked with:
+
+```bash
+python scripts/dataset/validate_rtl_generation_human_review.py \
+  --package data/distill/rtl_generation_smoke_v001_retry_02 \
+  --review data/reports/validation/rtl_generation_smoke_v001_retry_02_human_review.json \
+  --json
+```
+
 ## 3. Manually normalize public tasks with an LLM
 
 Export a small public packet. The split manifest is a gate, not a prompt

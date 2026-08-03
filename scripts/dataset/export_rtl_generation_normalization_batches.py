@@ -29,6 +29,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-ids-file", type=Path)
     parser.add_argument("--correction-manifest", type=Path)
     parser.add_argument("--correction-root", type=Path)
+    parser.add_argument("--correction-version")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
@@ -83,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         source_commit=args.source_commit, source_ids=source_ids,
         correction_manifest=args.correction_manifest,
         correction_root=args.correction_root,
+        correction_version=args.correction_version,
     )
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))

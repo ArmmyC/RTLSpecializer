@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import replace
@@ -7,12 +8,112 @@ from pathlib import Path
 
 from scripts.dataset.rtl_generation_preparation import (
     SourceRow,
+    _clock_reset_hints,
+    _interface_hints,
     _readiness,
     _task_id,
     _verification_dependency_report,
     export_generation_normalization_batches,
 )
+from scripts.dataset.rtl_generation_asset_corrections import load_correction_manifest
 from tests.dataset.rtl_generation_test_helpers import load_batch, make_checkout
+
+
+def test_v003_correction_manifest_is_accepted_by_generation_overlay_loader(tmp_path: Path) -> None:
+    correction_root = tmp_path / "correction"
+    testbench = correction_root / "tasks" / "Prob029_m2014_q4g" / "testbench.sv"
+    testbench.parent.mkdir(parents=True)
+    content = b'''module tb;
+  logic a;
+  logic y;
+  TopModule dut(.a(a), .y(y));
+  initial begin
+    $display("Mismatches: %0d", 0);
+    $finish;
+  end
+endmodule
+'''
+    testbench.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    row = {
+        "schema_version": "rtl_verification_asset_correction_row_v0.2",
+        "source_dataset": "VerilogEval",
+        "source_id": "Prob029_m2014_q4g",
+        "task_id": "task_prob029",
+        "split": "train",
+        "top_module": "TopModule",
+        "upstream_commit": "a" * 40,
+        "original_prompt_sha256": "b" * 64,
+        "original_reference_rtl_sha256": "c" * 64,
+        "original_testbench_sha256": "d" * 64,
+        "corrected_testbench_sha256": digest,
+        "correction_version": "assetfix_v003",
+        "reference_modified": False,
+        "reference_copied_to_support": False,
+        "testbench_path": "tasks/Prob029_m2014_q4g/testbench.sv",
+        "support_files": [],
+        "dependency_closure": "passed",
+        "verification_readiness": "executable_ready",
+    }
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    rows, errors = load_correction_manifest(
+        manifest,
+        correction_root,
+        expected_correction_version="assetfix_v003",
+    )
+
+    assert errors == []
+    assert rows == [row]
+
+
+def test_interface_hints_preserve_parenthetical_bit_widths() -> None:
+    ports = _interface_hints(
+        """
+        - input A (2 bits)
+        - input data (8 bits)
+        - output result (3 bits)
+        """
+    )
+
+    assert [port["width_bits"] for port in ports] == [2, 8, 3]
+    assert [port["packed_range"] for port in ports] == [None, None, None]
+
+
+def test_clock_reset_hints_preserve_explicit_reset_contract() -> None:
+    specification = """
+    - input clk
+    - input r
+    - output q
+
+    Implement a D flip flop with active high synchronous reset.
+    """
+    ports = _interface_hints(specification)
+
+    clocks, resets = _clock_reset_hints(specification, ports)
+
+    assert clocks == [{"signal": "clk", "edge": "posedge"}]
+    assert resets == [{
+        "signal": "r",
+        "active_level": "high",
+        "synchronous": True,
+    }]
+
+
+def test_short_r_is_not_a_reset_without_reset_language() -> None:
+    specification = """
+    - input clk
+    - input r
+    - output q
+
+    Capture the input value on each positive clock edge.
+    """
+    ports = _interface_hints(specification)
+
+    _, resets = _clock_reset_hints(specification, ports)
+
+    assert resets == []
 
 
 def _dependency_row(
@@ -211,6 +312,8 @@ def test_manual_normalization_prompt_matches_generation_task_schema() -> None:
     collapsed = " ".join(prompt.split())
     assert "exactly `clock_signal` and `edge`" in collapsed
     assert "exactly `signal`, `active_level`, and `synchronous`" in collapsed
+    assert "parenthetical width" in collapsed
+    assert "explicitly identifies reset behavior" in collapsed
     for field in ("cycles", "min_cycles", "max_cycles", "throughput_cycles", "description"):
         assert f"`{field}`" in prompt, field
     assert "do not include a top-level `license`" in prompt

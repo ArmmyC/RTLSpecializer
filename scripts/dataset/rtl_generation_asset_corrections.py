@@ -38,6 +38,8 @@ CORRECTION_ROW_SCHEMA_VERSION = "rtl_verification_asset_correction_row_v0.1"
 CORRECTION_MANIFEST_SCHEMA_VERSION = "rtl_verification_asset_correction_v0.1"
 CORRECTION_SELECTION_SCHEMA_VERSION = "rtl_verification_asset_correction_selection_v0.1"
 CORRECTION_VALIDATION_SCHEMA_VERSION = "rtl_verification_asset_correction_validation_v0.1"
+V003_MANIFEST_SCHEMA_VERSION = "rtl_verification_asset_correction_v0.2"
+V003_ROW_SCHEMA_VERSION = "rtl_verification_asset_correction_row_v0.2"
 
 EXPECTED_SOURCE_IDS = (
     "Prob001_zero",
@@ -258,7 +260,12 @@ def select_correction_rows(
     return {**report, "ok": True, "output": _relative_display(output_path)}, 0
 
 
-def load_correction_manifest(path: Path, correction_root: Path) -> tuple[list[dict[str, Any]], list[str]]:
+def load_correction_manifest(
+    path: Path,
+    correction_root: Path,
+    *,
+    expected_correction_version: str = CORRECTION_VERSION,
+) -> tuple[list[dict[str, Any]], list[str]]:
     try:
         rows = _load_jsonl(path)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
@@ -266,11 +273,40 @@ def load_correction_manifest(path: Path, correction_root: Path) -> tuple[list[di
     errors: list[str] = []
     seen: set[str] = set()
     for index, row in enumerate(rows, 1):
-        unknown = sorted(set(row) - CORRECTION_ROW_FIELDS)
-        missing = sorted(CORRECTION_ROW_FIELDS - set(row))
+        is_v003 = (
+            expected_correction_version == "assetfix_v003"
+            and row.get("schema_version") == V003_ROW_SCHEMA_VERSION
+        )
+        allowed_fields = (
+            {
+                "schema_version", "source_dataset", "source_id", "task_id", "split",
+                "design_family", "top_module", "upstream_commit", "original_prompt_sha256",
+                "original_reference_rtl_sha256", "original_testbench_sha256",
+                "corrected_testbench_sha256", "correction_version", "correction_reason",
+                "authoring_method", "reference_modified", "reference_copied_to_support",
+                "testbench_path", "support_files", "dependency_closure",
+                "verification_readiness", "mutation_contracts", "static_audit",
+                "frozen_split_sha256", "source_tree_sha256",
+            }
+            if is_v003 else CORRECTION_ROW_FIELDS
+        )
+        required_fields = (
+            {
+                "schema_version", "source_dataset", "source_id", "task_id", "split",
+                "top_module", "upstream_commit", "original_prompt_sha256",
+                "original_reference_rtl_sha256", "original_testbench_sha256",
+                "corrected_testbench_sha256", "correction_version", "reference_modified",
+                "reference_copied_to_support", "testbench_path", "support_files",
+                "dependency_closure", "verification_readiness",
+            }
+            if is_v003 else CORRECTION_ROW_FIELDS
+        )
+        unknown = sorted(set(row) - allowed_fields)
+        missing = sorted(required_fields - set(row))
         errors.extend(f"manifest row {index}: unknown field {key}" for key in unknown)
         errors.extend(f"manifest row {index}: missing field {key}" for key in missing)
-        if row.get("schema_version") != CORRECTION_ROW_SCHEMA_VERSION:
+        expected_schema = V003_ROW_SCHEMA_VERSION if expected_correction_version == "assetfix_v003" else CORRECTION_ROW_SCHEMA_VERSION
+        if row.get("schema_version") != expected_schema:
             errors.append(f"manifest row {index}: wrong schema version")
         source_id = row.get("source_id")
         if not isinstance(source_id, str) or not source_id:
@@ -283,7 +319,7 @@ def load_correction_manifest(path: Path, correction_root: Path) -> tuple[list[di
             errors.append(f"manifest row {index}: source_dataset must remain VerilogEval")
         if row.get("split") != "train":
             errors.append(f"manifest row {index}: split must be train")
-        if row.get("correction_version") != CORRECTION_VERSION:
+        if row.get("correction_version") != expected_correction_version:
             errors.append(f"manifest row {index}: wrong correction version")
         if not _COMMIT_RE.fullmatch(str(row.get("upstream_commit") or "")):
             errors.append(f"manifest row {index}: invalid upstream commit")
@@ -434,8 +470,14 @@ def overlay_source_rows(
     rows: list[SourceRow],
     correction_manifest_path: Path,
     correction_root: Path,
+    *,
+    expected_correction_version: str = CORRECTION_VERSION,
 ) -> tuple[list[SourceRow], list[str], dict[str, dict[str, Any]]]:
-    manifest_rows, errors = load_correction_manifest(correction_manifest_path, correction_root)
+    manifest_rows, errors = load_correction_manifest(
+        correction_manifest_path,
+        correction_root,
+        expected_correction_version=expected_correction_version,
+    )
     by_id = {row["source_id"]: row for row in manifest_rows}
     result: list[SourceRow] = []
     for row in rows:

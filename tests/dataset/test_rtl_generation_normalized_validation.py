@@ -182,3 +182,21 @@ def test_validator_rejects_inconsistent_clock_reset_and_latency_contracts(tmp_pa
     assert any("reset signal must name" in error for error in errors)
     assert any("min_cycles" in error for error in errors)
     assert any("cycles conflicts" in error for error in errors)
+
+
+def test_validator_rejects_drift_from_deterministic_width_and_reset_hints(tmp_path) -> None:
+    _, normalized, _, raw = _export_one(tmp_path)
+    task = json.loads(normalized.read_text(encoding="utf-8"))[0]
+    raw_row = raw["rows"][0]
+
+    raw_row["deterministic_interface_hints"][0]["width_bits"] = 2
+    errors = _task_shape_errors(task, raw_row)
+    assert any("port widths do not preserve" in error for error in errors)
+
+    raw_row["deterministic_reset_hints"] = [{
+        "signal": "rst",
+        "active_level": "high",
+        "synchronous": True,
+    }]
+    errors = _task_shape_errors(task, raw_row)
+    assert any("reset contract does not preserve" in error for error in errors)

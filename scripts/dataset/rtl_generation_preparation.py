@@ -52,6 +52,9 @@ PORT_BULLET_RE = re.compile(
 PORT_DECL_RE = re.compile(
     r"\b(input|output|inout)\b\s+([^;,)\n]+)", re.IGNORECASE
 )
+PARENTHETICAL_WIDTH_RE = re.compile(
+    r"\(\s*(\d+)\s*[- ]?\s*bits?\s*\)", re.IGNORECASE
+)
 MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", re.IGNORECASE)
 PRIVATE_FIELD_NAMES = {
     "raw_reference_rtl",
@@ -551,12 +554,17 @@ def _interface_hints(text: str | None) -> list[dict[str, Any]]:
         seen.add(name)
         packed_match = re.search(r"\[[^\]]+\]", declaration)
         packed_range = packed_match.group(0) if packed_match else None
+        width_bits = _width_bits(packed_range)
+        if packed_range is None:
+            parenthetical_width = PARENTHETICAL_WIDTH_RE.search(declaration)
+            if parenthetical_width:
+                width_bits = int(parenthetical_width.group(1))
         result.append({
             "name": name,
             "direction": direction,
             "declaration": declaration,
             "packed_range": packed_range,
-            "width_bits": _width_bits(packed_range),
+            "width_bits": width_bits,
             "signed": bool(re.search(r"\bsigned\b", declaration, re.IGNORECASE)),
             "description": None,
         })
@@ -577,18 +585,35 @@ def _clock_reset_hints(specification: str | None, ports: list[dict[str, Any]]) -
         return [], []
     clocks: list[dict[str, Any]] = []
     resets: list[dict[str, Any]] = []
+    has_reset_language = bool(re.search(r"\breset\b", specification, re.IGNORECASE))
+    synchronous_language = bool(re.search(r"\bsynchronous(?:ly)?\b|\bsync\b", specification, re.IGNORECASE))
+    asynchronous_language = bool(re.search(r"\basynchronous(?:ly)?\b|\basync\b", specification, re.IGNORECASE))
+    active_level_match = re.search(r"\bactive[- ](high|low)\b", specification, re.IGNORECASE)
+    explicit_active_level = active_level_match.group(1).lower() if active_level_match else None
+    if synchronous_language and not asynchronous_language:
+        explicit_synchronous: bool | None = True
+    elif asynchronous_language and not synchronous_language:
+        explicit_synchronous = False
+    else:
+        explicit_synchronous = None
     for port in ports:
         name = str(port["name"])
         lowered = name.lower()
         if lowered in {"clk", "clock"} or lowered.endswith("_clk"):
             edge = "negedge" if re.search(r"negative[- ]edge|negedge", specification, re.IGNORECASE) else "posedge"
             clocks.append({"signal": name, "edge": edge})
-        if (
+        reset_name = (
             lowered in {"rst", "reset", "rst_n", "reset_n", "resetn", "areset", "aresetn", "areset_n", "ar"}
             or lowered.startswith("reset_") or lowered.startswith("rst_")
-        ):
+            or (lowered == "r" and has_reset_language)
+        )
+        if reset_name:
             active = "low" if lowered.endswith("_n") or lowered.endswith("n") else "high"
-            resets.append({"signal": name, "active_level": active, "synchronous": None})
+            resets.append({
+                "signal": name,
+                "active_level": explicit_active_level or active,
+                "synchronous": explicit_synchronous,
+            })
     return clocks, resets
 
 
@@ -1204,6 +1229,7 @@ def export_generation_normalization_batches(
     source_ids: Iterable[str] | None = None,
     correction_manifest: Path | None = None,
     correction_root: Path | None = None,
+    correction_version: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     errors: list[str] = []
     rows, discovery_errors = discover_source_rows(input_path)
@@ -1261,6 +1287,7 @@ def export_generation_normalization_batches(
             selected,
             correction_manifest,
             correction_root,
+            expected_correction_version=correction_version or "assetfix_v002",
         )
         errors.extend(correction_errors)
         correction_count = len(correction_rows)
@@ -1509,6 +1536,12 @@ def _task_shape_errors(task: dict[str, Any], raw: dict[str, Any] | None = None, 
             expected_declarations=[x.get("declaration") for x in hints if isinstance(x,dict)]
             actual_declarations=[x.get("declaration") for x in ports if isinstance(x,dict)]
             if expected_declarations != actual_declarations: errors.append("port declarations do not preserve source-facing wording")
+            expected_ranges=[x.get("packed_range") for x in hints if isinstance(x,dict)]
+            actual_ranges=[x.get("packed_range") for x in ports if isinstance(x,dict)]
+            if expected_ranges != actual_ranges: errors.append("packed ranges do not preserve deterministic source hints")
+            expected_widths=[x.get("width_bits") for x in hints if isinstance(x,dict)]
+            actual_widths=[x.get("width_bits") for x in ports if isinstance(x,dict)]
+            if expected_widths != actual_widths: errors.append("port widths do not preserve deterministic source hints")
         clock_hint=raw.get("deterministic_clock_hints") or []
         reset_hint=raw.get("deterministic_reset_hints") or []
         clock=task.get("clocking") if isinstance(task.get("clocking"),dict) else {}
@@ -1516,6 +1549,20 @@ def _task_shape_errors(task: dict[str, Any], raw: dict[str, Any] | None = None, 
         if not clock_hint and (clock.get("clock_signal") is not None or clock.get("edge") is not None): errors.append("invented clock evidence")
         if not reset_hint and any(reset.get(key) is not None for key in ("signal","active_level","synchronous")):
             errors.append("invented reset evidence")
+        if len(reset_hint) == 1:
+            expected_reset = reset_hint[0]
+            actual_reset = {
+                "signal": reset.get("signal"),
+                "active_level": reset.get("active_level"),
+                "synchronous": reset.get("synchronous"),
+            }
+            expected_reset = {
+                "signal": expected_reset.get("signal"),
+                "active_level": expected_reset.get("active_level"),
+                "synchronous": expected_reset.get("synchronous"),
+            }
+            if actual_reset != expected_reset:
+                errors.append("reset contract does not preserve deterministic source hints")
         material=[w for w in raw.get("normalization_warnings",[]) if isinstance(w,str) and any(k in w for k in ("missing","ambiguous","conflict"))]
         if material and not ambiguities: errors.append("missing ambiguity record for exporter warning")
     for path, value in _walk_strings(task):
