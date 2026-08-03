@@ -54,6 +54,7 @@ endmodule
         "support_files": [],
         "dependency_closure": "passed",
         "verification_readiness": "executable_ready",
+        "qualification_status": "pending_isolated_qualification",
     }
     manifest = tmp_path / "manifest.jsonl"
     manifest.write_text(json.dumps(row) + "\n", encoding="utf-8")

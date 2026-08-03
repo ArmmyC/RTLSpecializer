@@ -244,8 +244,10 @@ def _validate_inputs(
             raise QualifiedSubsetError(f"qualified source is not train-only: {source_id}")
         if correction.get("correction_version") != CORRECTION_VERSION:
             raise QualifiedSubsetError(f"correction version mismatch: {source_id}")
-        if correction.get("dependency_closure") != "passed" or correction.get("verification_readiness") != "executable_ready":
-            raise QualifiedSubsetError(f"correction is not statically ready: {source_id}")
+        if correction.get("dependency_closure") != "passed" or correction.get("verification_readiness") != "pending_qualification":
+            raise QualifiedSubsetError(f"correction is not the immutable pending qualification row: {source_id}")
+        if correction.get("qualification_status") != "pending_isolated_qualification":
+            raise QualifiedSubsetError(f"correction qualification state was unexpectedly changed: {source_id}")
         if correction.get("support_files") != [] or correction.get("reference_modified") is not False or correction.get("reference_copied_to_support") is not False:
             raise QualifiedSubsetError(f"correction privacy contract failed: {source_id}")
         if correction.get("task_id") != source.get("task_id"):
@@ -309,7 +311,12 @@ def prepare_qualified_normalization_run(
         failed_source_ids = [row["source_id"] for row in values["failed_rows"]]
         _write_exclusive(qualified_source_ids_path, ("\n".join(qualified_source_ids) + "\n").encode("utf-8"))
         _write_exclusive(failed_source_ids_path, ("\n".join(failed_source_ids) + "\n").encode("utf-8"))
-        subset_rows = [values["correction_by_source"][source_id] for source_id in qualified_source_ids]
+        subset_rows = []
+        for source_id in qualified_source_ids:
+            subset_row = dict(values["correction_by_source"][source_id])
+            subset_row["qualification_status"] = "qualified"
+            subset_row["verification_readiness"] = "executable_ready"
+            subset_rows.append(subset_row)
         _write_jsonl(subset_manifest_path, subset_rows)
         binding = {
             "schema_version": SCHEMA_VERSION,

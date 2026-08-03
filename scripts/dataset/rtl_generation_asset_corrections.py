@@ -285,7 +285,7 @@ def load_correction_manifest(
                 "corrected_testbench_sha256", "correction_version", "correction_reason",
                 "authoring_method", "reference_modified", "reference_copied_to_support",
                 "testbench_path", "support_files", "dependency_closure",
-                "verification_readiness", "mutation_contracts", "static_audit",
+                "verification_readiness", "qualification_status", "mutation_contracts", "static_audit",
                 "frozen_split_sha256", "source_tree_sha256",
             }
             if is_v003 else CORRECTION_ROW_FIELDS

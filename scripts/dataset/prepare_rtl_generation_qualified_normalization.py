@@ -38,6 +38,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--correction-root", required=True, type=Path)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--runs-root", required=True, type=Path)
+    parser.add_argument("--resume", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -49,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
             args.run_id,
             "VerilogEval",
             args.runs_root,
+            resume=args.resume,
         )
         run_root = args.runs_root / args.run_id
         result, code = prepare_qualified_normalization_run(
