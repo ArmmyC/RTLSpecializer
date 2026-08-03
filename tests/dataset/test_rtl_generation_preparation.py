@@ -102,6 +102,27 @@ def test_clock_reset_hints_preserve_explicit_reset_contract() -> None:
     }]
 
 
+def test_clock_reset_hints_ignore_synchronous_nonreset_clause_for_async_reset() -> None:
+    specification = """
+    - input clk
+    - input areset
+    - input load
+    - output q
+
+    Implement a shift register with asynchronous positive edge triggered
+    areset, synchronous active high signals load, and enable.
+    """
+    ports = _interface_hints(specification)
+
+    _, resets = _clock_reset_hints(specification, ports)
+
+    assert resets == [{
+        "signal": "areset",
+        "active_level": "high",
+        "synchronous": False,
+    }]
+
+
 def test_short_r_is_not_a_reset_without_reset_language() -> None:
     specification = """
     - input clk

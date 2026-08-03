@@ -580,33 +580,77 @@ def _hints_from_interface_file(raw: bytes) -> tuple[str | None, list[dict[str, A
     return (names[0] if len(names) == 1 else None), _interface_hints(text)
 
 
+def _reset_synchrony_hint(
+    specification: str,
+    reset_names: list[str],
+) -> bool | None:
+    """Infer synchrony from language attached to the reset clause.
+
+    Specifications can describe synchronous enables alongside an asynchronous
+    reset, for example ``asynchronous ... areset, synchronous ... load``.
+    Looking for timing words across the whole specification incorrectly makes
+    that reset ambiguous.  Keep the hint conservative and only associate a
+    timing word with a nearby reset term without crossing clause punctuation.
+    """
+    reset_terms = [r"reset", r"rst"]
+    reset_terms.extend(
+        re.escape(name)
+        for name in reset_names
+        if isinstance(name, str) and name
+    )
+    reset_pattern = r"(?:" + "|".join(reset_terms) + r")"
+    mode_pattern = r"(?:asynchronous|async|synchronous|sync)"
+    separator = r"[^,.;!?]{0,80}"
+    modes: set[bool] = set()
+
+    for match in re.finditer(
+        rf"\b(?P<mode>{mode_pattern})\b{separator}\b(?:{reset_pattern})\b",
+        specification,
+        re.IGNORECASE,
+    ):
+        modes.add(match.group("mode").lower() in {"synchronous", "sync"})
+    for match in re.finditer(
+        rf"\b(?:{reset_pattern})\b{separator}\b(?P<mode>{mode_pattern})\b",
+        specification,
+        re.IGNORECASE,
+    ):
+        modes.add(match.group("mode").lower() in {"synchronous", "sync"})
+
+    if len(modes) == 1:
+        return modes.pop()
+    return None
+
+
 def _clock_reset_hints(specification: str | None, ports: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not isinstance(specification, str):
         return [], []
     clocks: list[dict[str, Any]] = []
     resets: list[dict[str, Any]] = []
     has_reset_language = bool(re.search(r"\breset\b", specification, re.IGNORECASE))
-    synchronous_language = bool(re.search(r"\bsynchronous(?:ly)?\b|\bsync\b", specification, re.IGNORECASE))
-    asynchronous_language = bool(re.search(r"\basynchronous(?:ly)?\b|\basync\b", specification, re.IGNORECASE))
     active_level_match = re.search(r"\bactive[- ](high|low)\b", specification, re.IGNORECASE)
     explicit_active_level = active_level_match.group(1).lower() if active_level_match else None
-    if synchronous_language and not asynchronous_language:
-        explicit_synchronous: bool | None = True
-    elif asynchronous_language and not synchronous_language:
-        explicit_synchronous = False
-    else:
-        explicit_synchronous = None
+
+    def is_reset_name(name: str) -> bool:
+        lowered = name.lower()
+        return (
+            lowered in {"rst", "reset", "rst_n", "reset_n", "resetn", "areset", "aresetn", "areset_n", "ar"}
+            or lowered.startswith("reset_") or lowered.startswith("rst_")
+            or (lowered == "r" and has_reset_language)
+        )
+
+    reset_names = [
+        str(port["name"])
+        for port in ports
+        if isinstance(port, dict) and "name" in port and is_reset_name(str(port["name"]))
+    ]
+    explicit_synchronous = _reset_synchrony_hint(specification, reset_names)
     for port in ports:
         name = str(port["name"])
         lowered = name.lower()
         if lowered in {"clk", "clock"} or lowered.endswith("_clk"):
             edge = "negedge" if re.search(r"negative[- ]edge|negedge", specification, re.IGNORECASE) else "posedge"
             clocks.append({"signal": name, "edge": edge})
-        reset_name = (
-            lowered in {"rst", "reset", "rst_n", "reset_n", "resetn", "areset", "aresetn", "areset_n", "ar"}
-            or lowered.startswith("reset_") or lowered.startswith("rst_")
-            or (lowered == "r" and has_reset_language)
-        )
+        reset_name = is_reset_name(name)
         if reset_name:
             active = "low" if lowered.endswith("_n") or lowered.endswith("n") else "high"
             resets.append({
@@ -1388,6 +1432,38 @@ def _raw_rows(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
     return [r for r in rows if isinstance(r,dict)], [f"raw batch row {i} must be an object" for i,r in enumerate(rows,1) if not isinstance(r,dict)]
 
 
+def _effective_reset_hints(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Use explicit reset language to complete an older incomplete hint.
+
+    Some already-exported public packets recorded ``synchronous: null`` when
+    the specification also mentioned synchronous enables alongside an
+    explicitly asynchronous reset.  The packet is immutable, so validation
+    may complete only that unresolved field from the preserved public
+    specification.  Conflicting concrete hint values remain authoritative and
+    are still checked normally.
+    """
+    reset_hints = raw.get("deterministic_reset_hints") or []
+    if not isinstance(reset_hints, list):
+        return []
+    specification = raw.get("raw_specification")
+    interface_hints = raw.get("deterministic_interface_hints") or []
+    if not isinstance(specification, str) or not isinstance(interface_hints, list):
+        return reset_hints
+    _, derived_hints = _clock_reset_hints(specification, interface_hints)
+    if len(reset_hints) != 1 or len(derived_hints) != 1:
+        return reset_hints
+    existing = reset_hints[0]
+    derived = derived_hints[0]
+    if (
+        existing.get("signal") == derived.get("signal")
+        and existing.get("active_level") == derived.get("active_level")
+        and existing.get("synchronous") is None
+        and derived.get("synchronous") is not None
+    ):
+        return derived_hints
+    return reset_hints
+
+
 def _task_shape_errors(task: dict[str, Any], raw: dict[str, Any] | None = None, private_assets: dict[str, dict[str, Any]] | None = None) -> list[str]:
     errors: list[str] = []
     expected = {"schema_version", "task_id", "source_id", "source_dataset", "design_family", "language", "specification", "top_module", "interface", "clocking", "reset", "latency_contract", "behavioral_constraints", "assumptions", "ambiguities", "provenance"}
@@ -1543,7 +1619,7 @@ def _task_shape_errors(task: dict[str, Any], raw: dict[str, Any] | None = None, 
             actual_widths=[x.get("width_bits") for x in ports if isinstance(x,dict)]
             if expected_widths != actual_widths: errors.append("port widths do not preserve deterministic source hints")
         clock_hint=raw.get("deterministic_clock_hints") or []
-        reset_hint=raw.get("deterministic_reset_hints") or []
+        reset_hint=_effective_reset_hints(raw)
         clock=task.get("clocking") if isinstance(task.get("clocking"),dict) else {}
         reset=task.get("reset") if isinstance(task.get("reset"),dict) else {}
         if not clock_hint and (clock.get("clock_signal") is not None or clock.get("edge") is not None): errors.append("invented clock evidence")
