@@ -355,7 +355,7 @@ def _ensure_directory(path: Path, label: str) -> Path:
         raise WorkflowError(f"{label} existing ancestor is not a directory: {current}")
     for directory in reversed(missing):
         try:
-            directory.mkdir()
+            directory.mkdir(mode=stat.S_IRWXU)
         except FileExistsError:
             if _contains_symlink(directory) or not directory.is_dir():
                 raise WorkflowError(f"{label} became unsafe while creating: {directory}")
@@ -1160,7 +1160,7 @@ def _validate_candidate_task_join(tasks: list[dict[str, Any]], assets: dict[str,
 
 
 def _write_staged_file(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_directory(path.parent, "staged output parent")
     if _contains_symlink(path) or path.exists():
         raise WorkflowError(f"staged output path is not new and regular: {path}")
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IRUSR | stat.S_IWUSR)
