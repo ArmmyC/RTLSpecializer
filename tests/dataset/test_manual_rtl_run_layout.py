@@ -90,6 +90,11 @@ def test_run_validation_accepts_nested_verification_workspace(tmp_path: Path) ->
     for attempt_number in ("02", "03", "04"):
         (run / "verification" / f"attempt_{attempt_number}" / "workspace").mkdir(parents=True)
 
+    recovery_workspace = run / "verification" / "attempt_01_retry_01" / "workspace" / "rtlgen_synthetic_example_attempt_01"
+    recovery_workspace.mkdir(parents=True)
+    (recovery_workspace / "candidate.sv").write_text("module TopModule; endmodule\n", encoding="utf-8")
+    (recovery_workspace / "testbench.sv").write_text("module tb; endmodule\n", encoding="utf-8")
+
     report, code = validate_manual_rtl_run(run)
     assert code == 0, report
     assert report["ok"] is True
@@ -104,6 +109,9 @@ def test_run_validation_accepts_nested_verification_workspace(tmp_path: Path) ->
         "verification/attempt_05",
         "verification/attempt_1",
         "verification/attempt_01_extra",
+        "verification/attempt_01_retry_0",
+        "verification/attempt_01_retry_00",
+        "verification/attempt_01_retry_bad",
         "verification/random",
         "verification/attempt_05/workspace",
         "verification/attempt_01/unexpected_directory",
