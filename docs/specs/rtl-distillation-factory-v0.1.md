@@ -200,6 +200,13 @@ order, split membership, candidate and evidence hash chains, privacy boundary,
 and runner provenance. It reports these gates explicitly and reads task
 identity from `messages[1]["content"]`, never from the message wrapper.
 
+For later bounded batches, the same packager accepts a
+`rtl_generation_qualified_subset_binding_v0.1` alongside the larger
+qualification report. Only rows present in that passed subset may be
+packaged; failed candidates remain in `rejected_rows.jsonl` with a bounded
+repair reason. The base frozen split remains authoritative for train
+membership, while the qualified binding proves corrected-asset readiness.
+
 Package privacy scanning is recursive over content values, including nested
 lists and metadata values, but does not treat harmless metadata keys or public
 RTLBench provenance values as leaked content. Private paths, testbench or

@@ -10,6 +10,7 @@ from scripts.dataset.rtl_generation_dataset import (
     _validate_attempt_row,
     _contains_private_marker,
     _package_task_records,
+    _validate_qualified_subset_provenance,
     _validate_smoke_task_order,
     package_verified_rtl_generation_dataset,
     validate_generation_sft_package,
@@ -393,6 +394,105 @@ def test_package_task_records_read_user_content() -> None:
 def test_private_scan_ignores_metadata_keys_but_checks_values() -> None:
     assert _contains_private_marker({"rtlbench_commit": "a" * 40}) is False
     assert _contains_private_marker({"diagnostic": "/tmp/private.sv"}) is True
+
+
+def test_qualified_subset_provenance_accepts_passed_subset_binding(tmp_path) -> None:
+    task = _task()
+    split_path = tmp_path / "split.json"
+    split_path.write_text(json.dumps(_split(task, split_path)) + "\n", encoding="utf-8")
+
+    qualification = tmp_path / "qualification.json"
+    qualification.write_text(json.dumps({
+        "schema_version": "rtl_asset_qualification_report_v0.1",
+        "rows": [{
+            "source_id": task["source_id"],
+            "task_id": task["task_id"],
+            "qualification_passed": True,
+        }],
+    }) + "\n", encoding="utf-8")
+    correction = tmp_path / "correction.jsonl"
+    correction.write_text(json.dumps({
+        "source_id": task["source_id"],
+        "task_id": task["task_id"],
+        "split": "train",
+        "correction_version": "assetfix_v003",
+        "dependency_closure": "passed",
+        "verification_readiness": "executable_ready",
+        "support_files": [],
+        "reference_copied_to_support": False,
+        "corrected_testbench_sha256": "c" * 64,
+    }) + "\n", encoding="utf-8")
+    binding = tmp_path / "binding.json"
+    binding.write_text(json.dumps({
+        "schema_version": "rtl_generation_qualified_subset_binding_v0.1",
+        "source_commit": "a" * 40,
+        "source_tree_sha256": "b" * 64,
+        "frozen_split_sha256": hashlib.sha256(split_path.read_bytes()).hexdigest(),
+        "correction_version": "assetfix_v003",
+        "qualification_result": "passed",
+        "qualification_validator_authoritative": True,
+        "reference_rtl_supplied": False,
+        "support_file_count": 0,
+        "qualification_report_sha256": hashlib.sha256(qualification.read_bytes()).hexdigest(),
+        "qualified_correction_manifest_sha256": hashlib.sha256(correction.read_bytes()).hexdigest(),
+        "qualified_task_count": 1,
+        "rows": [{
+            "source_id": task["source_id"],
+            "task_id": task["task_id"],
+            "qualification_result": "passed",
+            "corrected_testbench_sha256": "c" * 64,
+        }],
+    }) + "\n", encoding="utf-8")
+
+    context, errors = _validate_qualified_subset_provenance(
+        tasks=[task],
+        split_path=split_path,
+        base_split_path=None,
+        source_acquisition_path=None,
+        asset_qualification_path=qualification,
+        qualification_binding_path=binding,
+        qualified_correction_manifest_path=correction,
+        expected_source_commit="a" * 40,
+        expected_source_tree_sha256="b" * 64,
+        expected_frozen_split_sha256=hashlib.sha256(split_path.read_bytes()).hexdigest(),
+    )
+
+    assert errors == []
+    assert context["qualification_passed"] is True
+    assert context["qualified_source_ids"] == [task["source_id"]]
+
+
+def test_qualified_subset_provenance_rejects_unbound_task(tmp_path) -> None:
+    task = _task()
+    split_path = tmp_path / "split.json"
+    split_path.write_text(json.dumps(_split(task, split_path)) + "\n", encoding="utf-8")
+    qualification = tmp_path / "qualification.json"
+    qualification.write_text(json.dumps({
+        "schema_version": "rtl_asset_qualification_report_v0.1",
+        "rows": [],
+    }) + "\n", encoding="utf-8")
+    correction = tmp_path / "correction.jsonl"
+    correction.write_text(json.dumps({"source_id": "other", "task_id": "other"}) + "\n", encoding="utf-8")
+    binding = tmp_path / "binding.json"
+    binding.write_text(json.dumps({
+        "schema_version": "rtl_generation_qualified_subset_binding_v0.1",
+        "rows": [],
+    }) + "\n", encoding="utf-8")
+
+    _, errors = _validate_qualified_subset_provenance(
+        tasks=[task],
+        split_path=split_path,
+        base_split_path=None,
+        source_acquisition_path=None,
+        asset_qualification_path=qualification,
+        qualification_binding_path=binding,
+        qualified_correction_manifest_path=correction,
+        expected_source_commit="a" * 40,
+        expected_source_tree_sha256="b" * 64,
+        expected_frozen_split_sha256=hashlib.sha256(split_path.read_bytes()).hexdigest(),
+    )
+
+    assert any("absent from qualified subset" in error for error in errors)
 
 
 def test_package_privacy_scope_covers_metadata_paths_testbench_mutations_and_reference() -> None:

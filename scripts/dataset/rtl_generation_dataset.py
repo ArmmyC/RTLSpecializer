@@ -97,6 +97,9 @@ RECOVERY_AUTHORIZATION_SCHEMA_VERSION = "rtl_dataset_packaging_recovery_authoriz
 RECOVERY_PACKAGE_ID = "rtl_generation_smoke_v001_retry_01"
 RECOVERY_PARENT_PACKAGE_ID = "rtl_generation_smoke_v001"
 RECOVERY_REASON = "packaging_source_defect"
+QUALIFIED_SUBSET_BINDING_SCHEMA = "rtl_generation_qualified_subset_binding_v0.1"
+QUALIFIED_SUBSET_CORRECTION_VERSION = "assetfix_v003"
+QUALIFIED_SUBSET_REPORT_SCHEMA = "rtl_asset_qualification_report_v0.1"
 
 
 def _display(path: Path) -> str:
@@ -298,6 +301,41 @@ def _validate_attempt_row(attempt: dict[str, Any], label: str) -> list[str]:
     errors.extend(diagnostic_errors)
     if not isinstance(attempt.get("candidate_sha256"), str) or not SHA256_RE.fullmatch(attempt.get("candidate_sha256", "")):
         errors.append(f"{label}.candidate_sha256 is invalid")
+    return sorted(set(errors))
+
+
+def _validate_package_attempt_row(attempt: dict[str, Any], label: str) -> list[str]:
+    """Validate an attempt input while permitting excluded candidate failures."""
+    if attempt.get("accepted") is True:
+        return _validate_attempt_row(attempt, label)
+    errors: list[str] = []
+    if attempt.get("schema_version") != ATTEMPT_SCHEMA_VERSION:
+        errors.append(f"{label} has the wrong attempt schema")
+    if attempt.get("verification_profile") != PROFILE:
+        errors.append(f"{label} has the wrong verification profile")
+    for field in (
+        "candidate_id", "task_id", "source_id", "top_module", "attempt",
+        "candidate_sha256", "failure_category", "checks", "mismatch_summary",
+        "diagnostics", "toolchain",
+    ):
+        if field not in attempt:
+            errors.append(f"{label} is missing {field}")
+    if attempt.get("failure_category") in {None, "passed"}:
+        errors.append(f"{label} has no failure category")
+    if not isinstance(attempt.get("diagnostics"), list) or not all(isinstance(item, str) for item in attempt.get("diagnostics", [])):
+        errors.append(f"{label}.diagnostics is invalid")
+    else:
+        errors.extend(_private_marker_errors(attempt["diagnostics"], f"{label}.diagnostics"))
+    try:
+        _validate_checks(attempt.get("checks"), REQUESTED_CHECKS)
+        _validate_mismatch(attempt.get("mismatch_summary"))
+        _validate_toolchain(attempt.get("toolchain"), f"{label}.toolchain")
+    except (WorkflowError, TypeError, KeyError, ValueError) as exc:
+        errors.append(f"{label} verification fields are invalid: {exc}")
+    if not isinstance(attempt.get("candidate_sha256"), str) or not SHA256_RE.fullmatch(attempt.get("candidate_sha256", "")):
+        errors.append(f"{label}.candidate_sha256 is invalid")
+    if attempt.get("candidate_id") != f"{attempt.get('task_id')}_attempt_{attempt.get('attempt', 0):02d}":
+        errors.append(f"{label}.candidate_id is not deterministic")
     return sorted(set(errors))
 
 
@@ -861,6 +899,179 @@ def _validate_smoke_task_order(tasks: list[dict[str, Any]]) -> list[str]:
     return []
 
 
+def _validate_qualified_subset_provenance(
+    *,
+    tasks: list[dict[str, Any]],
+    split_path: Path,
+    base_split_path: Path | None,
+    source_acquisition_path: Path | None,
+    asset_qualification_path: Path,
+    qualification_binding_path: Path,
+    qualified_correction_manifest_path: Path,
+    expected_source_commit: str,
+    expected_source_tree_sha256: str,
+    expected_frozen_split_sha256: str,
+) -> tuple[dict[str, Any], list[str]]:
+    """Validate a passed subset of a larger qualification run.
+
+    Batch qualification reports can cover more tasks than the generation
+    package.  The qualified-subset binding is the authority for which rows
+    are eligible; the original qualification report is retained as the
+    evidence source and is never rewritten.
+    """
+    errors: list[str] = []
+    base_split: dict[str, Any] | None = None
+    acquisition: dict[str, Any] | None = None
+    try:
+        report = _load_json(asset_qualification_path)
+        binding = _load_json(qualification_binding_path)
+        qualified_rows = _load_jsonl(qualified_correction_manifest_path)
+        split_by_task, split_errors = _load_split(split_path)
+        errors.extend(split_errors)
+        base_split = _load_json(base_split_path) if base_split_path is not None else None
+        acquisition = _load_json(source_acquisition_path) if source_acquisition_path is not None else None
+    except (OSError, UnicodeError, json.JSONDecodeError, WorkflowError) as exc:
+        return {}, [f"could not load qualified-subset provenance: {exc}"]
+
+    if not isinstance(report, dict) or report.get("schema_version") != QUALIFIED_SUBSET_REPORT_SCHEMA:
+        errors.append("qualified-subset qualification report has the wrong schema")
+        report = {}
+    if not isinstance(binding, dict) or binding.get("schema_version") != QUALIFIED_SUBSET_BINDING_SCHEMA:
+        errors.append("qualified-subset binding has the wrong schema")
+        binding = {}
+    if not isinstance(base_split, (dict, type(None))):
+        errors.append("base split must be an object")
+        base_split = None
+    if not isinstance(acquisition, (dict, type(None))):
+        errors.append("source acquisition must be an object")
+        acquisition = None
+
+    if base_split_path is not None:
+        if _sha256_file(base_split_path) != expected_frozen_split_sha256:
+            errors.append("base frozen split hash mismatch")
+        if not isinstance(base_split, dict) or base_split.get("row_count") != 156 or base_split.get("counts") != {"train": 111, "validation": 23, "test": 22}:
+            errors.append("base frozen split counts are not the pinned 156-row split")
+    if source_acquisition_path is not None:
+        if not isinstance(acquisition, dict):
+            errors.append("source acquisition is missing")
+        else:
+            if acquisition.get("schema_version") != "rtl_source_acquisition_v0.1":
+                errors.append("source acquisition has the wrong schema")
+            if acquisition.get("repository") != "NVlabs/verilog-eval":
+                errors.append("source acquisition repository identity mismatch")
+            if acquisition.get("source_commit") != expected_source_commit:
+                errors.append("source acquisition commit mismatch")
+            if acquisition.get("source_tree_sha256") != expected_source_tree_sha256:
+                errors.append("source acquisition tree hash mismatch")
+            if acquisition.get("row_count") != 156 or acquisition.get("dirty_checkout") is not False or acquisition.get("symlink_count") != 0:
+                errors.append("source acquisition cleanliness or row count mismatch")
+
+    for field, expected in (
+        ("source_commit", expected_source_commit),
+        ("source_tree_sha256", expected_source_tree_sha256),
+        ("frozen_split_sha256", expected_frozen_split_sha256),
+        ("correction_version", QUALIFIED_SUBSET_CORRECTION_VERSION),
+    ):
+        if binding.get(field) != expected:
+            errors.append(f"qualified-subset binding {field} mismatch")
+    if binding.get("qualification_result") not in {None, "passed"}:
+        errors.append("qualified-subset binding is not passed")
+    if binding.get("qualification_validator_authoritative") is not True:
+        errors.append("qualified-subset binding is not authoritative")
+    if binding.get("reference_rtl_supplied") is not False:
+        errors.append("qualified-subset binding supplied reference RTL")
+    if binding.get("support_file_count") != 0:
+        errors.append("qualified-subset binding contains support files")
+    if binding.get("qualification_report_sha256") != _sha256_file(asset_qualification_path):
+        errors.append("qualified-subset binding qualification-report hash mismatch")
+    if binding.get("qualified_correction_manifest_sha256") != _sha256_file(qualified_correction_manifest_path):
+        errors.append("qualified-subset binding correction-manifest hash mismatch")
+
+    report_rows = report.get("rows") if isinstance(report, dict) else None
+    report_by_source = {
+        row.get("source_id"): row
+        for row in report_rows or []
+        if isinstance(row, dict) and isinstance(row.get("source_id"), str)
+    }
+    binding_rows = binding.get("rows") if isinstance(binding, dict) else None
+    binding_by_source = {
+        row.get("source_id"): row
+        for row in binding_rows or []
+        if isinstance(row, dict) and isinstance(row.get("source_id"), str)
+    }
+    correction_by_source = {
+        row.get("source_id"): row
+        for row in qualified_rows
+        if isinstance(row, dict) and isinstance(row.get("source_id"), str)
+    }
+    qualified_source_ids = [row.get("source_id") for row in binding_rows or []]
+    if len(qualified_source_ids) != len(set(qualified_source_ids)):
+        errors.append("qualified-subset binding contains duplicate source IDs")
+    if binding.get("qualified_task_count") != len(qualified_source_ids):
+        errors.append("qualified-subset binding task count mismatch")
+    if len(qualified_rows) != len(qualified_source_ids) or set(correction_by_source) != set(qualified_source_ids):
+        errors.append("qualified correction manifest does not match the passed subset")
+
+    task_by_source = {task.get("source_id"): task for task in tasks}
+    if len(task_by_source) != len(tasks):
+        errors.append("package tasks contain duplicate source IDs")
+    for task in tasks:
+        source_id = task.get("source_id")
+        task_id = task.get("task_id")
+        binding_row = binding_by_source.get(source_id)
+        report_row = report_by_source.get(source_id)
+        correction_row = correction_by_source.get(source_id)
+        if binding_row is None:
+            errors.append(f"task is absent from qualified subset: {task_id}")
+            continue
+        if binding_row.get("task_id") != task_id or binding_row.get("qualification_result") != "passed":
+            errors.append(f"qualified-subset task identity or result mismatch: {task_id}")
+        if not isinstance(report_row, dict) or report_row.get("qualification_passed") is not True:
+            errors.append(f"task does not have a passed qualification row: {task_id}")
+        if not isinstance(correction_row, dict):
+            errors.append(f"task is absent from qualified correction manifest: {task_id}")
+        else:
+            if correction_row.get("task_id") != task_id or correction_row.get("split") != "train":
+                errors.append(f"qualified correction identity or split mismatch: {task_id}")
+            if correction_row.get("correction_version") != QUALIFIED_SUBSET_CORRECTION_VERSION:
+                errors.append(f"qualified correction version mismatch: {task_id}")
+            if correction_row.get("dependency_closure") != "passed" or correction_row.get("verification_readiness") != "executable_ready":
+                errors.append(f"qualified correction is not executable-ready: {task_id}")
+            if correction_row.get("support_files") != [] or correction_row.get("reference_copied_to_support") is not False:
+                errors.append(f"qualified correction privacy contract failed: {task_id}")
+            if binding_row.get("corrected_testbench_sha256") != correction_row.get("corrected_testbench_sha256"):
+                errors.append(f"corrected testbench hash mismatch: {task_id}")
+
+        split_row = split_by_task.get(task_id)
+        if split_row is None or split_row.get("split") != "train":
+            errors.append(f"task is not in the frozen train split: {task_id}")
+        if split_row is not None and split_row.get("verification_readiness") not in {"executable_ready", "needs_testbench"}:
+            errors.append(f"task has invalid split readiness: {task_id}")
+
+    qualification_report_hash = _sha256_file(asset_qualification_path)
+    qualification_binding_hash = _sha256_file(qualification_binding_path)
+    context = {
+        "source_commit": expected_source_commit,
+        "source_tree_sha256": expected_source_tree_sha256,
+        "frozen_split_sha256": expected_frozen_split_sha256,
+        "readiness_split_sha256": _sha256_file(split_path),
+        "source_acquisition_sha256": _sha256_file(source_acquisition_path) if source_acquisition_path is not None else None,
+        "qualified_correction_manifest_sha256": _sha256_file(qualified_correction_manifest_path),
+        "qualification_report_sha256": qualification_report_hash,
+        "qualification_binding_sha256": qualification_binding_hash,
+        "correction_version": binding.get("correction_version"),
+        "qualification_source": binding.get("qualification_scope", "qualified_subset"),
+        "qualification_passed": not errors,
+        "reference_supplied": False,
+        "qualified_source_ids": qualified_source_ids,
+        "qualified_by_source": correction_by_source,
+        "binding_by_source": binding_by_source,
+        "mutation_rows": sum(row.get("mutation_rows", 0) for row in binding_rows or [] if isinstance(row.get("mutation_rows", 0), int)),
+        "detected_mutations": sum(row.get("detected_mutations", 0) for row in binding_rows or [] if isinstance(row.get("detected_mutations", 0), int)),
+    }
+    return context, sorted(set(errors))
+
+
 def _make_row(
     task: dict[str, Any],
     candidate: dict[str, Any],
@@ -1005,6 +1216,7 @@ def validate_generation_sft_package(
     loaded: dict[str, list[dict[str, Any]]] = {}
     qualification_report_hash_match: bool | None = None
     pinned_task_order_match: bool | None = None
+    qualified_subset_mode = False
     private_content_detected = False
     for name in ("all", "train", "rejected_rows"):
         path = paths[name]
@@ -1065,10 +1277,11 @@ def validate_generation_sft_package(
                     errors.append("manifest asset qualification hash is invalid")
             if asset_qualification_path is not None:
                 try:
-                    from scripts.dataset.rtl_generation_smoke_run import validate_qualification_report_metadata
+                    if require_smoke_provenance:
+                        from scripts.dataset.rtl_generation_smoke_run import validate_qualification_report_metadata
 
-                    _, qualification_errors = validate_qualification_report_metadata(asset_qualification_path)
-                    errors.extend(qualification_errors)
+                        _, qualification_errors = validate_qualification_report_metadata(asset_qualification_path)
+                        errors.extend(qualification_errors)
                     qualification_report_hash_match = (
                         manifest.get("qualification_report_sha256") == _sha256_file(asset_qualification_path)
                         and manifest.get("asset_qualification_sha256") == _sha256_file(asset_qualification_path)
@@ -1079,9 +1292,20 @@ def validate_generation_sft_package(
                     errors.append(f"invalid supplied asset qualification report: {exc}")
             if qualification_binding_path is not None:
                 try:
-                    from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
+                    if require_smoke_provenance:
+                        from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
 
-                    binding = validate_binding_report(qualification_binding_path)
+                        binding = validate_binding_report(qualification_binding_path)
+                    else:
+                        binding = _load_json(qualification_binding_path)
+                        qualified_subset_mode = (
+                            isinstance(binding, dict)
+                            and binding.get("schema_version") == QUALIFIED_SUBSET_BINDING_SCHEMA
+                        )
+                        if not qualified_subset_mode:
+                            from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
+
+                            binding = validate_binding_report(qualification_binding_path)
                     if asset_qualification_path is not None:
                         if binding.get("qualification_report_sha256") != _sha256_file(asset_qualification_path):
                             qualification_report_hash_match = False
@@ -1090,6 +1314,16 @@ def validate_generation_sft_package(
                         errors.append("manifest qualification binding hash does not match the supplied binding")
                 except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
                     errors.append(f"invalid supplied qualification binding: {exc}")
+            if asset_qualification_path is not None and qualification_binding_path is not None and not require_smoke_provenance and not qualified_subset_mode:
+                try:
+                    from scripts.dataset.rtl_generation_smoke_run import validate_qualification_report_metadata
+                    from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
+
+                    _, qualification_errors = validate_qualification_report_metadata(asset_qualification_path)
+                    errors.extend(qualification_errors)
+                    validate_binding_report(qualification_binding_path)
+                except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+                    errors.append(f"invalid supplied legacy qualification inputs: {exc}")
         except (OSError, UnicodeError, json.JSONDecodeError, WorkflowError) as exc:
             errors.append(f"invalid package manifest: {exc}")
     if paths["statistics"].exists():
@@ -1178,6 +1412,65 @@ def validate_generation_sft_package(
                     errors.append("private content detected in package rows")
             except (OSError, UnicodeError, json.JSONDecodeError, WorkflowError, TypeError) as exc:
                 errors.append(f"invalid smoke provenance inputs: {exc}")
+    elif qualified_subset_mode and asset_qualification_path is not None and qualification_binding_path is not None:
+        qualification_split_path = readiness_split_path or base_split_path
+        if qualification_split_path is None:
+            errors.append("qualified-subset validation requires a split manifest")
+        elif qualified_correction_manifest_path is None:
+            errors.append("qualified-subset validation requires a correction manifest")
+        else:
+            try:
+                package_tasks = _package_task_records(loaded.get("all", []))
+                context, context_errors = _validate_qualified_subset_provenance(
+                    tasks=package_tasks,
+                    split_path=qualification_split_path,
+                    base_split_path=base_split_path,
+                    source_acquisition_path=source_acquisition_path,
+                    asset_qualification_path=asset_qualification_path,
+                    qualification_binding_path=qualification_binding_path,
+                    qualified_correction_manifest_path=qualified_correction_manifest_path,
+                    expected_source_commit=expected_source_commit or "",
+                    expected_source_tree_sha256=expected_source_tree_sha256 or "",
+                    expected_frozen_split_sha256=expected_frozen_split_sha256 or "",
+                )
+                errors.extend(context_errors)
+                for field, context_key in (
+                    ("source_commit", "source_commit"),
+                    ("source_tree_sha256", "source_tree_sha256"),
+                    ("frozen_split_sha256", "frozen_split_sha256"),
+                    ("readiness_split_sha256", "readiness_split_sha256"),
+                    ("source_acquisition_sha256", "source_acquisition_sha256"),
+                    ("qualified_correction_manifest_sha256", "qualified_correction_manifest_sha256"),
+                    ("qualification_report_sha256", "qualification_report_sha256"),
+                    ("qualification_binding_sha256", "qualification_binding_sha256"),
+                ):
+                    if manifest.get(field) != context.get(context_key):
+                        errors.append(f"manifest {field} does not match qualified-subset provenance")
+                if manifest.get("qualification_passed") is not True or manifest.get("reference_supplied") is not False:
+                    errors.append("qualified-subset manifest qualification or reference policy mismatch")
+                expected_profile = expected_runner_profile
+                expected_image = expected_runner_image
+                if expected_profile is not None and manifest.get("runner_profile") != expected_profile:
+                    errors.append("qualified-subset manifest runner profile mismatch")
+                if expected_image is not None and manifest.get("runner_image_id") != expected_image:
+                    errors.append("qualified-subset manifest runner image mismatch")
+                package_source_ids = [row.get("source_id") for row in loaded.get("all", [])]
+                qualified_order = [source_id for source_id in context.get("qualified_source_ids", []) if source_id in package_source_ids]
+                pinned_task_order_match = package_source_ids == qualified_order
+                if not pinned_task_order_match:
+                    errors.append("qualified-subset package task order does not match the passed qualified order")
+                for row in loaded.get("all", []):
+                    verification = row.get("verification", {})
+                    if verification.get("qualification_passed") is not True or verification.get("reference_supplied") is not False:
+                        errors.append(f"qualified-subset row is not qualification-bound: {row.get('task_id')}")
+                    if expected_profile is not None and verification.get("runner_profile") != expected_profile:
+                        errors.append(f"qualified-subset row runner profile mismatch: {row.get('task_id')}")
+                    if _contains_private_marker(row):
+                        private_content_detected = True
+                if private_content_detected:
+                    errors.append("private content detected in qualified-subset package rows")
+            except (OSError, UnicodeError, json.JSONDecodeError, WorkflowError, TypeError, ValueError) as exc:
+                errors.append(f"invalid qualified-subset provenance inputs: {exc}")
     lineage = manifest.get("lineage") if isinstance(manifest, dict) else None
     consumable = bool(
         not errors
@@ -1272,28 +1565,47 @@ def package_verified_rtl_generation_dataset(
             errors.append("unexpected smoke runner image")
     errors.extend(_check_output_dir(output_dir, force))
     qualification_report: dict[str, Any] | None = None
+    qualified_subset_mode = False
     if require_asset_qualification and asset_qualification_path is None:
         errors.append("asset qualification report is required for this package")
     if asset_qualification_path is not None:
         try:
-            from scripts.dataset.rtl_generation_smoke_run import validate_qualification_report_metadata
+            qualification_report = _load_json(asset_qualification_path)
+            if require_smoke_provenance:
+                from scripts.dataset.rtl_generation_smoke_run import validate_qualification_report_metadata
 
-            qualification_report, qualification_errors = validate_qualification_report_metadata(asset_qualification_path)
-            errors.extend(qualification_errors)
+                qualification_report, qualification_errors = validate_qualification_report_metadata(asset_qualification_path)
+                errors.extend(qualification_errors)
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
             errors.append(f"invalid asset qualification report: {exc}")
     qualification_binding: dict[str, Any] | None = None
     if qualification_binding_path is not None:
         try:
-            from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
+            qualification_binding = _load_json(qualification_binding_path)
+            qualified_subset_mode = (
+                isinstance(qualification_binding, dict)
+                and qualification_binding.get("schema_version") == QUALIFIED_SUBSET_BINDING_SCHEMA
+            )
+            if require_smoke_provenance or not qualified_subset_mode:
+                from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
 
-            qualification_binding = validate_binding_report(qualification_binding_path)
+                qualification_binding = validate_binding_report(qualification_binding_path)
             if asset_qualification_path is None:
                 errors.append("qualification binding requires an asset qualification report")
-            elif qualification_binding.get("qualification_report_sha256") != _sha256_file(asset_qualification_path):
+            elif isinstance(qualification_binding, dict) and qualification_binding.get("qualification_report_sha256") != _sha256_file(asset_qualification_path):
                 errors.append("qualification binding does not match the supplied asset qualification report")
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
             errors.append(f"invalid qualification binding: {exc}")
+    if not require_smoke_provenance and not qualified_subset_mode and asset_qualification_path is not None and qualification_binding_path is not None:
+        try:
+            from scripts.dataset.rtl_generation_smoke_run import validate_qualification_report_metadata
+            from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
+
+            qualification_report, qualification_errors = validate_qualification_report_metadata(asset_qualification_path)
+            errors.extend(qualification_errors)
+            qualification_binding = validate_binding_report(qualification_binding_path)
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            errors.append(f"invalid legacy qualification inputs: {exc}")
     try:
         tasks = _load_jsonl(tasks_path)
         candidates = _load_jsonl(candidates_path)
@@ -1321,12 +1633,32 @@ def package_verified_rtl_generation_dataset(
         errors.extend(smoke_errors)
         if smoke_context:
             smoke_context["qualification_passed"] = True
+    elif qualified_subset_mode and asset_qualification_path is not None and qualification_binding_path is not None:
+        qualified_context, qualified_errors = _validate_qualified_subset_provenance(
+            tasks=tasks,
+            split_path=split_path,
+            base_split_path=base_split_path,
+            source_acquisition_path=source_acquisition_path,
+            asset_qualification_path=asset_qualification_path,
+            qualification_binding_path=qualification_binding_path,
+            qualified_correction_manifest_path=qualified_correction_manifest_path,
+            expected_source_commit=expected_source_commit or "",
+            expected_source_tree_sha256=expected_source_tree_sha256 or "",
+            expected_frozen_split_sha256=expected_frozen_split_sha256 or "",
+        )
+        errors.extend(qualified_errors)
+        if qualified_context:
+            smoke_context = qualified_context
+            qualification_report = _load_json(asset_qualification_path)
+            qualification_binding = _load_json(qualification_binding_path)
+    elif require_asset_qualification:
+        errors.append("qualified-subset qualification binding is required for this package")
     evidence_rows, evidence_hash_by_candidate, sidecar_by_candidate, evidence_errors = _load_evidence_bundle(
         evidence_path,
         sidecar_path,
         expected_commit=expected_rtlbench_commit,
-        expected_profile=expected_runner_profile if require_smoke_provenance else None,
-        expected_image=expected_runner_image if require_smoke_provenance else None,
+        expected_profile=expected_runner_profile,
+        expected_image=expected_runner_image,
         strict=strict,
     )
     errors.extend(evidence_errors)
@@ -1360,7 +1692,7 @@ def package_verified_rtl_generation_dataset(
 
     attempt_by_candidate: dict[str, dict[str, Any]] = {}
     for index, attempt in enumerate(attempts, 1):
-        errors.extend(_validate_attempt_row(attempt, f"attempt row {index}"))
+        errors.extend(_validate_package_attempt_row(attempt, f"attempt row {index}"))
         candidate_id = attempt.get("candidate_id")
         if isinstance(candidate_id, str) and candidate_id in attempt_by_candidate:
             errors.append(f"duplicate attempt candidate_id: {candidate_id}")
@@ -1382,6 +1714,8 @@ def package_verified_rtl_generation_dataset(
 
     accepted_by_task: dict[ str, list[tuple[dict[str, Any], dict[str, Any], dict[str, Any], str | None, dict[str, Any] | None]]] = {}
     rejected: list[dict[str, Any]] = []
+    qualified_source_ids = set(smoke_context.get("qualified_source_ids", []))
+    failed_attempts_by_task: dict[str, list[dict[str, Any]]] = {}
     for candidate_id, attempt in sorted(attempt_by_candidate.items()):
         candidate = candidate_by_id.get(candidate_id)
         if candidate is None:
@@ -1405,7 +1739,7 @@ def package_verified_rtl_generation_dataset(
             if attempt.get("accepted"):
                 rejected.append({"task_id": task_id, "source_id": task.get("source_id"), "reason": "accepted non-training candidate excluded"})
             continue
-        if split_row.get("verification_readiness") != "executable_ready":
+        if split_row.get("verification_readiness") != "executable_ready" and task.get("source_id") not in qualified_source_ids:
             rejected.append({"task_id": task_id, "source_id": task.get("source_id"), "reason": "task is not executable_ready"})
             continue
         if asset_qualification_path is not None:
@@ -1442,11 +1776,13 @@ def package_verified_rtl_generation_dataset(
             errors.append(f"accepted attempt has no runner sidecar: {candidate_id}")
         if attempt.get("accepted") is True:
             accepted_by_task.setdefault(task_id, []).append((candidate, attempt, task, evidence_hash, runner_identity))
+        else:
+            failed_attempts_by_task.setdefault(task_id, []).append(attempt)
 
     primary_rows: list[dict[str, Any]] = []
     augmentation_rows: list[dict[str, Any]] = []
     task_order = [task.get("task_id") for task in tasks if isinstance(task.get("task_id"), str)]
-    ordered_task_ids = task_order if (require_smoke_provenance or require_recovery_lineage) else sorted(accepted_by_task)
+    ordered_task_ids = task_order if (require_smoke_provenance or require_recovery_lineage or qualification_binding is not None) else sorted(accepted_by_task)
     for task_id in ordered_task_ids:
         if task_id not in accepted_by_task:
             continue
@@ -1473,8 +1809,15 @@ def package_verified_rtl_generation_dataset(
     accepted_task_ids = set(accepted_by_task)
     for task_id, task in sorted(task_by_id.items()):
         split_row = split_by_task.get(task_id)
-        if split_row and split_row.get("split") == "train" and split_row.get("verification_readiness") == "executable_ready" and task_id not in accepted_task_ids:
-            rejected.append({"task_id": task_id, "source_id": task.get("source_id"), "reason": "no accepted candidate"})
+        if split_row and split_row.get("split") == "train" and (split_row.get("verification_readiness") == "executable_ready" or task.get("source_id") in qualified_source_ids) and task_id not in accepted_task_ids:
+            failed_attempts = failed_attempts_by_task.get(task_id, [])
+            failure_category = failed_attempts[-1].get("failure_category") if failed_attempts else None
+            reason = (
+                f"{failure_category}_pending_repair"
+                if failure_category in {"compile_failure", "functional_mismatch", "timeout"}
+                else "no accepted candidate"
+            )
+            rejected.append({"task_id": task_id, "source_id": task.get("source_id"), "reason": reason})
 
     if errors and strict:
         return {"ok": False, "errors": sorted(set(errors)), "accepted_rows": 0, "rejected_rows": len(rejected)}, 1
@@ -1520,8 +1863,8 @@ def package_verified_rtl_generation_dataset(
         "mutation_rows": smoke_context.get("mutation_rows"),
         "detected_mutations": smoke_context.get("detected_mutations"),
         "reference_supplied": smoke_context.get("reference_supplied"),
-        "runner_profile": expected_runner_profile if require_smoke_provenance else None,
-        "runner_image_id": expected_runner_image if require_smoke_provenance else None,
+        "runner_profile": expected_runner_profile,
+        "runner_image_id": expected_runner_image,
         "all_rows": len(all_rows),
         "train_rows": len(primary_rows),
         "augmentation_rows": len(augmentation_rows),
