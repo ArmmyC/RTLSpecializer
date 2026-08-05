@@ -82,3 +82,29 @@ def test_qualified_rows_rejects_a_failed_task_in_qualified_list() -> None:
         assert "qualified task list" in str(exc)
     else:
         raise AssertionError("failed task was accepted as qualified")
+
+
+def test_qualified_rows_supports_a_different_passed_subset_size() -> None:
+    selected = ["SourceA", "SourceB", "SourceC"]
+    report_rows = [
+        {
+            "source_id": source_id,
+            "task_id": f"Task{source_id}",
+            "qualification_passed": source_id != "SourceB",
+            "qualification_status": "qualified" if source_id != "SourceB" else "positive_candidate_failed",
+        }
+        for source_id in selected
+    ]
+    qualified, failed = _qualification_rows(
+        qualification_report={
+            "schema_version": "rtl_asset_qualification_report_v0.1",
+            "errors": [],
+            "selected_tasks": 3,
+            "rows": report_rows,
+        },
+        selected_ids=selected,
+        qualified_task_ids=["TaskSourceA", "TaskSourceC"],
+        failed_task_ids=["TaskSourceB"],
+    )
+    assert [row["source_id"] for row in qualified] == ["SourceA", "SourceC"]
+    assert [row["source_id"] for row in failed] == ["SourceB"]

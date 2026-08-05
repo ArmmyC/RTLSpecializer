@@ -321,6 +321,44 @@ def test_preflight_validates_the_staged_boundary(tmp_path: Path, monkeypatch: py
     assert report["selected_source_ids"] == list(source_ids)
 
 
+def test_preflight_accepts_authorization_in_run_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    values = _fixture(tmp_path, monkeypatch)
+    source_ids, inventory, split, ids, selection, correction_manifest, correction_root, author_manifest, author_root = values
+    output = tmp_path / "qualification"
+    preparation = qualification.prepare_qualification_input(
+        selection_path=selection,
+        ids_path=ids,
+        correction_manifest_path=correction_manifest,
+        correction_root=correction_root,
+        inventory_path=inventory,
+        split_path=split,
+        authoring_manifest_path=author_manifest,
+        authoring_root=author_root,
+        output_root=output,
+        expected_correction_manifest_sha256=_sha(correction_manifest),
+    )
+    reports = output / "reports"
+    reports.mkdir(mode=0o700)
+    authorization_path = reports / "asset_qualification_authorization.json"
+    _write_json(authorization_path, _preflight_authorization(output, preparation, tmp_path))
+    authorization_path.chmod(0o600)
+    report = qualification.validate_prepared_qualification(
+        selection_path=selection,
+        ids_path=ids,
+        correction_manifest_path=correction_manifest,
+        correction_root=correction_root,
+        inventory_path=inventory,
+        split_path=split,
+        authoring_manifest_path=author_manifest,
+        authoring_root=author_root,
+        qualification_root=output,
+        authorization_path=authorization_path,
+        report_output=tmp_path / "preflight.json",
+    )
+    assert report["status"] == "ready_for_isolated_execution"
+    assert report["selected_source_ids"] == list(source_ids)
+
+
 def test_preflight_rejects_wrong_case_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     values = _fixture(tmp_path, monkeypatch)
     _, inventory, split, ids, selection, correction_manifest, correction_root, author_manifest, author_root = values

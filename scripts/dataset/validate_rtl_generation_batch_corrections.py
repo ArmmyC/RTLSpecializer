@@ -1,4 +1,4 @@
-"""Validate a batch-20 correction manifest and its authored testbenches statically."""
+"""Validate a bounded correction manifest and authored testbenches statically."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.dataset.rtl_generation_batch_corrections import (
-    BATCH20_SOURCE_IDS,
     MANIFEST_SCHEMA_VERSION,
     ROW_SCHEMA_VERSION,
     _load_json,
@@ -22,7 +21,6 @@ from scripts.dataset.rtl_generation_batch_corrections import (
 from scripts.dataset.rtl_generation_batch_selection import (
     BASE_INVENTORY_SHA256,
     BASE_SPLIT_SHA256,
-    CORRECTION_VERSION,
     SELECTION_SCHEMA_VERSION,
     SOURCE_COMMIT,
     SOURCE_TREE_SHA256,
@@ -80,12 +78,24 @@ def validate_batch(
         errors.append("selection inventory binding mismatch")
     if selection.get("base_split_sha256") != BASE_SPLIT_SHA256:
         errors.append("selection split binding mismatch")
-    if selection.get("correction_version") != CORRECTION_VERSION:
-        errors.append("selection correction version mismatch")
-    if ids != list(BATCH20_SOURCE_IDS):
+    if selection.get("ok") is not True:
+        errors.append("selection report is not successful")
+    if selection.get("split") != "train":
+        errors.append("selection is not train-only")
+    if len(ids) < 20 or len(ids) > 40:
+        errors.append("selection is outside the bounded 20-40 task range")
+    selection_rows = selection.get("rows")
+    if not isinstance(selection_rows, list) or [row.get("source_id") for row in selection_rows if isinstance(row, dict)] != ids:
+        errors.append("selection report does not preserve the pinned task order")
+    if selection.get("selected_count") != len(ids):
+        errors.append("selection report count does not match the selected task count")
+    correction_version = selection.get("correction_version")
+    if not isinstance(correction_version, str) or not correction_version:
+        errors.append("selection correction version is invalid")
+    if [row.get("source_id") for row in manifest_rows] != ids:
         errors.append("pinned task order mismatch")
-    if len(manifest_rows) != 20:
-        errors.append("manifest row count is not 20")
+    if len(manifest_rows) != len(ids):
+        errors.append("manifest row count does not match the selected task count")
     if len({row.get("source_id") for row in manifest_rows}) != len(manifest_rows):
         errors.append("manifest contains duplicate source IDs")
     expected_train = set(split.get("splits", {}).get("train", []))
@@ -94,7 +104,7 @@ def validate_batch(
         if source is None:
             errors.append(f"row {index}: source ID missing from inventory")
             continue
-        for field, expected in (
+        expected_fields = (
             ("schema_version", ROW_SCHEMA_VERSION),
             ("source_id", source_id),
             ("task_id", source.get("task_id")),
@@ -104,7 +114,7 @@ def validate_batch(
             ("upstream_commit", SOURCE_COMMIT),
             ("source_tree_sha256", SOURCE_TREE_SHA256),
             ("frozen_split_sha256", BASE_SPLIT_SHA256),
-            ("correction_version", CORRECTION_VERSION),
+            ("correction_version", correction_version),
             ("original_prompt_sha256", source.get("source_prompt_sha256")),
             ("original_reference_rtl_sha256", source.get("reference_rtl_sha256")),
             ("original_testbench_sha256", source.get("testbench_sha256")),
@@ -114,9 +124,18 @@ def validate_batch(
             ("qualification_status", "pending_isolated_qualification"),
             ("verification_readiness", "pending_qualification"),
             ("dependency_closure", "passed"),
-        ):
+        )
+        for field, expected in expected_fields:
             if row.get(field) != expected:
                 errors.append(f"row {index}: {field} mismatch")
+        if correction_version == "assetfix_v004":
+            for field, expected in (
+                ("public_specification_sha256", source.get("source_prompt_sha256")),
+                ("selection_ids_sha256", sha256_file(ids_path)),
+                ("selection_report_sha256", sha256_file(selection_path)),
+            ):
+                if row.get(field) != expected:
+                    errors.append(f"row {index}: {field} mismatch")
         if source_id not in expected_train:
             errors.append(f"row {index}: source ID is outside train split")
         correction_path = correction_root / row.get("testbench_path", "")

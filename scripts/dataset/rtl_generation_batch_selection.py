@@ -119,6 +119,8 @@ REQUIRED_DIVERSITY_TARGETS = {
     "sequence_sensitive": 1,
 }
 ADVISORY_DIVERSITY_TARGETS = {"counter_or_timer": 1}
+MIN_BOUNDED_BATCH_SIZE = 20
+MAX_BOUNDED_BATCH_SIZE = 40
 
 
 def sha256_file(path: Path) -> str:
@@ -153,6 +155,55 @@ def load_source_ids(path: Path | None) -> list[str]:
     if len(values) != len(set(values)):
         raise ValueError("source-ID allowlist contains duplicates")
     return values
+
+
+def load_selection_metadata(path: Path | None) -> tuple[dict[str, str], dict[str, tuple[str, ...]], dict[str, int], dict[str, int]]:
+    """Load public selection annotations for a non-default batch.
+
+    The metadata file contains either a ``rows`` array with ``source_id``,
+    ``selection_role`` and ``diversity_tags`` fields, or an object keyed by
+    source ID.  It contains public classification only; no source content or
+    private paths are accepted here.
+    """
+    if path is None:
+        return {}, {}, {}, {}
+    value = _load_json(path)
+    if isinstance(value, dict) and isinstance(value.get("rows"), list):
+        entries = value["rows"]
+        required = value.get("required_targets", {})
+        advisory = value.get("advisory_targets", {})
+    elif isinstance(value, dict):
+        entries = [
+            {"source_id": source_id, **metadata}
+            for source_id, metadata in value.items()
+            if isinstance(metadata, dict)
+        ]
+        required = {}
+        advisory = {}
+    else:
+        raise ValueError("selection metadata must be an object")
+    roles: dict[str, str] = {}
+    tags: dict[str, tuple[str, ...]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("selection metadata rows must be objects")
+        source_id = entry.get("source_id")
+        role = entry.get("selection_role")
+        row_tags = entry.get("diversity_tags")
+        if not isinstance(source_id, str) or not source_id:
+            raise ValueError("selection metadata source_id is invalid")
+        if not isinstance(role, str) or not role:
+            raise ValueError(f"selection role is missing: {source_id}")
+        if not isinstance(row_tags, list) or not row_tags or not all(isinstance(tag, str) and tag for tag in row_tags):
+            raise ValueError(f"selection diversity tags are invalid: {source_id}")
+        if source_id in roles:
+            raise ValueError(f"selection metadata contains duplicate source_id: {source_id}")
+        roles[source_id] = role
+        tags[source_id] = tuple(row_tags)
+    for label, target in (("required_targets", required), ("advisory_targets", advisory)):
+        if not isinstance(target, dict) or any(not isinstance(key, str) or not isinstance(value, int) or value < 0 for key, value in target.items()):
+            raise ValueError(f"{label} must map category names to non-negative integers")
+    return roles, tags, dict(required), dict(advisory)
 
 
 def _diversity_counts(rows: Iterable[dict[str, Any]]) -> dict[str, int]:
@@ -211,14 +262,20 @@ def select_batch_rows(
     required_targets: dict[str, int] | None = None,
     advisory_targets: dict[str, int] | None = None,
     excluded_source_ids: Iterable[str] | None = None,
+    enforce_bounded_size: bool = False,
+    selection_metadata_sha256: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     errors: list[str] = []
     requested = list(source_ids) if source_ids is not None else list(BATCH20_SOURCE_IDS)
-    selection_roles = selection_roles or SELECTION_ROLES
-    diversity_tags = diversity_tags or DIVERSITY_TAGS
-    required_targets = required_targets or REQUIRED_DIVERSITY_TARGETS
-    advisory_targets = advisory_targets or ADVISORY_DIVERSITY_TARGETS
-    excluded_ids = set(excluded_source_ids or SMOKE_SOURCE_IDS)
+    is_default_batch = requested == list(BATCH20_SOURCE_IDS)
+    selection_roles = selection_roles if selection_roles is not None else (SELECTION_ROLES if is_default_batch else {})
+    diversity_tags = diversity_tags if diversity_tags is not None else (DIVERSITY_TAGS if is_default_batch else {})
+    required_targets = required_targets if required_targets is not None else (REQUIRED_DIVERSITY_TARGETS if is_default_batch else {})
+    advisory_targets = advisory_targets if advisory_targets is not None else (ADVISORY_DIVERSITY_TARGETS if is_default_batch else {})
+    excluded_order = list(excluded_source_ids) if excluded_source_ids is not None else list(SMOKE_SOURCE_IDS)
+    excluded_ids = set(excluded_order)
+    if enforce_bounded_size and not MIN_BOUNDED_BATCH_SIZE <= expected_count <= MAX_BOUNDED_BATCH_SIZE:
+        errors.append(f"bounded selection count must be between {MIN_BOUNDED_BATCH_SIZE} and {MAX_BOUNDED_BATCH_SIZE}")
     if len(requested) != expected_count:
         errors.append(f"selection requires exactly {expected_count} source IDs")
     if len(requested) != len(set(requested)):
@@ -267,7 +324,7 @@ def select_batch_rows(
     selected_rows: list[dict[str, Any]] = []
 
     if set(requested) != set(selection_roles) or set(requested) != set(diversity_tags):
-        errors.append("batch-20 selection metadata is incomplete")
+        errors.append("selection metadata is incomplete")
 
     for source_id in requested:
         row = by_id.get(source_id)
@@ -277,7 +334,7 @@ def select_batch_rows(
         if source_id not in train_ids:
             errors.append(f"source ID is outside train split: {source_id}")
         if source_id in smoke_ids:
-            errors.append(f"source ID is already in the smoke batch: {source_id}")
+            errors.append(f"source ID is in the excluded prior-batch set: {source_id}")
         if row.get("source_commit") != expected_source_commit:
             errors.append(f"source commit mismatch: {source_id}")
         if row.get("verification_readiness") != "needs_testbench":
@@ -335,7 +392,11 @@ def select_batch_rows(
         "correction_version": correction_version,
         "batch_id": batch_id,
         "split": "train",
-        "excluded_source_ids": list(SMOKE_SOURCE_IDS),
+        "excluded_source_ids": excluded_order,
+        "excluded_source_ids_sha256": hashlib.sha256(
+            "".join(f"{source_id}\n" for source_id in excluded_order).encode("utf-8")
+        ).hexdigest(),
+        "selection_metadata_sha256": selection_metadata_sha256,
         "requested_count": expected_count,
         "selected_count": len(selected_rows),
         "selection_algorithm": "explicit_public_spec_diversity_allowlist_v1",
@@ -372,12 +433,15 @@ __all__ = [
     "BASE_SPLIT_SHA256",
     "CORRECTION_VERSION",
     "DIVERSITY_TAGS",
+    "MAX_BOUNDED_BATCH_SIZE",
+    "MIN_BOUNDED_BATCH_SIZE",
     "REQUIRED_DIVERSITY_TARGETS",
     "SELECTION_SCHEMA_VERSION",
     "SMOKE_SOURCE_IDS",
     "SOURCE_COMMIT",
     "SOURCE_TREE_SHA256",
     "load_source_ids",
+    "load_selection_metadata",
     "select_batch_rows",
     "sha256_file",
 ]

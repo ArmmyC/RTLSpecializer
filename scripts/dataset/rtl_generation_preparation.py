@@ -1274,10 +1274,26 @@ def export_generation_normalization_batches(
     correction_manifest: Path | None = None,
     correction_root: Path | None = None,
     correction_version: str | None = None,
+    source_dataset_override: str | None = None,
+    license_override: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     errors: list[str] = []
     rows, discovery_errors = discover_source_rows(input_path)
     errors.extend(discovery_errors)
+    if source_dataset_override is not None:
+        if not isinstance(source_dataset_override, str) or not source_dataset_override.strip():
+            errors.append("source_dataset_override must be a non-empty string")
+        else:
+            for row in rows:
+                row.source_dataset = source_dataset_override
+                if isinstance(row.provenance, dict):
+                    row.provenance["public_dataset_name"] = source_dataset_override
+    if license_override is not None:
+        if not isinstance(license_override, str) or not license_override.strip():
+            errors.append("license_override must be a non-empty string")
+        else:
+            for row in rows:
+                row.license = license_override
     if source_commit is not None:
         if not SOURCE_COMMIT_RE.fullmatch(source_commit):
             errors.append("source_commit must be exactly 40 lowercase hexadecimal characters")

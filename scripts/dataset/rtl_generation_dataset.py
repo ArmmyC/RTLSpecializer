@@ -18,6 +18,7 @@ import tempfile
 from typing import Any
 
 from scripts.dataset.rtl_generation_inventory import SPLIT_SCHEMA_VERSION
+from scripts.dataset.rtl_generation_batch_metrics import build_batch_metrics
 from scripts.dataset.rtl_generation_preparation import GENERATION_TASK_SCHEMA_VERSION
 from scripts.dataset.rtl_manual_teacher_verification import (
     ATTEMPT_SCHEMA_VERSION,
@@ -100,6 +101,7 @@ RECOVERY_REASON = "packaging_source_defect"
 QUALIFIED_SUBSET_BINDING_SCHEMA = "rtl_generation_qualified_subset_binding_v0.1"
 QUALIFIED_SUBSET_CORRECTION_VERSION = "assetfix_v003"
 QUALIFIED_SUBSET_REPORT_SCHEMA = "rtl_asset_qualification_report_v0.1"
+COMBINED_QUALIFICATION_BINDING_SCHEMA = "rtl_generation_combined_qualification_binding_v0.1"
 
 
 def _display(path: Path) -> str:
@@ -119,6 +121,52 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _validate_sha256_value(value: Any, label: str) -> list[str]:
+    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+        return [f"{label} must be a lowercase SHA-256"]
+    return []
+
+
+def _qualification_row_passed(row: Any) -> bool:
+    """Recognize both legacy qualification reports and combined bindings."""
+    return isinstance(row, dict) and (
+        row.get("qualification_passed") is True
+        or row.get("qualification_result") == "passed"
+    )
+
+
+def _artifact_hashes(
+    artifact_bindings: dict[str, Path] | None,
+    artifact_hashes: dict[str, str] | None,
+) -> tuple[dict[str, str], list[str]]:
+    """Resolve explicit provenance artifacts without following symlinks."""
+    resolved: dict[str, str] = {}
+    errors: list[str] = []
+    for key, path in (artifact_bindings or {}).items():
+        if not isinstance(key, str) or not key:
+            errors.append("artifact binding keys must be non-empty strings")
+            continue
+        if key in resolved:
+            errors.append(f"duplicate artifact binding: {key}")
+            continue
+        if path.is_symlink() or not path.is_file():
+            errors.append(f"artifact binding is missing or symlinked: {key}")
+            continue
+        resolved[key] = _sha256_file(path)
+    for key, value in (artifact_hashes or {}).items():
+        if not isinstance(key, str) or not key:
+            errors.append("artifact hash keys must be non-empty strings")
+            continue
+        if key in resolved:
+            errors.append(f"duplicate artifact binding: {key}")
+            continue
+        value_errors = _validate_sha256_value(value, f"artifact hash {key}")
+        errors.extend(value_errors)
+        if not value_errors:
+            resolved[key] = value
+    return dict(sorted(resolved.items())), sorted(set(errors))
 
 
 def _load_json(path: Path) -> Any:
@@ -933,7 +981,10 @@ def _validate_qualified_subset_provenance(
     except (OSError, UnicodeError, json.JSONDecodeError, WorkflowError) as exc:
         return {}, [f"could not load qualified-subset provenance: {exc}"]
 
-    if not isinstance(report, dict) or report.get("schema_version") != QUALIFIED_SUBSET_REPORT_SCHEMA:
+    if not isinstance(report, dict) or report.get("schema_version") not in {
+        QUALIFIED_SUBSET_REPORT_SCHEMA,
+        COMBINED_QUALIFICATION_BINDING_SCHEMA,
+    }:
         errors.append("qualified-subset qualification report has the wrong schema")
         report = {}
     if not isinstance(binding, dict) or binding.get("schema_version") != QUALIFIED_SUBSET_BINDING_SCHEMA:
@@ -970,10 +1021,12 @@ def _validate_qualified_subset_provenance(
         ("source_commit", expected_source_commit),
         ("source_tree_sha256", expected_source_tree_sha256),
         ("frozen_split_sha256", expected_frozen_split_sha256),
-        ("correction_version", QUALIFIED_SUBSET_CORRECTION_VERSION),
     ):
         if binding.get(field) != expected:
             errors.append(f"qualified-subset binding {field} mismatch")
+    correction_version = binding.get("correction_version")
+    if not isinstance(correction_version, str) or not correction_version:
+        errors.append("qualified-subset binding correction version is invalid")
     if binding.get("qualification_result") not in {None, "passed"}:
         errors.append("qualified-subset binding is not passed")
     if binding.get("qualification_validator_authoritative") is not True:
@@ -986,6 +1039,9 @@ def _validate_qualified_subset_provenance(
         errors.append("qualified-subset binding qualification-report hash mismatch")
     if binding.get("qualified_correction_manifest_sha256") != _sha256_file(qualified_correction_manifest_path):
         errors.append("qualified-subset binding correction-manifest hash mismatch")
+    if report.get("schema_version") == COMBINED_QUALIFICATION_BINDING_SCHEMA:
+        if report.get("qualification_passed") is not True:
+            errors.append("combined qualification binding is not passed")
 
     report_rows = report.get("rows") if isinstance(report, dict) else None
     report_by_source = {
@@ -1026,14 +1082,14 @@ def _validate_qualified_subset_provenance(
             continue
         if binding_row.get("task_id") != task_id or binding_row.get("qualification_result") != "passed":
             errors.append(f"qualified-subset task identity or result mismatch: {task_id}")
-        if not isinstance(report_row, dict) or report_row.get("qualification_passed") is not True:
+        if not _qualification_row_passed(report_row):
             errors.append(f"task does not have a passed qualification row: {task_id}")
         if not isinstance(correction_row, dict):
             errors.append(f"task is absent from qualified correction manifest: {task_id}")
         else:
             if correction_row.get("task_id") != task_id or correction_row.get("split") != "train":
                 errors.append(f"qualified correction identity or split mismatch: {task_id}")
-            if correction_row.get("correction_version") != QUALIFIED_SUBSET_CORRECTION_VERSION:
+            if correction_row.get("correction_version") != correction_version:
                 errors.append(f"qualified correction version mismatch: {task_id}")
             if correction_row.get("dependency_closure") != "passed" or correction_row.get("verification_readiness") != "executable_ready":
                 errors.append(f"qualified correction is not executable-ready: {task_id}")
@@ -1050,6 +1106,12 @@ def _validate_qualified_subset_provenance(
 
     qualification_report_hash = _sha256_file(asset_qualification_path)
     qualification_binding_hash = _sha256_file(qualification_binding_path)
+    selected_task_count = report.get(
+        "selected_tasks",
+        report.get("selected_task_count", len(report_rows or [])),
+    )
+    if not isinstance(selected_task_count, int) or selected_task_count < len(qualified_source_ids):
+        errors.append("qualified-subset qualification report selected-task count is invalid")
     context = {
         "source_commit": expected_source_commit,
         "source_tree_sha256": expected_source_tree_sha256,
@@ -1063,6 +1125,7 @@ def _validate_qualified_subset_provenance(
         "qualification_source": binding.get("qualification_scope", "qualified_subset"),
         "qualification_passed": not errors,
         "reference_supplied": False,
+        "selected_task_count": selected_task_count,
         "qualified_source_ids": qualified_source_ids,
         "qualified_by_source": correction_by_source,
         "binding_by_source": binding_by_source,
@@ -1080,11 +1143,12 @@ def _make_row(
     sidecar: dict[str, Any] | None,
     split: str,
     smoke_context: dict[str, Any] | None = None,
+    repair_lineage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     candidate_value = candidate["candidate"]
     warning_metadata = _warning_metadata(attempt)
     smoke_context = smoke_context or {}
-    return {
+    row = {
         "schema_version": GENERATION_SFT_SCHEMA_VERSION,
         "id": f"verified_rtl_generation_{candidate['candidate_id']}",
         "dataset_name": DATASET_NAME,
@@ -1132,6 +1196,9 @@ def _make_row(
             {"role": "assistant", "content": candidate_value["rtl"]},
         ],
     }
+    if repair_lineage is not None:
+        row["repair_lineage"] = deepcopy(repair_lineage)
+    return row
 
 
 def validate_generation_sft_row(row: dict[str, Any], label: str = "row") -> list[str]:
@@ -1142,7 +1209,9 @@ def validate_generation_sft_row(row: dict[str, Any], label: str = "row") -> list
         "design_family", "created_by", "review_status", "approval_status", "promotion_allowed",
         "provenance", "verification", "messages",
     }
-    if set(row) != required:
+    unexpected = set(row) - required - {"repair_lineage"}
+    missing = required - set(row)
+    if unexpected or missing:
         errors.append(f"{label} has an invalid field set")
     if row.get("schema_version") != GENERATION_SFT_SCHEMA_VERSION:
         errors.append(f"{label} has the wrong schema")
@@ -1179,6 +1248,25 @@ def validate_generation_sft_row(row: dict[str, Any], label: str = "row") -> list
             errors.append(f"{label}.verification warning metadata is invalid")
         if verification.get("acceptance_affected") is not False:
             errors.append(f"{label}.verification acceptance metadata is unsafe")
+    if "repair_lineage" in row:
+        lineage = row.get("repair_lineage")
+        if not isinstance(lineage, dict) or set(lineage) != {
+            "accepted_attempt",
+            "prior_failed_attempts",
+            "repair_used",
+            "failure_category_before_repair",
+        }:
+            errors.append(f"{label}.repair_lineage has an invalid shape")
+        elif (
+            lineage.get("accepted_attempt") != row.get("attempt")
+            or type(lineage.get("prior_failed_attempts")) is not int
+            or lineage.get("prior_failed_attempts") < 0
+            or type(lineage.get("repair_used")) is not bool
+            or lineage.get("repair_used") is not (row.get("attempt", 0) > 1)
+            or (lineage.get("repair_used") and not isinstance(lineage.get("failure_category_before_repair"), str))
+            or (not lineage.get("repair_used") and lineage.get("failure_category_before_repair") is not None)
+        ):
+            errors.append(f"{label}.repair_lineage is inconsistent with attempt metadata")
     return sorted(set(errors))
 
 
@@ -1205,6 +1293,7 @@ def validate_generation_sft_package(
     expected_recovery_reason: str | None = None,
     require_recovery_lineage: bool = False,
     require_consumable: bool = False,
+    expected_artifact_bindings: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     if require_recovery_lineage:
         expected_package_id = expected_package_id or RECOVERY_PACKAGE_ID
@@ -1259,6 +1348,10 @@ def validate_generation_sft_package(
                 errors.append("manifest train-row count mismatch")
             if manifest.get("rejected_rows") != counts.get("rejected_rows", 0):
                 errors.append("manifest rejected-row count mismatch")
+            if expected_artifact_bindings is not None:
+                actual_artifacts = manifest.get("artifact_bindings")
+                if actual_artifacts != dict(sorted(expected_artifact_bindings.items())):
+                    errors.append("manifest artifact bindings do not match expected canonical inputs")
             errors.extend(
                 _lineage_errors(
                     manifest,
@@ -1526,8 +1619,15 @@ def package_verified_rtl_generation_dataset(
     recovery_reason: str | None = None,
     recovery_authorization_path: Path | None = None,
     require_recovery_lineage: bool = False,
+    artifact_bindings: dict[str, Path] | None = None,
+    artifact_hashes: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     errors: list[str] = []
+    resolved_artifact_bindings, artifact_errors = _artifact_hashes(
+        artifact_bindings,
+        artifact_hashes,
+    )
+    errors.extend(artifact_errors)
     if max_variants < 1:
         errors.append("max_variants must be positive")
     authorization: dict[str, Any] | None = None
@@ -1746,7 +1846,7 @@ def package_verified_rtl_generation_dataset(
             qualified_ids = {
                 row.get("source_id")
                 for row in (qualification_report or {}).get("rows", [])
-                if isinstance(row, dict) and row.get("qualification_passed") is True
+                if _qualification_row_passed(row)
             }
             if task.get("source_id") not in qualified_ids:
                 errors.append(f"task has no passed asset qualification: {task_id}")
@@ -1797,7 +1897,26 @@ def package_verified_rtl_generation_dataset(
                 continue
             seen_normalized.add(exact_hash)
             seen_normalized.add(normalized_hash)
-            row = _make_row(task, candidate, attempt, evidence_hash, runner_identity, "train", smoke_context)
+            prior_failed_attempts = failed_attempts_by_task.get(task_id, [])
+            row = _make_row(
+                task,
+                candidate,
+                attempt,
+                evidence_hash,
+                runner_identity,
+                "train",
+                smoke_context,
+                repair_lineage={
+                    "accepted_attempt": candidate["attempt"],
+                    "prior_failed_attempts": len(prior_failed_attempts),
+                    "repair_used": candidate["attempt"] > 1,
+                    "failure_category_before_repair": (
+                        prior_failed_attempts[-1].get("failure_category")
+                        if prior_failed_attempts
+                        else None
+                    ),
+                },
+            )
             if chosen == 0:
                 primary_rows.append(row)
             elif chosen < max_variants:
@@ -1878,7 +1997,12 @@ def package_verified_rtl_generation_dataset(
         "approval_status": APPROVAL_STATUS,
         "promotion_allowed": False,
         "errors": sorted(set(errors)),
+        "artifact_bindings": resolved_artifact_bindings,
+        "training_allowed": True,
+        "training_scope": "experimental",
     }
+    if package_id is not None:
+        manifest["package_id"] = package_id
     if require_recovery_lineage:
         manifest["package_id"] = package_id
         manifest["lineage"] = {
@@ -1890,6 +2014,49 @@ def package_verified_rtl_generation_dataset(
             "status": "pending_validation",
             "consumable": False,
         }
+    batch_metrics = None
+    if require_smoke_provenance or qualified_subset_mode:
+        qualified_asset_count = len(smoke_context.get("qualified_source_ids", []))
+        if not qualified_asset_count:
+            qualified_asset_count = len(tasks)
+        selected_task_count = (
+            int(smoke_context.get("selected_task_count"))
+            if isinstance(smoke_context.get("selected_task_count"), int)
+            else len(tasks)
+        )
+        normalization_accepted = len(smoke_context.get("qualified_source_ids", [])) or len(tasks)
+        batch_metrics = build_batch_metrics(
+            batch_id=package_id or output_dir.name,
+            correction_version=(
+                SMOKE_CORRECTION_VERSION
+                if require_smoke_provenance
+                else str(smoke_context.get("correction_version"))
+            ),
+            selected_tasks=selected_task_count,
+            qualified_assets=qualified_asset_count,
+            first_attempt_passes=sum(1 for attempt in attempts if attempt.get("attempt") == 1 and attempt.get("accepted") is True),
+            repair_successes=sum(1 for attempt in attempts if attempt.get("attempt", 1) > 1 and attempt.get("accepted") is True),
+            final_accepted_rows=len(primary_rows),
+            compile_failures=sum(1 for attempt in attempts if attempt.get("failure_category") == "compile_failure"),
+            functional_mismatches=sum(1 for attempt in attempts if attempt.get("failure_category") == "functional_mismatch"),
+            timeouts=sum(1 for attempt in attempts if attempt.get("failure_category") == "timeout"),
+            privacy_or_provenance_failures=0,
+            runner_failures=sum(1 for attempt in attempts if attempt.get("failure_category") in {"runner_failure", "infrastructure_failure", "provenance_failure"}),
+            asset_failures=sum(1 for attempt in attempts if attempt.get("failure_category") == "asset_failure"),
+            normalization_accepted=normalization_accepted,
+            candidate_schema_rejections=0,
+            warnings_present=len(warning_rows),
+            qualification_mutations_total=int(smoke_context.get("mutation_rows") or 0),
+            qualification_mutations_detected=int(smoke_context.get("detected_mutations") or 0),
+            source_commit=smoke_context.get("source_commit"),
+            source_tree_sha256=smoke_context.get("source_tree_sha256"),
+            frozen_split_sha256=smoke_context.get("frozen_split_sha256"),
+            qualification_binding_sha256=(
+                _sha256_file(qualification_binding_path)
+                if qualification_binding_path is not None and qualification_binding_path.is_file()
+                else None
+            ),
+        )
     statistics = {
         "schema_version": "rtl_verified_generation_statistics_v0.1",
         "candidate_records": len(candidates),
@@ -1905,18 +2072,41 @@ def package_verified_rtl_generation_dataset(
         "warning_count": warning_count,
         "warnings_present": bool(warning_rows),
         "acceptance_affected": False,
-        "normalization_accepted": 5 if require_smoke_provenance else None,
-        "assets_qualified": 5 if require_smoke_provenance else None,
+        "normalization_accepted": (
+            len(smoke_context.get("qualified_source_ids", [])) or len(tasks)
+            if require_smoke_provenance or qualified_subset_mode
+            else None
+        ),
+        "assets_qualified": (
+            len(smoke_context.get("qualified_source_ids", [])) or len(tasks)
+            if require_smoke_provenance or qualified_subset_mode
+            else None
+        ),
         "mutation_rows": smoke_context.get("mutation_rows"),
         "detected_mutations": smoke_context.get("detected_mutations"),
-        "repairs": 0 if require_smoke_provenance else None,
-        "compile_pass_rate": 1.0 if require_smoke_provenance else None,
-        "simulation_pass_rate": 1.0 if require_smoke_provenance else None,
+        "repairs": sum(
+            1 for attempt in attempts
+            if attempt.get("attempt", 1) > 1 and attempt.get("accepted") is True
+        ) if (require_smoke_provenance or qualified_subset_mode) else None,
+        "compile_pass_rate": (
+            (len(tasks) - sum(1 for attempt in attempts if attempt.get("failure_category") == "compile_failure")) / len(tasks)
+            if (require_smoke_provenance or qualified_subset_mode) and tasks
+            else None
+        ),
+        "simulation_pass_rate": (
+            len(primary_rows) / len(tasks)
+            if (require_smoke_provenance or qualified_subset_mode) and tasks
+            else None
+        ),
         "reference_exposures": 0,
         "infrastructure_failures": 0,
         "attempts_per_accepted_task": {
             row["source_id"]: row["attempt"] for row in primary_rows
         },
+        "batch_metrics": batch_metrics,
+        "training_allowed": True,
+        "training_scope": "experimental",
+        "promotion_allowed": False,
     }
     dataset_card = (
         "# Verified RTL generation dataset v0.1\n\n"
@@ -1962,6 +2152,7 @@ def package_verified_rtl_generation_dataset(
         expected_recovery_reason=recovery_reason,
         require_recovery_lineage=require_recovery_lineage,
         require_consumable=False,
+        expected_artifact_bindings=resolved_artifact_bindings,
     )
     validation_markdown = (
         "# Verified RTL generation smoke package v001\n\n"
@@ -2030,6 +2221,9 @@ def package_verified_rtl_generation_dataset(
         "review_status": REVIEW_STATUS,
         "approval_status": APPROVAL_STATUS,
         "promotion_allowed": False,
+        "artifact_bindings": manifest["artifact_bindings"],
+        "training_allowed": True,
+        "training_scope": "experimental",
     }
     if require_recovery_lineage:
         provenance_report["package_id"] = manifest["lineage"]["package_id"]
@@ -2061,6 +2255,7 @@ def package_verified_rtl_generation_dataset(
         expected_recovery_reason=recovery_reason,
         require_recovery_lineage=require_recovery_lineage,
         require_consumable=False,
+        expected_artifact_bindings=resolved_artifact_bindings,
     )
     result = {
         "ok": not errors and final_validation_code == 0,

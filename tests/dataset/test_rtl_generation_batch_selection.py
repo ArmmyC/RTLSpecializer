@@ -7,6 +7,7 @@ from pathlib import Path
 from scripts.dataset.rtl_generation_batch_selection import (
     INVENTORY_SCHEMA_VERSION,
     SELECTION_SCHEMA_VERSION,
+    load_selection_metadata,
     select_batch_rows,
     sha256_file,
 )
@@ -170,6 +171,53 @@ def test_batch_selection_rejects_validation_or_test_ids(tmp_path: Path) -> None:
         excluded_source_ids=[],
     )
     assert code == 1
+
+
+def test_custom_batch_metadata_is_explicit_and_bounded(tmp_path: Path) -> None:
+    metadata = tmp_path / "metadata.json"
+    metadata.write_text(json.dumps({
+        "rows": [
+            {"source_id": "Prob001", "selection_role": "logic", "diversity_tags": ["combinational_logic"]},
+            {"source_id": "Prob002", "selection_role": "logic", "diversity_tags": ["combinational_logic"]},
+        ],
+        "required_targets": {"combinational_logic": 2},
+        "advisory_targets": {"counter_or_timer": 1},
+    }) + "\n", encoding="utf-8")
+
+    roles, tags, required, advisory = load_selection_metadata(metadata)
+    assert roles == {"Prob001": "logic", "Prob002": "logic"}
+    assert tags["Prob001"] == ("combinational_logic",)
+    assert required == {"combinational_logic": 2}
+    assert advisory == {"counter_or_timer": 1}
+
+    inventory = tmp_path / "inventory.jsonl"
+    split = tmp_path / "split.json"
+    acquisition = tmp_path / "acquisition.json"
+    _write_inventory(inventory, ["Prob001", "Prob002"])
+    _write_split(split, inventory, ["Prob001", "Prob002"])
+    _write_acquisition(acquisition)
+    _, code = select_batch_rows(
+        inventory,
+        split,
+        acquisition,
+        tmp_path / "ids.txt",
+        tmp_path / "selection.json",
+        source_ids=["Prob001", "Prob002"],
+        expected_source_commit=COMMIT,
+        expected_source_tree_sha256=TREE_HASH,
+        expected_inventory_sha256=sha256_file(inventory),
+        expected_split_sha256=sha256_file(split),
+        expected_count=2,
+        selection_roles=roles,
+        diversity_tags=tags,
+        required_targets=required,
+        advisory_targets=advisory,
+        excluded_source_ids=[],
+        enforce_bounded_size=True,
+    )
+    assert code == 1
+    assert not (tmp_path / "ids.txt").exists()
+    assert not (tmp_path / "selection.json").exists()
 
 
 def _write_review_fixture(tmp_path: Path) -> tuple[Path, Path]:

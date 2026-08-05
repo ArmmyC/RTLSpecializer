@@ -12,7 +12,9 @@ from scripts.dataset.rtl_generation_dataset import (
     _package_task_records,
     _validate_qualified_subset_provenance,
     _validate_smoke_task_order,
+    _make_row,
     package_verified_rtl_generation_dataset,
+    validate_generation_sft_row,
     validate_generation_sft_package,
 )
 from scripts.dataset.rtl_generation_preparation import GENERATION_TASK_SCHEMA_VERSION
@@ -415,7 +417,7 @@ def test_qualified_subset_provenance_accepts_passed_subset_binding(tmp_path) -> 
         "source_id": task["source_id"],
         "task_id": task["task_id"],
         "split": "train",
-        "correction_version": "assetfix_v003",
+        "correction_version": "assetfix_v004",
         "dependency_closure": "passed",
         "verification_readiness": "executable_ready",
         "support_files": [],
@@ -428,7 +430,7 @@ def test_qualified_subset_provenance_accepts_passed_subset_binding(tmp_path) -> 
         "source_commit": "a" * 40,
         "source_tree_sha256": "b" * 64,
         "frozen_split_sha256": hashlib.sha256(split_path.read_bytes()).hexdigest(),
-        "correction_version": "assetfix_v003",
+        "correction_version": "assetfix_v004",
         "qualification_result": "passed",
         "qualification_validator_authoritative": True,
         "reference_rtl_supplied": False,
@@ -493,6 +495,103 @@ def test_qualified_subset_provenance_rejects_unbound_task(tmp_path) -> None:
     )
 
     assert any("absent from qualified subset" in error for error in errors)
+
+
+def test_qualified_subset_provenance_accepts_combined_binding_report(tmp_path) -> None:
+    task = _task()
+    split_path = tmp_path / "split.json"
+    split_path.write_text(json.dumps(_split(task, split_path)) + "\n", encoding="utf-8")
+    qualification = tmp_path / "qualification.json"
+    qualification.write_text(json.dumps({
+        "schema_version": "rtl_generation_combined_qualification_binding_v0.1",
+        "qualification_passed": True,
+        "selected_task_count": 1,
+        "rows": [{
+            "source_id": task["source_id"],
+            "task_id": task["task_id"],
+            "qualification_result": "passed",
+        }],
+    }) + "\n", encoding="utf-8")
+    correction = tmp_path / "correction.jsonl"
+    correction.write_text(json.dumps({
+        "source_id": task["source_id"],
+        "task_id": task["task_id"],
+        "split": "train",
+        "correction_version": "assetfix_v004",
+        "dependency_closure": "passed",
+        "verification_readiness": "executable_ready",
+        "support_files": [],
+        "reference_copied_to_support": False,
+        "corrected_testbench_sha256": "c" * 64,
+    }) + "\n", encoding="utf-8")
+    binding = tmp_path / "binding.json"
+    binding.write_text(json.dumps({
+        "schema_version": "rtl_generation_qualified_subset_binding_v0.1",
+        "source_commit": "a" * 40,
+        "source_tree_sha256": "b" * 64,
+        "frozen_split_sha256": hashlib.sha256(split_path.read_bytes()).hexdigest(),
+        "correction_version": "assetfix_v004",
+        "qualification_result": "passed",
+        "qualification_validator_authoritative": True,
+        "reference_rtl_supplied": False,
+        "support_file_count": 0,
+        "qualification_report_sha256": hashlib.sha256(qualification.read_bytes()).hexdigest(),
+        "qualified_correction_manifest_sha256": hashlib.sha256(correction.read_bytes()).hexdigest(),
+        "qualified_task_count": 1,
+        "rows": [{
+            "source_id": task["source_id"],
+            "task_id": task["task_id"],
+            "qualification_result": "passed",
+            "corrected_testbench_sha256": "c" * 64,
+        }],
+    }) + "\n", encoding="utf-8")
+
+    context, errors = _validate_qualified_subset_provenance(
+        tasks=[task],
+        split_path=split_path,
+        base_split_path=None,
+        source_acquisition_path=None,
+        asset_qualification_path=qualification,
+        qualification_binding_path=binding,
+        qualified_correction_manifest_path=correction,
+        expected_source_commit="a" * 40,
+        expected_source_tree_sha256="b" * 64,
+        expected_frozen_split_sha256=hashlib.sha256(split_path.read_bytes()).hexdigest(),
+    )
+
+    assert errors == []
+    assert context["qualification_passed"] is True
+
+
+def test_repair_lineage_is_validated_on_new_rows() -> None:
+    task = _task()
+    candidate, candidate_hash = _candidate(task)
+    candidate_record = {
+        "candidate_id": f"{task['task_id']}_attempt_02",
+        "task_id": task["task_id"],
+        "source_id": task["source_id"],
+        "attempt": 2,
+        "candidate_sha256": candidate_hash,
+        "candidate": candidate,
+    }
+    attempt = _attempt(candidate_record["candidate_id"], task, candidate_hash)
+    attempt["attempt"] = 2
+    row = _make_row(
+        task,
+        candidate_record,
+        attempt,
+        None,
+        None,
+        "train",
+        {},
+        repair_lineage={
+            "accepted_attempt": 2,
+            "prior_failed_attempts": 1,
+            "repair_used": True,
+            "failure_category_before_repair": "compile_failure",
+        },
+    )
+    assert validate_generation_sft_row(row) == []
 
 
 def test_package_privacy_scope_covers_metadata_paths_testbench_mutations_and_reference() -> None:

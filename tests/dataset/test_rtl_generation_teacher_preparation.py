@@ -229,6 +229,10 @@ def test_teacher_generation_binding_is_preserved_in_verification_plan() -> None:
     )
     assert _validate_plan(plan, "synthetic plan")["teacher_generation_binding"] == binding
 
+    v004_plan = dict(plan)
+    v004_plan["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v004"}
+    assert _validate_plan(v004_plan, "synthetic v004 plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v004"
+
     invalid = dict(plan)
     invalid["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v002"}
     with pytest.raises(ValueError, match="correction_version"):

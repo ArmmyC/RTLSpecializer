@@ -109,6 +109,15 @@ def _read_ids(path: Path, label: str) -> list[str]:
     return values
 
 
+def _read_optional_ids(path: Path, label: str) -> list[str]:
+    if path.is_symlink() or not path.is_file():
+        raise QualifiedSubsetError(f"{label} is not a regular file")
+    values = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if len(values) != len(set(values)):
+        raise QualifiedSubsetError(f"{label} contains duplicate IDs")
+    return values
+
+
 def _safe_testbench(correction_root: Path, row: dict[str, Any]) -> Path:
     relative = row.get("testbench_path")
     if not isinstance(relative, str) or not relative or relative.startswith("/") or "\\" in relative:
@@ -131,6 +140,16 @@ def _assert_hash(path: Path, expected: str, label: str) -> None:
         raise QualifiedSubsetError(f"{label} hash mismatch")
 
 
+def _require_sha256(value: Any, label: str) -> str:
+    if not isinstance(value, str) or len(value) != 64:
+        raise QualifiedSubsetError(f"{label} must be a SHA-256 string")
+    try:
+        int(value, 16)
+    except ValueError as exc:
+        raise QualifiedSubsetError(f"{label} must be a SHA-256 string") from exc
+    return value
+
+
 def _qualification_rows(
     *,
     qualification_report: dict[str, Any],
@@ -142,27 +161,32 @@ def _qualification_rows(
         raise QualifiedSubsetError("qualification report schema mismatch")
     if qualification_report.get("errors") != []:
         raise QualifiedSubsetError("qualification report contains errors")
-    if qualification_report.get("selected_tasks") != 20:
-        raise QualifiedSubsetError("qualification report does not cover 20 tasks")
+    expected_count = len(selected_ids)
+    if not selected_ids or expected_count != len(set(selected_ids)):
+        raise QualifiedSubsetError("selection IDs must be non-empty and unique")
+    if qualification_report.get("selected_tasks") != expected_count:
+        raise QualifiedSubsetError("qualification report selected-task count mismatch")
     report_rows = qualification_report.get("rows")
-    if not isinstance(report_rows, list) or len(report_rows) != 20:
-        raise QualifiedSubsetError("qualification report row count is not 20")
+    if not isinstance(report_rows, list) or len(report_rows) != expected_count:
+        raise QualifiedSubsetError("qualification report row count does not match selection")
     by_source = {row.get("source_id"): row for row in report_rows}
     by_task = {row.get("task_id"): row for row in report_rows}
-    if len(by_source) != 20 or len(by_task) != 20:
+    if len(by_source) != expected_count or len(by_task) != expected_count:
         raise QualifiedSubsetError("qualification report contains duplicate identities")
-    if set(by_source) != set(selected_ids):
-        raise QualifiedSubsetError("qualification report IDs do not match the pinned selection")
+    if [row.get("source_id") for row in report_rows] != selected_ids:
+        raise QualifiedSubsetError("qualification report does not preserve the pinned selection order")
     expected_qualified = [row["task_id"] for row in (by_source[source_id] for source_id in selected_ids) if row.get("qualification_passed") is True]
     expected_failed = [row["task_id"] for row in (by_source[source_id] for source_id in selected_ids) if row.get("qualification_passed") is not True]
     if qualified_task_ids != expected_qualified:
         raise QualifiedSubsetError("qualified task list is not the filtered pinned order")
     if failed_task_ids != expected_failed:
         raise QualifiedSubsetError("failed task list is not the filtered pinned order")
-    if not qualified_task_ids or len(qualified_task_ids) != 16:
-        raise QualifiedSubsetError("qualified task list must contain 16 tasks")
-    if len(failed_task_ids) != 4:
-        raise QualifiedSubsetError("failed task list must contain four tasks")
+    if not qualified_task_ids:
+        raise QualifiedSubsetError("qualified task list must contain at least one task")
+    if len(qualified_task_ids) != len(set(qualified_task_ids)) or len(failed_task_ids) != len(set(failed_task_ids)):
+        raise QualifiedSubsetError("qualified and failed task lists contain duplicates")
+    if set(qualified_task_ids) & set(failed_task_ids):
+        raise QualifiedSubsetError("qualified and failed task lists overlap")
     qualified_rows = []
     for task_id in qualified_task_ids:
         row = by_task[task_id]
@@ -186,28 +210,34 @@ def _validate_inputs(
     source_root: Path,
 ) -> dict[str, Any]:
     selected_ids = _read_ids(selection_ids_path, "selection IDs")
-    if selected_ids != list(BATCH20_SOURCE_IDS):
-        raise QualifiedSubsetError("selection IDs do not match the frozen batch-20 order")
-    if sha256_file(selection_ids_path) != EXPECTED_SOURCE_IDS_SHA256:
-        raise QualifiedSubsetError("selection ID hash mismatch")
+    if not selected_ids:
+        raise QualifiedSubsetError("selection IDs are empty")
+    selection_ids_hash = sha256_file(selection_ids_path)
     qualified_task_ids = _read_ids(qualified_task_ids_path, "qualified task IDs")
-    failed_task_ids = _read_ids(failed_task_ids_path, "failed task IDs")
+    failed_task_ids = _read_optional_ids(failed_task_ids_path, "failed task IDs")
     hashes = _load_json(qualification_output_hashes_path)
-    expected_hashes = {
-        "evidence_sha256": EXPECTED_RAW_EVIDENCE_SHA256,
-        "runner_sidecar_sha256": EXPECTED_SIDECAR_SHA256,
-        "qualified_task_ids_sha256": EXPECTED_QUALIFIED_LIST_SHA256,
-        "failed_or_inconclusive_task_ids_sha256": EXPECTED_FAILED_LIST_SHA256,
-        "qualification_validation_report_sha256": EXPECTED_QUALIFICATION_REPORT_SHA256,
-    }
-    for key, expected in expected_hashes.items():
-        if hashes.get(key) != expected:
-            raise QualifiedSubsetError(f"qualification output hash record mismatch: {key}")
-    _assert_hash(qualified_task_ids_path, EXPECTED_QUALIFIED_LIST_SHA256, "qualified task list")
-    _assert_hash(failed_task_ids_path, EXPECTED_FAILED_LIST_SHA256, "failed task list")
-    _assert_hash(qualification_report_path, EXPECTED_QUALIFICATION_REPORT_SHA256, "qualification report")
-    if sha256_file(correction_manifest_path) != EXPECTED_CORRECTION_MANIFEST_SHA256:
-        raise QualifiedSubsetError("correction manifest hash mismatch")
+    if not isinstance(hashes, dict):
+        raise QualifiedSubsetError("qualification output hashes must be an object")
+    for key in (
+        "evidence_sha256",
+        "runner_sidecar_sha256",
+        "qualified_task_ids_sha256",
+        "failed_or_inconclusive_task_ids_sha256",
+        "qualification_validation_report_sha256",
+    ):
+        _require_sha256(hashes.get(key), f"qualification output hash: {key}")
+    qualified_ids_hash = sha256_file(qualified_task_ids_path)
+    failed_ids_hash = sha256_file(failed_task_ids_path)
+    report_hash = sha256_file(qualification_report_path)
+    correction_hash = sha256_file(correction_manifest_path)
+    if hashes.get("qualified_task_ids_sha256") != qualified_ids_hash:
+        raise QualifiedSubsetError("qualified task list hash is not bound")
+    if hashes.get("failed_or_inconclusive_task_ids_sha256") != failed_ids_hash:
+        raise QualifiedSubsetError("failed task list hash is not bound")
+    if hashes.get("qualification_validation_report_sha256") != report_hash:
+        raise QualifiedSubsetError("qualification report hash is not bound")
+    if hashes.get("selection_ids_sha256") not in {None, selection_ids_hash}:
+        raise QualifiedSubsetError("selection ID hash is not bound")
     if sha256_file(inventory_path) != BASE_INVENTORY_SHA256:
         raise QualifiedSubsetError("inventory hash mismatch")
     if sha256_file(split_path) != BASE_SPLIT_SHA256:
@@ -229,8 +259,12 @@ def _validate_inputs(
     train_ids = set(split.get("splits", {}).get("train", [])) if isinstance(split, dict) else set()
     corrections = _load_jsonl(correction_manifest_path)
     correction_by_source = {row.get("source_id"): row for row in corrections}
-    if len(corrections) != 20 or set(correction_by_source) != set(selected_ids):
-        raise QualifiedSubsetError("correction manifest does not match the 20-task selection")
+    if len(corrections) != len(selected_ids) or [row.get("source_id") for row in corrections] != selected_ids:
+        raise QualifiedSubsetError("correction manifest does not match the pinned selection order")
+    correction_versions = {row.get("correction_version") for row in corrections}
+    if len(correction_versions) != 1 or not isinstance(next(iter(correction_versions), None), str):
+        raise QualifiedSubsetError("correction manifest has inconsistent correction versions")
+    correction_version = next(iter(correction_versions))
     for source_id in selected_ids:
         source = inventory.get(source_id)
         correction = correction_by_source.get(source_id)
@@ -242,7 +276,7 @@ def _validate_inputs(
             raise QualifiedSubsetError(f"correction source commit mismatch: {source_id}")
         if source_id not in train_ids or correction.get("split") != "train":
             raise QualifiedSubsetError(f"qualified source is not train-only: {source_id}")
-        if correction.get("correction_version") != CORRECTION_VERSION:
+        if correction.get("correction_version") != correction_version:
             raise QualifiedSubsetError(f"correction version mismatch: {source_id}")
         if correction.get("dependency_closure") != "passed" or correction.get("verification_readiness") != "pending_qualification":
             raise QualifiedSubsetError(f"correction is not the immutable pending qualification row: {source_id}")
@@ -266,6 +300,9 @@ def _validate_inputs(
         "inventory": inventory,
         "corrections": corrections,
         "correction_by_source": correction_by_source,
+        "correction_version": correction_version,
+        "selection_ids_sha256": selection_ids_hash,
+        "correction_manifest_sha256": correction_hash,
     }
 
 
@@ -327,15 +364,15 @@ def prepare_qualified_normalization_run(
             "source_commit": SOURCE_COMMIT,
             "source_tree_sha256": SOURCE_TREE_SHA256,
             "frozen_split_sha256": BASE_SPLIT_SHA256,
-            "selection_ids_sha256": EXPECTED_SOURCE_IDS_SHA256,
-            "correction_version": CORRECTION_VERSION,
-            "correction_manifest_sha256": EXPECTED_CORRECTION_MANIFEST_SHA256,
-            "qualification_report_sha256": EXPECTED_QUALIFICATION_REPORT_SHA256,
+            "selection_ids_sha256": values["selection_ids_sha256"],
+            "correction_version": values["correction_version"],
+            "correction_manifest_sha256": values["correction_manifest_sha256"],
+            "qualification_report_sha256": values["hashes"]["qualification_validation_report_sha256"],
             "qualification_evidence_sha256": values["report"].get("qualification_evidence_sha256"),
-            "raw_runner_evidence_sha256": EXPECTED_RAW_EVIDENCE_SHA256,
-            "runner_sidecar_sha256": EXPECTED_SIDECAR_SHA256,
-            "qualified_task_ids_sha256": EXPECTED_QUALIFIED_LIST_SHA256,
-            "failed_task_ids_sha256": EXPECTED_FAILED_LIST_SHA256,
+            "raw_runner_evidence_sha256": values["hashes"]["evidence_sha256"],
+            "runner_sidecar_sha256": values["hashes"]["runner_sidecar_sha256"],
+            "qualified_task_ids_sha256": sha256_file(qualified_task_ids_path),
+            "failed_task_ids_sha256": sha256_file(failed_task_ids_path),
             "qualified_source_ids_sha256": sha256_file(qualified_source_ids_path),
             "failed_source_ids_sha256": sha256_file(failed_source_ids_path),
             "qualified_correction_manifest_sha256": sha256_file(subset_manifest_path),
@@ -352,9 +389,9 @@ def prepare_qualified_normalization_run(
                     "qualification_result": "passed",
                     "qualification_status": "qualified",
                     "corrected_testbench_sha256": values["correction_by_source"][row["source_id"]]["corrected_testbench_sha256"],
-                    "qualification_report_sha256": EXPECTED_QUALIFICATION_REPORT_SHA256,
-                    "raw_runner_evidence_sha256": EXPECTED_RAW_EVIDENCE_SHA256,
-                    "runner_sidecar_sha256": EXPECTED_SIDECAR_SHA256,
+                    "qualification_report_sha256": values["hashes"]["qualification_validation_report_sha256"],
+                    "raw_runner_evidence_sha256": values["hashes"]["evidence_sha256"],
+                    "runner_sidecar_sha256": values["hashes"]["runner_sidecar_sha256"],
                     "reference_supplied": False,
                     "support_files": [],
                 }
@@ -366,12 +403,12 @@ def prepare_qualified_normalization_run(
             source_input,
             run_root / "normalization" / "packets",
             run_root / "private_assets",
-            batch_size=16,
+            batch_size=len(qualified_source_ids),
             source_commit=SOURCE_COMMIT,
             source_ids=qualified_source_ids,
             correction_manifest=subset_manifest_path,
             correction_root=correction_root,
-            correction_version=CORRECTION_VERSION,
+            correction_version=values["correction_version"],
         )
         if export_code:
             return {"ok": False, "stage": "export", "binding": binding, "export": export_result}, 1
@@ -380,8 +417,8 @@ def prepare_qualified_normalization_run(
             raise QualifiedSubsetError("qualified normalization export must contain exactly one batch")
         batch = _load_json(batch_paths[0])
         rows = batch.get("rows") if isinstance(batch, dict) else None
-        if not isinstance(rows, list) or len(rows) != 16:
-            raise QualifiedSubsetError("qualified normalization batch must contain exactly 16 rows")
+        if not isinstance(rows, list) or len(rows) != len(qualified_source_ids):
+            raise QualifiedSubsetError("qualified normalization batch row count does not match the qualified subset")
         if [row.get("source_id") for row in rows] != qualified_source_ids:
             raise QualifiedSubsetError("qualified normalization batch order mismatch")
         public_text = batch_paths[0].read_text(encoding="utf-8").casefold()

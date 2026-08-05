@@ -13,6 +13,16 @@ if __package__ in {None, ""}:
 from scripts.dataset.rtl_generation_dataset import package_verified_rtl_generation_dataset
 
 
+def _parse_key_values(values: list[str] | None, *, paths: bool) -> dict[str, Path | str]:
+    result: dict[str, Path | str] = {}
+    for value in values or []:
+        key, separator, raw = value.partition("=")
+        if not separator or not key or not raw or key in result:
+            raise ValueError("artifact bindings must use unique KEY=VALUE entries")
+        result[key] = Path(raw) if paths else raw
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tasks", required=True, type=Path)
@@ -64,6 +74,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--recovery-reason")
     parser.add_argument("--recovery-authorization", type=Path)
     parser.add_argument("--require-recovery-lineage", action="store_true")
+    parser.add_argument(
+        "--artifact-binding",
+        action="append",
+        metavar="KEY=PATH",
+        help="bind a regular-file provenance artifact by its SHA-256",
+    )
+    parser.add_argument(
+        "--artifact-hash",
+        action="append",
+        metavar="KEY=SHA256",
+        help="bind a precomputed provenance SHA-256",
+    )
     parser.add_argument("--max-variants", type=int, default=3)
     parser.add_argument("--force", action="store_true")
     strict_group = parser.add_mutually_exclusive_group()
@@ -95,6 +117,11 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--output-dir is required unless --preflight-only is used")
         output_dir = args.output_dir
         recovery_lineage = args.require_recovery_lineage
+    try:
+        artifact_bindings = _parse_key_values(args.artifact_binding, paths=True)
+        artifact_hashes = _parse_key_values(args.artifact_hash, paths=False)
+    except ValueError as exc:
+        parser.error(str(exc))
     result, code = package_verified_rtl_generation_dataset(
         args.tasks,
         args.candidates,
@@ -123,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         recovery_reason=args.recovery_reason,
         recovery_authorization_path=args.recovery_authorization,
         require_recovery_lineage=recovery_lineage,
+        artifact_bindings=artifact_bindings,
+        artifact_hashes=artifact_hashes,
         max_variants=args.max_variants,
         force=args.force,
         strict=args.strict,

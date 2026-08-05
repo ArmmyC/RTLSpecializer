@@ -266,41 +266,60 @@ def _selection_and_manifest(
     corrections = _load_jsonl(correction_manifest_path)
     inventory = _load_jsonl(inventory_path)
     split = _load_json(split_path)
-    if ids != list(BATCH20_SOURCE_IDS):
-        raise QualificationError("pinned batch-20 task order mismatch")
+    if not ids or len(ids) != len(set(ids)):
+        raise QualificationError("selection IDs must be a non-empty unique ordered list")
     if sha256_file(ids_path) != selection.get("selection_ids_sha256"):
         raise QualificationError("selection ID hash mismatch")
     if selection.get("schema_version") != SELECTION_SCHEMA_VERSION:
         raise QualificationError("selection schema mismatch")
+    selection_rows = selection.get("rows")
+    if selection_rows is None:
+        if ids != list(BATCH20_SOURCE_IDS):
+            raise QualificationError("selection report rows are required for a custom batch")
+    elif not isinstance(selection_rows, list) or [row.get("source_id") for row in selection_rows if isinstance(row, dict)] != ids:
+        raise QualificationError("selection report order or row count mismatch")
+    if selection_rows is not None and (selection.get("selected_count") != len(ids) or selection.get("split") != "train"):
+        raise QualificationError("selection report count or split binding mismatch")
+    if selection.get("errors") not in ([], None) or selection.get("ok") is False:
+        raise QualificationError("selection report is not successful")
     for key, expected in (
         ("source_commit", SOURCE_COMMIT),
         ("source_tree_sha256", SOURCE_TREE_SHA256),
         ("base_inventory_sha256", BASE_INVENTORY_SHA256),
         ("base_split_sha256", BASE_SPLIT_SHA256),
-        ("correction_version", CORRECTION_VERSION),
     ):
         if selection.get(key) != expected:
             raise QualificationError(f"selection binding mismatch: {key}")
+    correction_version = selection.get("correction_version")
+    if not isinstance(correction_version, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", correction_version):
+        raise QualificationError("selection correction version is invalid")
+    if len(ids) != len(BATCH20_SOURCE_IDS) and not 20 <= len(ids) <= 40:
+        raise QualificationError("selection is outside the bounded 20-40 task range")
     if sha256_file(inventory_path) != BASE_INVENTORY_SHA256:
         raise QualificationError("inventory hash mismatch")
     if sha256_file(split_path) != BASE_SPLIT_SHA256:
         raise QualificationError("frozen split hash mismatch")
-    if len(corrections) != len(BATCH20_SOURCE_IDS) or [row.get("source_id") for row in corrections] != list(BATCH20_SOURCE_IDS):
+    if len(corrections) != len(ids) or [row.get("source_id") for row in corrections] != ids:
         raise QualificationError("correction manifest order or row count mismatch")
     if len({row.get("source_id") for row in corrections}) != len(corrections):
         raise QualificationError("correction manifest contains duplicate source IDs")
     inventory_by_id = {row.get("source_id"): row for row in inventory}
     train_ids = set((split.get("splits") or {}).get("train", []))
-    for source_id, correction in zip(BATCH20_SOURCE_IDS, corrections):
+    for source_id, correction in zip(ids, corrections):
         source = inventory_by_id.get(source_id)
         if source is None or source_id not in train_ids:
             raise QualificationError(f"selected source is not a pinned train row: {source_id}")
+        required_binding = (
+            ("public_specification_sha256", source.get("source_prompt_sha256")),
+            ("selection_ids_sha256", sha256_file(ids_path)),
+            ("selection_report_sha256", sha256_file(selection_path)),
+        ) if correction_version == "assetfix_v004" else ()
         for key, expected in (
             ("task_id", source.get("task_id")),
             ("top_module", source.get("top_module")),
             ("split", "train"),
             ("source_id", source_id),
-            ("correction_version", CORRECTION_VERSION),
+            ("correction_version", correction_version),
             ("upstream_commit", SOURCE_COMMIT),
             ("source_tree_sha256", SOURCE_TREE_SHA256),
             ("frozen_split_sha256", BASE_SPLIT_SHA256),
@@ -310,6 +329,7 @@ def _selection_and_manifest(
             ("support_files", []),
             ("reference_modified", False),
             ("reference_copied_to_support", False),
+            *required_binding,
         ):
             if correction.get(key) != expected:
                 raise QualificationError(f"correction manifest binding mismatch: {source_id}:{key}")
@@ -322,6 +342,8 @@ def _selection_and_manifest(
     if expected_correction_manifest_sha256 is not None and correction_hash != expected_correction_manifest_sha256:
         raise QualificationError("correction manifest hash mismatch")
     return selection, corrections, inventory, {
+        "source_ids": ids,
+        "correction_version": correction_version,
         "ids_sha256": sha256_file(ids_path),
         "selection_sha256": sha256_file(selection_path),
         "correction_manifest_sha256": correction_hash,
@@ -330,9 +352,15 @@ def _selection_and_manifest(
     }
 
 
-def _authoring_rows(path: Path, corrections: list[dict[str, Any]], inventory: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _authoring_rows(
+    path: Path,
+    corrections: list[dict[str, Any]],
+    inventory: list[dict[str, Any]],
+    source_ids: list[str] | None = None,
+) -> list[dict[str, Any]]:
     rows = _load_jsonl(path)
-    if [row.get("source_id") for row in rows] != list(BATCH20_SOURCE_IDS):
+    source_ids = source_ids if source_ids is not None else list(BATCH20_SOURCE_IDS)
+    if [row.get("source_id") for row in rows] != source_ids:
         raise QualificationError("authoring rows do not preserve pinned task order")
     inventory_by_id = {row.get("source_id"): row for row in inventory}
     correction_by_id = {row.get("source_id"): row for row in corrections}
@@ -375,6 +403,7 @@ def prepare_qualification_input(
     authoring_root: Path,
     output_root: Path,
     expected_correction_manifest_sha256: str | None = None,
+    run_id: str = RUN_ID,
 ) -> dict[str, Any]:
     if output_root.exists() or output_root.is_symlink():
         raise QualificationError("qualification output already exists")
@@ -388,7 +417,9 @@ def prepare_qualification_input(
         split_path=split_path,
         expected_correction_manifest_sha256=expected_correction_manifest_sha256,
     )
-    authors = _authoring_rows(authoring_manifest_path, corrections, inventory)
+    source_ids = hashes["source_ids"]
+    correction_version = hashes["correction_version"]
+    authors = _authoring_rows(authoring_manifest_path, corrections, inventory, source_ids)
     author_by_id = {row["source_id"]: row for row in authors}
     output_root.mkdir(mode=0o700, parents=True)
     input_root = output_root / "input"
@@ -401,7 +432,7 @@ def prepare_qualification_input(
     case_rows: list[dict[str, Any]] = []
     candidate_rows: list[dict[str, Any]] = []
     case_number = 0
-    for source_id in BATCH20_SOURCE_IDS:
+    for source_id in source_ids:
         source = inventory_by_id[source_id]
         correction = correction_by_id[source_id]
         author = author_by_id[source_id]
@@ -440,7 +471,7 @@ def prepare_qualification_input(
             # The attempt number is local to the source ID and keeps the
             # existing candidate-manifest uniqueness rule satisfied.
             attempt = 1 if kind == "positive" else 1 + len([row for row in case_rows if row["source_id"] == source_id])
-            candidate_id = f"assetfix_v003__{source_id}__{name}"
+            candidate_id = f"{correction_version}__{source_id}__{name}"
             candidate_relative = f"{source_id}/{name}.sv"
             testbench_relative_workspace = f"{source_id}/testbench.sv"
             candidate_hash = sha256_file(candidate_target)
@@ -479,15 +510,15 @@ def prepare_qualification_input(
                 "simulation_result_contract": "mismatch_count_v1",
                 "requested_checks": {"compile": True, "simulation": True, "lint": False, "synthesis": False},
             })
-    if len(case_rows) != 60 or len(candidate_rows) != 60:
-        raise QualificationError("qualification input must contain exactly 60 cases")
+    if len(case_rows) != len(candidate_rows):
+        raise QualificationError("qualification case and candidate manifests differ in row count")
     _write_jsonl(output_root / "case_manifest.jsonl", case_rows)
     _write_jsonl(input_root / "candidate_manifest.jsonl", candidate_rows)
     manifest_hash = sha256_file(input_root / "candidate_manifest.jsonl")
     workspace_hash = _workspace_tree_sha256(workspace)
     report = {
         "schema_version": "rtl_asset_qualification_preparation_v0.1",
-        "run_id": RUN_ID,
+        "run_id": run_id,
         "source_commit": SOURCE_COMMIT,
         "source_tree_sha256": SOURCE_TREE_SHA256,
         "frozen_split_sha256": BASE_SPLIT_SHA256,
@@ -496,8 +527,8 @@ def prepare_qualification_input(
         "correction_manifest_sha256": hashes["correction_manifest_sha256"],
         "inventory_sha256": hashes["inventory_sha256"],
         "split_sha256": hashes["split_sha256"],
-        "correction_version": CORRECTION_VERSION,
-        "selected_source_ids": list(BATCH20_SOURCE_IDS),
+        "correction_version": correction_version,
+        "selected_source_ids": source_ids,
         "case_count": len(case_rows),
         "positive_case_count": sum(row["kind"] == "positive" for row in case_rows),
         "negative_case_count": sum(row["kind"] == "negative" for row in case_rows),
@@ -599,12 +630,17 @@ def aggregate_qualification_evidence(
     sidecar = _load_json(sidecar_path)
     if not isinstance(sidecar, dict):
         raise QualificationError("runner sidecar must be an object")
-    if len(case_rows) != 60 or len(evidence_rows) != 60:
-        raise QualificationError("qualification requires exactly 60 case and evidence rows")
+    selected_source_ids = preparation_report.get("selected_source_ids")
+    if not isinstance(selected_source_ids, list) or not selected_source_ids or len(selected_source_ids) != len(set(selected_source_ids)):
+        raise QualificationError("preparation report has an invalid selected source list")
+    if len(case_rows) != len(evidence_rows) or not case_rows:
+        raise QualificationError("qualification case and evidence row counts do not match")
     case_by_id = {row.get("candidate_id"): row for row in case_rows}
     evidence_by_id = {row.get("candidate_id"): row for row in evidence_rows}
-    if len(case_by_id) != 60 or set(case_by_id) != set(evidence_by_id):
+    if len(case_by_id) != len(case_rows) or set(case_by_id) != set(evidence_by_id):
         raise QualificationError("qualification case/evidence candidate IDs do not match")
+    if [row.get("candidate_id") for row in case_rows] != [row.get("candidate_id") for row in _load_jsonl(candidate_manifest)]:
+        raise QualificationError("qualification case and candidate manifest order do not match")
     manifest_hash = sha256_file(candidate_manifest)
     workspace_hash = _workspace_tree_sha256(workspace)
     evidence_hash = sha256_file(evidence_path)
@@ -616,7 +652,7 @@ def aggregate_qualification_evidence(
         if path.is_symlink() or (path.is_file() and path.name.casefold() == "reference.sv"):
             errors.append("qualification output contains a forbidden reference or link")
     derived_rows: list[dict[str, Any]] = []
-    by_source: dict[str, list[dict[str, Any]]] = {source_id: [] for source_id in BATCH20_SOURCE_IDS}
+    by_source: dict[str, list[dict[str, Any]]] = {source_id: [] for source_id in selected_source_ids}
     for case in case_rows:
         evidence = evidence_by_id[case["candidate_id"]]
         if any(evidence.get(key) != case.get(key) for key in ("candidate_id", "task_id", "source_id", "attempt", "top_module")):
@@ -665,9 +701,12 @@ def aggregate_qualification_evidence(
             "failure_category": evidence.get("failure_category"),
         }
         derived_rows.append(row)
-        by_source[case["source_id"]].append(row)
+        if case["source_id"] not in by_source:
+            errors.append(f"qualification case references an unselected source: {case['source_id']}")
+        else:
+            by_source[case["source_id"]].append(row)
     task_rows: list[dict[str, Any]] = []
-    for source_id in BATCH20_SOURCE_IDS:
+    for source_id in selected_source_ids:
         rows = by_source[source_id]
         positive = [row for row in rows if row["kind"] == "positive"]
         negatives = [row for row in rows if row["kind"] == "negative"]
@@ -705,18 +744,18 @@ def aggregate_qualification_evidence(
         task_rows = [{**row, "qualification_passed": False, "qualification_status": "runner_failure"} for row in task_rows]
     report = {
         "schema_version": REPORT_SCHEMA_VERSION,
-        "run_id": RUN_ID,
+        "run_id": preparation_report.get("run_id", RUN_ID),
         "source_commit": SOURCE_COMMIT,
         "source_tree_sha256": SOURCE_TREE_SHA256,
         "frozen_split_sha256": BASE_SPLIT_SHA256,
-        "correction_version": CORRECTION_VERSION,
+        "correction_version": preparation_report.get("correction_version"),
         "selection_ids_sha256": preparation_report.get("selection_ids_sha256"),
         "selection_report_sha256": preparation_report.get("selection_report_sha256"),
         "correction_manifest_sha256": preparation_report.get("correction_manifest_sha256"),
         "qualification_manifest_sha256": manifest_hash,
         "qualification_evidence_sha256": None,
         "qualification_sidecar_sha256": sha256_file(sidecar_path),
-        "selected_tasks": len(BATCH20_SOURCE_IDS),
+        "selected_tasks": len(selected_source_ids),
         "qualified_tasks": sum(row["qualification_passed"] for row in task_rows),
         "failed_qualification": sum(not row["qualification_passed"] for row in task_rows),
         "positive_candidates_passed": sum(row["positive_candidate_passed"] for row in task_rows),
@@ -734,7 +773,7 @@ def aggregate_qualification_evidence(
     _write_jsonl(evidence_output, derived_rows)
     _write_json(report_output, report)
     if report["qualification_passed"]:
-        _write_exclusive(qualification_root / "qualified_task_ids.txt", ("\n".join(BATCH20_SOURCE_IDS) + "\n").encode("utf-8"))
+        _write_exclusive(qualification_root / "qualified_task_ids.txt", ("\n".join(row["source_id"] for row in task_rows if row["qualification_passed"]) + "\n").encode("utf-8"))
     return report
 
 
@@ -774,7 +813,9 @@ def validate_prepared_qualification(
         split_path=split_path,
         expected_correction_manifest_sha256=None,
     )
-    authors = _authoring_rows(authoring_manifest_path, corrections, inventory)
+    source_ids = hashes["source_ids"]
+    correction_version = hashes["correction_version"]
+    authors = _authoring_rows(authoring_manifest_path, corrections, inventory, source_ids)
     _require_directory(correction_root)
     _require_directory(authoring_root)
     _require_directory(qualification_root)
@@ -792,8 +833,16 @@ def validate_prepared_qualification(
 
     expected_top_level = {"case_manifest.jsonl", "input", "preparation_report.json"}
     actual_top_level = {path.name for path in qualification_root.iterdir()}
-    if actual_top_level != expected_top_level:
+    unexpected_top_level = actual_top_level - expected_top_level - {"reports"}
+    if unexpected_top_level:
         raise QualificationError("qualification attempt has unexpected top-level entries")
+    reports_root = qualification_root / "reports"
+    if reports_root.exists():
+        _require_directory(reports_root)
+        report_entries = {path.name for path in reports_root.iterdir()}
+        expected_report_name = authorization_path.name
+        if authorization_path.parent != reports_root or report_entries != {expected_report_name}:
+            raise QualificationError("qualification reports contain unexpected entries")
     input_root = qualification_root / "input"
     workspace = input_root / "workspace"
     _require_directory(input_root)
@@ -804,9 +853,15 @@ def validate_prepared_qualification(
     preparation = _load_json(qualification_root / "preparation_report.json")
     if not isinstance(preparation, dict):
         raise QualificationError("preparation report must be an object")
+    expected_positive_count = len(source_ids)
+    expected_negative_count = sum(
+        sum(item.get("kind") == "negative" for item in correction.get("mutation_contracts", []))
+        for correction in corrections
+    )
+    expected_case_count = expected_positive_count + expected_negative_count
     expected_preparation = {
         "schema_version": "rtl_asset_qualification_preparation_v0.1",
-        "run_id": RUN_ID,
+        "run_id": preparation.get("run_id", RUN_ID),
         "source_commit": SOURCE_COMMIT,
         "source_tree_sha256": SOURCE_TREE_SHA256,
         "frozen_split_sha256": BASE_SPLIT_SHA256,
@@ -815,11 +870,11 @@ def validate_prepared_qualification(
         "correction_manifest_sha256": correction_hash,
         "inventory_sha256": hashes["inventory_sha256"],
         "split_sha256": hashes["split_sha256"],
-        "correction_version": CORRECTION_VERSION,
-        "selected_source_ids": list(BATCH20_SOURCE_IDS),
-        "case_count": 60,
-        "positive_case_count": 20,
-        "negative_case_count": 40,
+        "correction_version": correction_version,
+        "selected_source_ids": source_ids,
+        "case_count": expected_case_count,
+        "positive_case_count": expected_positive_count,
+        "negative_case_count": expected_negative_count,
         "reference_rtl_supplied": False,
         "support_file_count": 0,
         "qualification_status_before": "pending_isolated_qualification",
@@ -832,23 +887,28 @@ def validate_prepared_qualification(
 
     case_rows = _load_jsonl(qualification_root / "case_manifest.jsonl")
     candidate_rows = _load_jsonl(input_root / "candidate_manifest.jsonl")
-    if len(case_rows) != 60 or len(candidate_rows) != 60:
-        raise QualificationError("prepared qualification input must contain 60 rows")
-    if [row.get("source_id") for row in case_rows[::3]] != list(BATCH20_SOURCE_IDS):
+    correction_by_id = {row["source_id"]: row for row in corrections}
+    if len(case_rows) != expected_case_count or len(candidate_rows) != expected_case_count:
+        raise QualificationError("prepared qualification input case count mismatch")
+    expected_case_sources = [
+        source_id
+        for source_id in source_ids
+        for _ in range(1 + sum(item.get("kind") == "negative" for item in correction_by_id[source_id].get("mutation_contracts", [])))
+    ]
+    if [row.get("source_id") for row in case_rows] != expected_case_sources:
         raise QualificationError("case manifest does not preserve the pinned task order")
-    if [row.get("source_id") for row in candidate_rows[::3]] != list(BATCH20_SOURCE_IDS):
+    if [row.get("source_id") for row in candidate_rows] != expected_case_sources:
         raise QualificationError("candidate manifest does not preserve the pinned task order")
-    if len({row.get("candidate_id") for row in case_rows}) != 60:
+    if len({row.get("candidate_id") for row in case_rows}) != expected_case_count:
         raise QualificationError("case manifest contains duplicate candidate IDs")
-    if len({row.get("candidate_id") for row in candidate_rows}) != 60:
+    if len({row.get("candidate_id") for row in candidate_rows}) != expected_case_count:
         raise QualificationError("candidate manifest contains duplicate candidate IDs")
 
     inventory_by_id = {row["source_id"]: row for row in inventory}
-    correction_by_id = {row["source_id"]: row for row in corrections}
     author_by_id = {row["source_id"]: row for row in authors}
     candidate_by_id = {row["candidate_id"]: row for row in candidate_rows}
     case_by_id = {row["candidate_id"]: row for row in case_rows}
-    for source_index, source_id in enumerate(BATCH20_SOURCE_IDS):
+    for source_index, source_id in enumerate(source_ids):
         source = inventory_by_id[source_id]
         correction = correction_by_id[source_id]
         author = author_by_id[source_id]
@@ -870,12 +930,12 @@ def validate_prepared_qualification(
             row["candidate_id"] for row in case_rows if row.get("source_id") == source_id
         ]
         expected_case_ids = [
-            f"assetfix_v003__{source_id}__{name}" for name in expected_names
+            f"{correction_version}__{source_id}__{name}" for name in expected_names
         ]
         if source_case_ids != expected_case_ids:
             raise QualificationError(f"case order mismatch: {source_id}")
         for offset, name in enumerate(expected_names):
-            candidate_id = f"assetfix_v003__{source_id}__{name}"
+            candidate_id = f"{correction_version}__{source_id}__{name}"
             case = case_by_id[candidate_id]
             manifest = candidate_by_id[candidate_id]
             candidate_path = task_dir / f"{name}.sv"
@@ -918,7 +978,7 @@ def validate_prepared_qualification(
         raise QualificationError("authorization must be an object")
     auth_expected = {
         "schema_version": AUTHORIZATION_SCHEMA_VERSION,
-        "run_id": RUN_ID,
+        "run_id": preparation.get("run_id", RUN_ID),
         "status": "authorized_once",
         "authorization_scope": "qualification_only",
         "source_commit": SOURCE_COMMIT,
@@ -926,11 +986,11 @@ def validate_prepared_qualification(
         "frozen_split_sha256": BASE_SPLIT_SHA256,
         "selection_ids_sha256": hashes["ids_sha256"],
         "correction_manifest_sha256": correction_hash,
-        "correction_version": CORRECTION_VERSION,
-        "selected_source_ids": list(BATCH20_SOURCE_IDS),
-        "case_count": 60,
-        "positive_case_count": 20,
-        "negative_case_count": 40,
+        "correction_version": correction_version,
+        "selected_source_ids": source_ids,
+        "case_count": expected_case_count,
+        "positive_case_count": expected_positive_count,
+        "negative_case_count": expected_negative_count,
         "qualification_status_before": "pending_isolated_qualification",
         "reference_rtl_supplied": False,
         "support_file_count": 0,
@@ -981,7 +1041,7 @@ def validate_prepared_qualification(
 
     result = {
         "schema_version": "rtl_asset_qualification_preflight_v0.1",
-        "run_id": RUN_ID,
+        "run_id": preparation.get("run_id", RUN_ID),
         "status": "ready_for_isolated_execution",
         "source_commit": SOURCE_COMMIT,
         "source_tree_sha256": SOURCE_TREE_SHA256,
@@ -1001,11 +1061,11 @@ def validate_prepared_qualification(
             "gid": permission_gid,
             "qualification_file_count": permission_file_count,
         },
-        "selected_source_ids": list(BATCH20_SOURCE_IDS),
-        "selected_task_count": 20,
-        "candidate_case_count": 60,
-        "positive_case_count": 20,
-        "negative_case_count": 40,
+        "selected_source_ids": source_ids,
+        "selected_task_count": len(source_ids),
+        "candidate_case_count": expected_case_count,
+        "positive_case_count": expected_positive_count,
+        "negative_case_count": expected_negative_count,
         "qualification_status_before": "pending_isolated_qualification",
         "reference_rtl_supplied": False,
         "support_file_count": 0,
@@ -1062,13 +1122,20 @@ def create_authorization(
     rtlspecializer_commit: str = RTLSPECIALIZER_BASE_COMMIT,
     image_id: str = IMAGE_ID,
 ) -> dict[str, Any]:
+    selected_source_ids = preparation_report.get("selected_source_ids")
+    correction_version = preparation_report.get("correction_version")
+    case_count = preparation_report.get("case_count")
+    positive_case_count = preparation_report.get("positive_case_count")
+    negative_case_count = preparation_report.get("negative_case_count")
+    if not isinstance(selected_source_ids, list) or not selected_source_ids:
+        raise QualificationError("preparation report has no selected source IDs")
     expected_preparation = {
-        "run_id": RUN_ID,
-        "case_count": 60,
-        "positive_case_count": 20,
-        "negative_case_count": 40,
-        "selected_source_ids": list(BATCH20_SOURCE_IDS),
-        "correction_version": CORRECTION_VERSION,
+        "run_id": preparation_report.get("run_id", RUN_ID),
+        "case_count": case_count,
+        "positive_case_count": positive_case_count,
+        "negative_case_count": negative_case_count,
+        "selected_source_ids": selected_source_ids,
+        "correction_version": correction_version,
         "qualification_status_before": "pending_isolated_qualification",
         "reference_rtl_supplied": False,
         "support_file_count": 0,
@@ -1114,7 +1181,7 @@ def create_authorization(
         raise QualificationError("RTLSpecializer repository is not on main")
     report = {
         "schema_version": AUTHORIZATION_SCHEMA_VERSION,
-        "run_id": RUN_ID,
+        "run_id": preparation_report.get("run_id", RUN_ID),
         "status": "authorized_once",
         "authorization_scope": "qualification_only",
         "source_commit": SOURCE_COMMIT,
@@ -1127,11 +1194,11 @@ def create_authorization(
         "split_sha256": preparation_report["split_sha256"],
         "candidate_manifest_sha256": preparation_report["candidate_manifest_sha256"],
         "workspace_tree_sha256": preparation_report["workspace_tree_sha256"],
-        "correction_version": CORRECTION_VERSION,
-        "selected_source_ids": list(BATCH20_SOURCE_IDS),
-        "case_count": 60,
-        "positive_case_count": 20,
-        "negative_case_count": 40,
+        "correction_version": correction_version,
+        "selected_source_ids": selected_source_ids,
+        "case_count": case_count,
+        "positive_case_count": positive_case_count,
+        "negative_case_count": negative_case_count,
         "qualification_status_before": "pending_isolated_qualification",
         "reference_rtl_supplied": False,
         "support_file_count": 0,
@@ -1160,7 +1227,7 @@ def create_authorization(
             "rtlbench": rtlbench_attestation,
             "rtlspecializer": rtlspecializer_attestation,
         },
-        "smoke_review_exceptions": SMOKE_REVIEW_EXCEPTIONS,
+        "smoke_review_exceptions": SMOKE_REVIEW_EXCEPTIONS if correction_version == CORRECTION_VERSION else [],
         "candidate_generation_repeated": False,
         "normalization_performed": False,
         "teacher_generation_performed": False,

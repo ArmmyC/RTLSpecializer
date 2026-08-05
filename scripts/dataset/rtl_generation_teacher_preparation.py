@@ -100,6 +100,19 @@ def _load_ids(path: Path, label: str) -> list[str]:
     return values
 
 
+def _load_optional_ids(path: Path, label: str) -> list[str]:
+    """Load an allowlist that may be empty, while keeping the same safety checks."""
+
+    if _contains_symlink(path) or path.is_symlink() or not path.is_file():
+        raise TeacherPreparationError(f"{label} is not a regular file")
+    if _is_hard_link(path):
+        raise TeacherPreparationError(f"{label} is a hard-link alias")
+    values = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if len(values) != len(set(values)):
+        raise TeacherPreparationError(f"{label} contains duplicate identities")
+    return values
+
+
 def _write_exclusive_json(path: Path, value: Any) -> None:
     if path.exists() or path.is_symlink():
         raise TeacherPreparationError(f"refusing to replace existing output: {path}")
@@ -170,8 +183,8 @@ def _assert_empty_generation_state(run_root: Path) -> None:
 
 def _qualified_rows(binding: dict[str, Any]) -> list[dict[str, str]]:
     rows = binding.get("rows")
-    if not isinstance(rows, list) or len(rows) != QUALIFIED_TASK_COUNT:
-        raise TeacherPreparationError("qualified binding row count is not 16")
+    if not isinstance(rows, list) or not rows:
+        raise TeacherPreparationError("qualified binding rows are empty")
     result: list[dict[str, str]] = []
     seen_sources: set[str] = set()
     seen_tasks: set[str] = set()
@@ -198,21 +211,18 @@ def _validate_qualified_binding(binding_path: Path) -> tuple[dict[str, Any], lis
     binding = _load_object(binding_path, "qualified subset binding")
     if binding.get("schema_version") != EXPECTED_QUALIFIED_BINDING_SCHEMA:
         raise TeacherPreparationError("qualified subset binding schema mismatch")
+    correction_version = binding.get("correction_version")
+    if not isinstance(correction_version, str) or not correction_version:
+        raise TeacherPreparationError("qualified subset binding correction version is invalid")
+    rows = _qualified_rows(binding)
+    task_count = len(rows)
+    failed_task_count = binding.get("failed_task_count")
+    if not isinstance(failed_task_count, int) or failed_task_count < 0:
+        raise TeacherPreparationError("qualified subset binding failed-task count is invalid")
     checks = {
-        "correction_version": CORRECTION_VERSION,
         "source_commit": SOURCE_COMMIT,
         "source_tree_sha256": SOURCE_TREE_SHA256,
         "frozen_split_sha256": FROZEN_SPLIT_SHA256,
-        "selection_ids_sha256": "e1927846320a465a49e039e7a8f3518a12424d14e08972a10a1fd232a1d16bbd",
-        "correction_manifest_sha256": EXPECTED_CORRECTION_MANIFEST_SHA256,
-        "qualification_report_sha256": EXPECTED_QUALIFICATION_REPORT_SHA256,
-        "qualification_evidence_sha256": EXPECTED_QUALIFICATION_EVIDENCE_SHA256,
-        "raw_runner_evidence_sha256": EXPECTED_RAW_QUALIFICATION_EVIDENCE_SHA256,
-        "runner_sidecar_sha256": EXPECTED_RUNNER_SIDECAR_SHA256,
-        "qualified_task_ids_sha256": EXPECTED_QUALIFIED_LIST_SHA256,
-        "failed_task_ids_sha256": EXPECTED_EXCLUDED_TASK_LIST_SHA256,
-        "qualified_task_count": QUALIFIED_TASK_COUNT,
-        "failed_task_count": 4,
         "normalization_allowed": True,
         "teacher_generation_allowed": False,
         "reference_rtl_supplied": False,
@@ -221,7 +231,20 @@ def _validate_qualified_binding(binding_path: Path) -> tuple[dict[str, Any], lis
     for key, expected in checks.items():
         if binding.get(key) != expected:
             raise TeacherPreparationError(f"qualified subset binding mismatch: {key}")
-    return binding, _qualified_rows(binding)
+    if binding.get("qualified_task_count") != task_count:
+        raise TeacherPreparationError("qualified subset binding task count mismatch")
+    for field in (
+        "selection_ids_sha256",
+        "correction_manifest_sha256",
+        "qualification_report_sha256",
+        "qualification_evidence_sha256",
+        "raw_runner_evidence_sha256",
+        "runner_sidecar_sha256",
+        "qualified_task_ids_sha256",
+        "failed_task_ids_sha256",
+    ):
+        _require_sha256(binding.get(field), f"qualified subset binding {field}")
+    return binding, rows
 
 
 def _ordered_identities(
@@ -254,7 +277,7 @@ def create_teacher_generation_binding(
     rtlspecializer_commit: str,
     output_path: Path | None = None,
 ) -> tuple[dict[str, Any], int]:
-    """Create the exclusive binding report for the qualified 16-task run."""
+    """Create the exclusive binding report for a qualified train-only run."""
 
     try:
         if not isinstance(rtlspecializer_commit, str) or len(rtlspecializer_commit) != 40:
@@ -272,29 +295,26 @@ def create_teacher_generation_binding(
         qualified_binding, qualified_rows = _validate_qualified_binding(qualified_binding_path)
         tasks = _load_jsonl(tasks_path)
         assets = _load_jsonl(assets_path)
-        if len(tasks) != QUALIFIED_TASK_COUNT or len(assets) != QUALIFIED_TASK_COUNT:
-            raise TeacherPreparationError("qualified task and asset manifests must contain 16 rows")
+        task_count = len(qualified_rows)
+        if len(tasks) != task_count or len(assets) != task_count:
+            raise TeacherPreparationError("qualified task and asset manifests do not match the qualified row count")
         for task in tasks:
             _public_task(task)
         identities = _ordered_identities(tasks, qualified_rows)
         qualified_source_ids = _load_ids(qualified_ids_path, "qualified source IDs")
         if qualified_source_ids != [row["source_id"] for row in identities]:
             raise TeacherPreparationError("qualified source ID list order or identity mismatch")
-        failed_source_ids = _load_ids(failed_ids_path, "excluded source IDs")
-        if sha256_file(qualified_ids_path) != EXPECTED_QUALIFIED_SOURCE_LIST_SHA256:
-            raise TeacherPreparationError("qualified source ID list hash mismatch")
-        if sha256_file(failed_ids_path) != EXPECTED_EXCLUDED_SOURCE_LIST_SHA256:
-            raise TeacherPreparationError("excluded source ID list hash mismatch")
+        failed_source_ids = _load_optional_ids(failed_ids_path, "excluded source IDs")
         qualified_task_ids = [row["task_id"] for row in identities]
-        if _text_list_sha256(qualified_task_ids) != EXPECTED_QUALIFIED_LIST_SHA256:
-            raise TeacherPreparationError("qualified task ID list hash mismatch")
+        qualified_task_ids_hash = _text_list_sha256(qualified_task_ids)
         asset_by_task = {asset.get("task_id"): asset for asset in assets}
-        if len(asset_by_task) != QUALIFIED_TASK_COUNT:
+        if len(asset_by_task) != task_count:
             raise TeacherPreparationError("verification asset manifest contains duplicate task IDs")
         correction_rows = _load_jsonl(qualified_manifest_path)
         correction_by_source = {row.get("source_id"): row for row in correction_rows}
-        if len(correction_rows) != QUALIFIED_TASK_COUNT or set(correction_by_source) != {row["source_id"] for row in identities}:
+        if len(correction_rows) != task_count or [row.get("source_id") for row in correction_rows] != [row["source_id"] for row in identities]:
             raise TeacherPreparationError("qualified correction manifest identity mismatch")
+        correction_version = qualified_binding["correction_version"]
         for identity in identities:
             asset = asset_by_task.get(identity["task_id"])
             correction = correction_by_source[identity["source_id"]]
@@ -306,7 +326,7 @@ def create_teacher_generation_binding(
                 raise TeacherPreparationError("qualified asset declares support files")
             if asset.get("input_hashes", {}).get("testbench_sha256") != correction.get("corrected_testbench_sha256"):
                 raise TeacherPreparationError("corrected testbench hash is not bound to the asset")
-            if correction.get("correction_version") != CORRECTION_VERSION:
+            if correction.get("correction_version") != correction_version:
                 raise TeacherPreparationError("correction version mismatch")
             if correction.get("verification_readiness") != "executable_ready" or correction.get("qualification_status") != "qualified":
                 raise TeacherPreparationError("correction row is not qualified")
@@ -315,21 +335,19 @@ def create_teacher_generation_binding(
         exchange_path = run_root / "reports" / "normalization_exchange.json"
         assembly_path = run_root / "reports" / "normalization_assembly.json"
         qualified_correction_hash = sha256_file(qualified_manifest_path)
-        if qualified_correction_hash != EXPECTED_QUALIFIED_CORRECTION_MANIFEST_SHA256:
-            raise TeacherPreparationError("qualified correction manifest hash mismatch")
         packet_hash = sha256_file(packet_path)
         response_hash = sha256_file(response_path)
         exchange = _load_object(exchange_path, "normalization exchange report")
         assembly = _load_object(assembly_path, "normalization assembly report")
-        if exchange.get("normalization_status") != "validated" or exchange.get("row_count") != QUALIFIED_TASK_COUNT:
+        if exchange.get("normalization_status") != "validated" or exchange.get("row_count") != task_count:
             raise TeacherPreparationError("normalization exchange is not validated")
         if exchange.get("packet_sha256") != packet_hash or exchange.get("canonical_response_sha256") != response_hash:
             raise TeacherPreparationError("normalization exchange hash binding mismatch")
-        if assembly.get("ok") is not True or assembly.get("task_count") != QUALIFIED_TASK_COUNT or assembly.get("asset_count") != QUALIFIED_TASK_COUNT:
+        if assembly.get("ok") is not True or assembly.get("task_count") != task_count or assembly.get("asset_count") != task_count:
             raise TeacherPreparationError("normalization assembly is not complete")
         if assembly.get("tasks_sha256") != sha256_file(tasks_path) or assembly.get("assets_sha256") != sha256_file(assets_path):
             raise TeacherPreparationError("normalization assembly output hash mismatch")
-        if assembly.get("qualified_task_ids_sha256") != EXPECTED_QUALIFIED_LIST_SHA256:
+        if assembly.get("qualified_task_ids_sha256") != qualified_task_ids_hash:
             raise TeacherPreparationError("normalization assembly qualified-list binding mismatch")
         artifacts = {
             "normalization_packet": packet_hash,
@@ -338,14 +356,14 @@ def create_teacher_generation_binding(
             "normalization_assembly_report": sha256_file(assembly_path),
             "qualified_task_list": _text_list_sha256(qualified_task_ids),
             "qualified_source_list": sha256_file(qualified_ids_path),
-            "excluded_task_list": EXPECTED_EXCLUDED_TASK_LIST_SHA256,
+            "excluded_task_list": qualified_binding["failed_task_ids_sha256"],
             "excluded_source_list": sha256_file(failed_ids_path),
-            "qualification_report": EXPECTED_QUALIFICATION_REPORT_SHA256,
-            "qualification_evidence": EXPECTED_QUALIFICATION_EVIDENCE_SHA256,
-            "qualification_runner_evidence": EXPECTED_RAW_QUALIFICATION_EVIDENCE_SHA256,
-            "qualification_runner_sidecar": EXPECTED_RUNNER_SIDECAR_SHA256,
+            "qualification_report": qualified_binding["qualification_report_sha256"],
+            "qualification_evidence": qualified_binding["qualification_evidence_sha256"],
+            "qualification_runner_evidence": qualified_binding["raw_runner_evidence_sha256"],
+            "qualification_runner_sidecar": qualified_binding["runner_sidecar_sha256"],
             "qualified_subset_binding": sha256_file(qualified_binding_path),
-            "asset_correction_manifest": EXPECTED_CORRECTION_MANIFEST_SHA256,
+            "asset_correction_manifest": qualified_binding["correction_manifest_sha256"],
             "qualified_correction_manifest": qualified_correction_hash,
             "generation_tasks": sha256_file(tasks_path),
             "verification_assets": sha256_file(assets_path),
@@ -355,9 +373,9 @@ def create_teacher_generation_binding(
         binding = {
             "schema_version": BINDING_SCHEMA_VERSION,
             "run_id": run_root.name,
-            "task_count": QUALIFIED_TASK_COUNT,
+            "task_count": task_count,
             "split": TRAIN_SPLIT,
-            "correction_version": CORRECTION_VERSION,
+            "correction_version": correction_version,
             "rtlspecializer_commit": rtlspecializer_commit,
             "source_commit": SOURCE_COMMIT,
             "source_tree_sha256": SOURCE_TREE_SHA256,
@@ -367,7 +385,7 @@ def create_teacher_generation_binding(
             "reference_rtl_supplied": False,
             "support_file_count": 0,
             "excluded_source_ids": failed_source_ids,
-            "excluded_task_ids_sha256": EXPECTED_EXCLUDED_TASK_LIST_SHA256,
+            "excluded_task_ids_sha256": qualified_binding["failed_task_ids_sha256"],
             "qualified_order": identities,
             "artifact_hashes": artifacts,
             "packet_export_allowed": True,
@@ -385,7 +403,7 @@ def create_teacher_generation_binding(
             "ok": True,
             "binding_path": str(output_path),
             "binding_sha256": sha256_file(output_path),
-            "task_count": QUALIFIED_TASK_COUNT,
+            "task_count": task_count,
             "split": TRAIN_SPLIT,
             "qualified_order": identities,
             "excluded_source_ids": failed_source_ids,
@@ -447,11 +465,14 @@ def validate_teacher_generation_handoff(
         raise TeacherPreparationError("teacher-generation packet validation has not passed")
     if packet_report.get("binding_sha256") != binding_hash:
         raise TeacherPreparationError("packet validation report is bound to a different teacher binding")
-    if binding.get("task_count") != QUALIFIED_TASK_COUNT or binding.get("split") != TRAIN_SPLIT:
+    identities = binding.get("qualified_order")
+    if not isinstance(identities, list) or not identities:
+        raise TeacherPreparationError("teacher-generation binding has no qualified order")
+    if binding.get("task_count") != len(identities) or binding.get("split") != TRAIN_SPLIT:
         raise TeacherPreparationError("teacher-generation binding task or split count is invalid")
     if binding.get("qualification_passed") is not True or binding.get("reference_rtl_supplied") is not False:
         raise TeacherPreparationError("teacher-generation binding is not qualified and private-safe")
-    if binding.get("support_file_count") != 0 or binding.get("correction_version") != CORRECTION_VERSION:
+    if binding.get("support_file_count") != 0 or not isinstance(binding.get("correction_version"), str):
         raise TeacherPreparationError("teacher-generation binding asset contract is invalid")
     if candidate_record.get("task_id") != task.get("task_id") or candidate_record.get("source_id") != task.get("source_id"):
         raise TeacherPreparationError("candidate/task identity mismatch")
@@ -463,7 +484,6 @@ def validate_teacher_generation_handoff(
     candidate_hash = hashlib.sha256(str(candidate.get("rtl", "")).encode("utf-8")).hexdigest()
     if candidate_record.get("candidate_sha256") != candidate_hash:
         raise TeacherPreparationError("candidate hash mismatch")
-    identities = binding.get("qualified_order")
     identity = next((row for row in identities if row.get("task_id") == task.get("task_id")), None) if isinstance(identities, list) else None
     if identity is None or identity.get("source_id") != task.get("source_id") or identity.get("top_module") != task.get("top_module"):
         raise TeacherPreparationError("task is not in the qualified teacher order")
@@ -530,7 +550,7 @@ def validate_teacher_packet_set(
     binding_path: Path | None = None,
     output_path: Path | None = None,
 ) -> tuple[dict[str, Any], int]:
-    """Validate exactly 16 public initial packets and write one report."""
+    """Validate the complete public initial packet set and write one report."""
 
     try:
         run_root = run_root.resolve()
@@ -542,12 +562,15 @@ def validate_teacher_packet_set(
         if binding.get("packet_export_allowed") is not True or binding.get("teacher_response_allowed") is not False:
             raise TeacherPreparationError("teacher-generation binding is not at the packet-export boundary")
         identities = binding.get("qualified_order")
-        if not isinstance(identities, list) or len(identities) != QUALIFIED_TASK_COUNT:
+        if not isinstance(identities, list) or not identities:
             raise TeacherPreparationError("teacher-generation binding has an invalid qualified order")
+        task_count = len(identities)
+        if binding.get("task_count") not in (None, task_count):
+            raise TeacherPreparationError("teacher-generation binding task count does not match qualified order")
         tasks = _load_jsonl(run_root / "tasks" / "generation_tasks.jsonl")
         by_task = {row.get("task_id"): row for row in tasks}
-        if len(by_task) != QUALIFIED_TASK_COUNT:
-            raise TeacherPreparationError("generation task manifest is not exactly 16 unique rows")
+        if len(by_task) != task_count:
+            raise TeacherPreparationError("generation task manifest does not match the qualified row count")
         packet_dir = run_root / "teacher" / "packets"
         if _contains_symlink(packet_dir) or packet_dir.is_symlink() or not packet_dir.is_dir():
             raise TeacherPreparationError("teacher packet directory is missing or unsafe")
@@ -555,7 +578,7 @@ def validate_teacher_packet_set(
             raise TeacherPreparationError("teacher packet directory must be mode 0700")
         expected_names = {
             f"packet_{index:04d}.{suffix}"
-            for index in range(1, QUALIFIED_TASK_COUNT + 1)
+            for index in range(1, task_count + 1)
             for suffix in ("json", "md")
         }
         actual_names = {path.name for path in packet_dir.iterdir()}
@@ -605,8 +628,8 @@ def validate_teacher_packet_set(
             "binding_sha256": binding_hash,
             "packet_set_sha256": packet_hash,
             "packet_set_hash_schema": PACKET_SET_HASH_SCHEMA_VERSION,
-            "packet_count": QUALIFIED_TASK_COUNT,
-            "row_count": QUALIFIED_TASK_COUNT,
+            "packet_count": task_count,
+            "row_count": task_count,
             "qualified_order": [
                 {"source_id": row["source_id"], "task_id": row["task_id"], "top_module": row["top_module"]}
                 for row in identities

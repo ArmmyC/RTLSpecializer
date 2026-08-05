@@ -10,6 +10,7 @@ import jsonschema
 
 import scripts.dataset.rtl_manual_teacher_verification as verification
 from scripts.dataset.rtl_manual_teacher_verification import (
+    REPAIR_HANDOFF_BINDING_SCHEMA_VERSION,
     export_teacher_repair_packets,
     ingest_candidate_evidence,
     prepare_candidate_verification,
@@ -374,6 +375,79 @@ def test_append_history_is_sorted_and_acceptance_is_terminal(tmp_path: Path) -> 
         assert "testbench.sv" not in text
         assert "helper.svh" not in text
         assert ".local_data" not in text
+
+
+def test_attempt_two_repair_binding_is_embedded_in_new_handoff(tmp_path: Path) -> None:
+    _, candidates, run1 = initial_flow(tmp_path)
+    attempts = tmp_path / "attempts.jsonl"
+    result, code = ingest_candidate_evidence(run1 / "verification_plan.jsonl", evidence_for_plan(run1), attempts)
+    assert code == 0, result
+
+    repairs = tmp_path / "repairs" / "attempt_02"
+    result, code = export_teacher_repair_packets(FIXTURE_ROOT / "generation_tasks.jsonl", candidates, attempts, repairs)
+    assert code == 0, result
+
+    result, code = validate_teacher_candidate_batch(
+        repairs / "packet_0001.json",
+        FIXTURE_ROOT / "responses/valid_repair_response.json",
+        output_path=candidates,
+        append=True,
+        **_private_kwargs(),
+    )
+    assert code == 0, result
+    candidate_rows = [json.loads(line) for line in candidates.read_text(encoding="utf-8").splitlines() if line.strip()]
+    repair_record = next(row for row in candidate_rows if row["attempt"] == 2)
+    task = json.loads((FIXTURE_ROOT / "generation_tasks.jsonl").read_text(encoding="utf-8"))
+    plan = json.loads((run1 / "verification_plan.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    binding = {
+        "schema_version": REPAIR_HANDOFF_BINDING_SCHEMA_VERSION,
+        "run_id": "synthetic-repair",
+        "task_id": repair_record["task_id"],
+        "source_id": repair_record["source_id"],
+        "top_module": repair_record["candidate"]["top_module"],
+        "attempt": 2,
+        "candidate_id": repair_record["candidate_id"],
+        "candidate_sha256": repair_record["candidate_sha256"],
+        "previous_attempt": 1,
+        "previous_candidate_id": f"{repair_record['task_id']}_attempt_01",
+        "previous_candidate_sha256": candidate_rows[0]["candidate_sha256"],
+        "previous_evidence_sha256": "a" * 64,
+        "previous_runner_sidecar_sha256": "b" * 64,
+        "previous_manifest_sha256": "c" * 64,
+        "previous_workspace_tree_sha256": "d" * 64,
+        "repair_packet_id": json.loads((repairs / "packet_0001.json").read_text(encoding="utf-8"))["packet_id"],
+        "repair_packet_sha256": "e" * 64,
+        "teacher_generation_binding_sha256": "f" * 64,
+        "packet_validation_report_sha256": "0" * 64,
+        "qualification_binding_sha256": "1" * 64,
+        "corrected_testbench_sha256": plan["expected_hashes"]["testbench_sha256"],
+        "source_commit": "2" * 40,
+        "source_tree_sha256": "3" * 64,
+        "frozen_split_sha256": "4" * 64,
+        "correction_version": "assetfix_v004",
+        "qualification_passed": True,
+        "reference_rtl_supplied": False,
+        "support_files": [],
+    }
+    binding_path = tmp_path / "repair-binding.json"
+    binding_path.write_text(json.dumps(binding), encoding="utf-8")
+
+    run2 = tmp_path / "run2"
+    result, code = prepare_candidate_verification(
+        FIXTURE_ROOT / "generation_tasks.jsonl",
+        FIXTURE_ROOT / "verification_assets.jsonl",
+        FIXTURE_ROOT / "private_assets",
+        candidates,
+        run2,
+        attempt=2,
+        candidate_ids=[repair_record["candidate_id"]],
+        repair_binding_path=binding_path,
+    )
+    assert code == 0, result
+    plan2 = json.loads((run2 / "verification_plan.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert plan2["attempt"] == 2
+    assert plan2["candidate_id"] == repair_record["candidate_id"]
+    assert plan2["repair_binding"] == binding
 
 
 def test_evidence_output_modes_and_aliases_fail_closed(tmp_path: Path) -> None:

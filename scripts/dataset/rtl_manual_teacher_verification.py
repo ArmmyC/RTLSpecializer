@@ -30,12 +30,17 @@ CANDIDATE_SCHEMA_VERSION = "rtl_teacher_candidate_v0.1"
 PLAN_SCHEMA_VERSION = "rtl_candidate_verification_plan_v0.1"
 ATTEMPT_SCHEMA_VERSION = "rtl_generation_attempt_v0.1"
 REPAIR_PACKET_SCHEMA_VERSION = "rtl_teacher_repair_packet_v0.1"
+REPAIR_HANDOFF_BINDING_SCHEMA_VERSION = "rtl_generation_teacher_repair_binding_v0.1"
 MANIFEST_SCHEMA_VERSION = "rtl_candidate_manifest_v0.1"
 EVIDENCE_SCHEMA_VERSION = "rtl_candidate_evidence_v0.1"
 PROFILE = "verilog_eval_mismatch_v1"
 TESTBENCH_TOP = "tb"
 SIMULATION_CONTRACT = "mismatch_count_v1"
 REQUESTED_CHECKS = {"compile": True, "simulation": True, "lint": False, "synthesis": False}
+# Teacher-generation handoff bindings exist for both the v0.1 qualified-16
+# overlay and the v0.2 qualified-20 overlay.  Keep rejecting older correction
+# contracts while allowing the active v0.2 run to reach its handoff gate.
+TEACHER_GENERATION_CORRECTION_VERSIONS = frozenset({"assetfix_v003", "assetfix_v004"})
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_RTL_BYTES = 2 * 1024 * 1024
 MAX_SUMMARY_BYTES = 8 * 1024
@@ -136,6 +141,7 @@ PLAN_FIELDS = {
     "expected_hashes",
     "qualification_binding",
     "teacher_generation_binding",
+    "repair_binding",
 }
 TEACHER_GENERATION_HANDOFF_BINDING_FIELDS = {
     "schema_version",
@@ -179,6 +185,36 @@ QUALIFICATION_BINDING_FIELDS = {
     "task_record_sha256",
     "asset_record_sha256",
     "reference_supplied",
+}
+REPAIR_HANDOFF_BINDING_FIELDS = {
+    "schema_version",
+    "run_id",
+    "task_id",
+    "source_id",
+    "top_module",
+    "attempt",
+    "candidate_id",
+    "candidate_sha256",
+    "previous_attempt",
+    "previous_candidate_id",
+    "previous_candidate_sha256",
+    "previous_evidence_sha256",
+    "previous_runner_sidecar_sha256",
+    "previous_manifest_sha256",
+    "previous_workspace_tree_sha256",
+    "repair_packet_id",
+    "repair_packet_sha256",
+    "teacher_generation_binding_sha256",
+    "packet_validation_report_sha256",
+    "qualification_binding_sha256",
+    "corrected_testbench_sha256",
+    "source_commit",
+    "source_tree_sha256",
+    "frozen_split_sha256",
+    "correction_version",
+    "qualification_passed",
+    "reference_rtl_supplied",
+    "support_files",
 }
 ATTEMPT_FIELDS = {
     "schema_version",
@@ -1082,6 +1118,7 @@ def _plan_row(
     hashes: dict[str, Any],
     qualification_binding: dict[str, Any] | None = None,
     teacher_generation_binding: dict[str, Any] | None = None,
+    repair_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     plan = {
         "schema_version": PLAN_SCHEMA_VERSION,
@@ -1100,6 +1137,8 @@ def _plan_row(
     }
     if teacher_generation_binding is not None:
         plan["teacher_generation_binding"] = teacher_generation_binding
+    if repair_binding is not None:
+        plan["repair_binding"] = repair_binding
     return plan
 
 
@@ -1197,6 +1236,7 @@ def prepare_candidate_verification(
     candidate_ids: Iterable[str] | None = None,
     qualification_binding_path: Path | None = None,
     teacher_generation_binding_path: Path | None = None,
+    repair_binding_path: Path | None = None,
 ) -> tuple[dict[str, Any], int]:
     stage: Path | None = None
     backup: Path | None = None
@@ -1206,13 +1246,24 @@ def prepare_candidate_verification(
         records = _load_candidate_records(candidates_path)
         qualification_report: dict[str, Any] | None = None
         qualification_rows: dict[str, dict[str, Any]] = {}
-        if qualification_binding_path is not None and teacher_generation_binding_path is not None:
-            raise WorkflowError("legacy qualification binding and teacher-generation binding are mutually exclusive")
+        repair_binding: dict[str, Any] | None = None
+        binding_paths = [
+            path for path in (
+                qualification_binding_path,
+                teacher_generation_binding_path,
+                repair_binding_path,
+            ) if path is not None
+        ]
+        if len(binding_paths) > 1:
+            raise WorkflowError("qualification, teacher-generation, and repair bindings are mutually exclusive")
         if qualification_binding_path is not None:
             from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
 
             qualification_report = validate_binding_report(qualification_binding_path)
             qualification_rows = {row["task_id"]: row for row in qualification_report["rows"]}
+        if repair_binding_path is not None:
+            repair_binding = _read_json(repair_binding_path, maximum=MAX_RESPONSE_BYTES)
+            _validate_repair_binding_object(repair_binding, "repair binding")
         if _is_dangerous_root(output_dir):
             raise WorkflowError(f"refusing dangerous output root: {_display_path(output_dir)}")
         output_parent = _ensure_directory(output_dir.parent, "output parent")
@@ -1223,6 +1274,8 @@ def prepare_candidate_verification(
             input_paths = (*input_paths, qualification_binding_path)
         if teacher_generation_binding_path is not None:
             input_paths = (*input_paths, teacher_generation_binding_path)
+        if repair_binding_path is not None:
+            input_paths = (*input_paths, repair_binding_path)
         if _output_aliases_inputs(output_dir, input_paths):
             raise WorkflowError("output directory aliases an input or private asset root")
         if output_dir.exists():
@@ -1308,6 +1361,19 @@ def prepare_candidate_verification(
                     teacher_generation_binding,
                     f"teacher-generation binding {task['task_id']}",
                 )
+            if repair_binding is not None:
+                if (
+                    repair_binding["task_id"] != task["task_id"]
+                    or repair_binding["source_id"] != task["source_id"]
+                    or repair_binding["top_module"] != task["top_module"]
+                    or repair_binding["candidate_id"] != record["candidate_id"]
+                    or repair_binding["attempt"] != record["attempt"]
+                ):
+                    raise WorkflowError(f"repair binding identity mismatch: {task['task_id']}")
+                if repair_binding["candidate_sha256"] != hashes["candidate_rtl_sha256"]:
+                    raise WorkflowError(f"repair binding candidate hash mismatch: {task['task_id']}")
+                if repair_binding["corrected_testbench_sha256"] != hashes["testbench_sha256"]:
+                    raise WorkflowError(f"repair binding testbench hash mismatch: {task['task_id']}")
             manifest_rows.append(_candidate_manifest_row(record, task, candidate_path, testbench_path, support_paths))
             plan_rows.append(_plan_row(
                 record,
@@ -1318,6 +1384,7 @@ def prepare_candidate_verification(
                 hashes,
                 qualification_binding,
                 teacher_generation_binding,
+                repair_binding,
             ))
             _write_staged_file(workspace / candidate_path, candidate_bytes)
             _write_staged_file(workspace / testbench_path, testbench)
@@ -1350,7 +1417,7 @@ def prepare_candidate_verification(
         if backup is not None:
             _remove_tree(backup)
             backup = None
-        report = {"ok": True, "prepared_candidates": len(selected), "manifest": _display_path(output_dir / "candidate_manifest.jsonl"), "plan": _display_path(output_dir / "verification_plan.jsonl"), "workspace": _display_path(output_dir / "workspace"), "reference_copied": False, "qualification_binding": _display_path(qualification_binding_path) if qualification_binding_path is not None else None, "teacher_generation_binding": _display_path(teacher_generation_binding_path) if teacher_generation_binding_path is not None else None, "errors": [], "warnings": []}
+        report = {"ok": True, "prepared_candidates": len(selected), "manifest": _display_path(output_dir / "candidate_manifest.jsonl"), "plan": _display_path(output_dir / "verification_plan.jsonl"), "workspace": _display_path(output_dir / "workspace"), "reference_copied": False, "qualification_binding": _display_path(qualification_binding_path) if qualification_binding_path is not None else None, "teacher_generation_binding": _display_path(teacher_generation_binding_path) if teacher_generation_binding_path is not None else None, "repair_binding": _display_path(repair_binding_path) if repair_binding_path is not None else None, "errors": [], "warnings": []}
         return report, 0
     except (WorkflowError, OSError) as exc:
         if backup is not None and not output_dir.exists():
@@ -1454,7 +1521,7 @@ def _validate_teacher_generation_binding_object(value: Any, label: str) -> dict[
         raise WorkflowError(f"{label}.attempt must be 1")
     if value["candidate_id"] != f"{value['task_id']}_attempt_01":
         raise WorkflowError(f"{label}.candidate_id is not deterministic")
-    if value["correction_version"] != "assetfix_v003":
+    if value["correction_version"] not in TEACHER_GENERATION_CORRECTION_VERSIONS:
         raise WorkflowError(f"{label}.correction_version is invalid")
     if value["qualification_passed"] is not True or value["reference_rtl_supplied"] is not False:
         raise WorkflowError(f"{label} has an unsafe qualification state")
@@ -1463,11 +1530,206 @@ def _validate_teacher_generation_binding_object(value: Any, label: str) -> dict[
     return value
 
 
+def _validate_repair_binding_object(value: Any, label: str) -> dict[str, Any]:
+    _strict_fields(value, REPAIR_HANDOFF_BINDING_FIELDS, label)
+    if value["schema_version"] != REPAIR_HANDOFF_BINDING_SCHEMA_VERSION:
+        raise WorkflowError(f"{label} has the wrong binding schema")
+    for field in (
+        "run_id",
+        "task_id",
+        "source_id",
+        "top_module",
+        "candidate_id",
+        "previous_candidate_id",
+        "repair_packet_id",
+        "correction_version",
+    ):
+        if not isinstance(value[field], str) or not value[field].strip():
+            raise WorkflowError(f"{label}.{field} must be a non-empty string")
+    for field in (
+        "candidate_sha256",
+        "previous_candidate_sha256",
+        "previous_evidence_sha256",
+        "previous_runner_sidecar_sha256",
+        "previous_manifest_sha256",
+        "previous_workspace_tree_sha256",
+        "repair_packet_sha256",
+        "teacher_generation_binding_sha256",
+        "packet_validation_report_sha256",
+        "qualification_binding_sha256",
+        "corrected_testbench_sha256",
+        "source_tree_sha256",
+        "frozen_split_sha256",
+    ):
+        if not isinstance(value[field], str) or SHA256_RE.fullmatch(value[field]) is None:
+            raise WorkflowError(f"{label}.{field} is invalid")
+    if not isinstance(value["source_commit"], str) or re.fullmatch(r"[0-9a-f]{40}", value["source_commit"]) is None:
+        raise WorkflowError(f"{label}.source_commit is invalid")
+    if type(value["attempt"]) is not int or value["attempt"] != 2:
+        raise WorkflowError(f"{label}.attempt must be 2")
+    if type(value["previous_attempt"]) is not int or value["previous_attempt"] != 1:
+        raise WorkflowError(f"{label}.previous_attempt must be 1")
+    if value["candidate_id"] != f"{value['task_id']}_attempt_02":
+        raise WorkflowError(f"{label}.candidate_id is not deterministic")
+    if value["previous_candidate_id"] != f"{value['task_id']}_attempt_01":
+        raise WorkflowError(f"{label}.previous_candidate_id is not deterministic")
+    if value["qualification_passed"] is not True or value["reference_rtl_supplied"] is not False:
+        raise WorkflowError(f"{label} has an unsafe qualification state")
+    if value["support_files"] != []:
+        raise WorkflowError(f"{label}.support_files must be empty")
+    return value
+
+
+def create_teacher_repair_binding(
+    tasks_path: Path,
+    assets_path: Path,
+    private_assets_root: Path,
+    candidates_path: Path,
+    attempts_path: Path,
+    prior_evidence_path: Path,
+    repair_packet_path: Path,
+    teacher_generation_binding_path: Path,
+    output_path: Path,
+    *,
+    candidate_id: str,
+    previous_workspace_tree_sha256: str,
+) -> tuple[dict[str, Any], int]:
+    """Create one immutable lineage binding for a repair handoff.
+
+    This is deliberately separate from the initial teacher-generation binding:
+    that binding is attempt-1-specific, while repair handoffs must retain the
+    prior failure and bind the replacement candidate to it.
+    """
+
+    try:
+        tasks = _load_tasks(tasks_path)
+        assets = _load_assets(assets_path, private_assets_root)
+        candidates = _load_candidate_records(candidates_path)
+        attempts = _load_attempts(attempts_path)
+        _validate_attempt_history(attempts)
+        task_by_id = {task["task_id"]: task for task in tasks}
+        candidate = next((row for row in candidates if row["candidate_id"] == candidate_id), None)
+        if candidate is None:
+            raise WorkflowError(f"missing repair candidate: {candidate_id}")
+        if candidate["attempt"] != 2:
+            raise WorkflowError("repair binding candidate must be attempt 2")
+        task = task_by_id.get(candidate["task_id"])
+        if task is None or candidate["source_id"] != task["source_id"]:
+            raise WorkflowError("repair candidate/task identity mismatch")
+        asset = assets.get(task["task_id"])
+        if asset is None:
+            raise WorkflowError("repair task has no private asset")
+        previous_candidate_id = f"{task['task_id']}_attempt_01"
+        previous_candidate = next((row for row in candidates if row["candidate_id"] == previous_candidate_id), None)
+        if previous_candidate is None or previous_candidate["attempt"] != 1:
+            raise WorkflowError("missing attempt-1 candidate for repair lineage")
+        previous_attempt = next((row for row in attempts if row["candidate_id"] == previous_candidate_id), None)
+        if previous_attempt is None or previous_attempt["attempt"] != 1 or previous_attempt["accepted"] is not False:
+            raise WorkflowError("attempt-1 repair source is missing or accepted")
+        if previous_attempt["failure_category"] not in REPAIRABLE_FAILURE_CATEGORIES:
+            raise WorkflowError("attempt-1 failure is not candidate-repairable")
+
+        evidence_rows = _load_jsonl(prior_evidence_path, maximum=MAX_JSONL_BYTES)
+        evidence = next((row for row in evidence_rows if row.get("candidate_id") == previous_candidate_id), None)
+        if evidence is None:
+            raise WorkflowError("attempt-1 evidence row is missing")
+        if evidence.get("accepted") is not False or evidence.get("failure_category") != previous_attempt["failure_category"]:
+            raise WorkflowError("attempt-1 evidence does not match repair source")
+
+        packet = _load_packet(repair_packet_path)
+        if packet["packet_kind"] != "repair" or packet["target_attempt"] != 2 or packet["row_count"] != 1:
+            raise WorkflowError("repair packet is not a single attempt-2 packet")
+        packet_task = packet["rows"][0]["task"]
+        if packet_task != task or packet["rows"][0]["previous_candidate"] != previous_candidate["candidate"]:
+            raise WorkflowError("repair packet does not bind the exact failed candidate")
+
+        teacher_binding = _read_json(teacher_generation_binding_path, maximum=MAX_RESPONSE_BYTES)
+        if teacher_binding.get("schema_version") != "rtl_generation_teacher_binding_v0.1":
+            raise WorkflowError("teacher-generation binding has an invalid schema")
+        packet_validation_path = teacher_generation_binding_path.parent / "teacher_generation_packet_validation.json"
+        packet_validation = _read_json(packet_validation_path, maximum=MAX_RESPONSE_BYTES)
+        teacher_binding_hash = _sha256_file(teacher_generation_binding_path)
+        packet_validation_hash = _sha256_file(packet_validation_path)
+        if packet_validation.get("ok") is not True or packet_validation.get("teacher_response_allowed") is not True:
+            raise WorkflowError("teacher-generation packet validation has not passed")
+        if packet_validation.get("binding_sha256") != teacher_binding_hash:
+            raise WorkflowError("teacher-generation packet validation binding mismatch")
+        qualified_order = teacher_binding.get("qualified_order")
+        if not isinstance(qualified_order, list) or not any(
+            row.get("task_id") == task["task_id"]
+            and row.get("source_id") == task["source_id"]
+            and row.get("top_module") == task["top_module"]
+            for row in qualified_order
+            if isinstance(row, dict)
+        ):
+            raise WorkflowError("repair task is not in the qualified teacher order")
+        if teacher_binding.get("qualification_passed") is not True or teacher_binding.get("reference_rtl_supplied") is not False:
+            raise WorkflowError("teacher-generation binding is not private-safe")
+        if teacher_binding.get("support_file_count") != 0:
+            raise WorkflowError("teacher-generation binding declares support files")
+
+        _, testbench, support = _asset_for_task(asset, task, private_assets_root)
+        if support:
+            raise WorkflowError("repair asset declares support files")
+        candidate_hash = candidate["candidate_sha256"]
+        previous_candidate_hash = previous_candidate["candidate_sha256"]
+        if candidate_hash == previous_candidate_hash:
+            raise WorkflowError("repair candidate is byte-identical to attempt 1")
+        if not isinstance(previous_workspace_tree_sha256, str) or SHA256_RE.fullmatch(previous_workspace_tree_sha256) is None:
+            raise WorkflowError("previous workspace-tree hash is invalid")
+        run_root = tasks_path.resolve().parent.parent
+        sidecar_path = prior_evidence_path.with_name(prior_evidence_path.name + ".runner.json")
+        previous_manifest_path = run_root / "verification" / "attempt_01" / "candidate_manifest.jsonl"
+        if not sidecar_path.is_file() or not previous_manifest_path.is_file():
+            raise WorkflowError("attempt-1 sidecar or manifest is missing")
+
+        binding = {
+            "schema_version": REPAIR_HANDOFF_BINDING_SCHEMA_VERSION,
+            "run_id": run_root.name,
+            "task_id": task["task_id"],
+            "source_id": task["source_id"],
+            "top_module": task["top_module"],
+            "attempt": 2,
+            "candidate_id": candidate["candidate_id"],
+            "candidate_sha256": candidate_hash,
+            "previous_attempt": 1,
+            "previous_candidate_id": previous_candidate_id,
+            "previous_candidate_sha256": previous_candidate_hash,
+            "previous_evidence_sha256": _sha256_file(prior_evidence_path),
+            "previous_runner_sidecar_sha256": _sha256_file(sidecar_path),
+            "previous_manifest_sha256": _sha256_file(previous_manifest_path),
+            "previous_workspace_tree_sha256": previous_workspace_tree_sha256,
+            "repair_packet_id": packet["packet_id"],
+            "repair_packet_sha256": _sha256_file(repair_packet_path),
+            "teacher_generation_binding_sha256": teacher_binding_hash,
+            "packet_validation_report_sha256": packet_validation_hash,
+            "qualification_binding_sha256": teacher_binding["qualification_binding_sha256"],
+            "corrected_testbench_sha256": _sha256_bytes(testbench),
+            "source_commit": teacher_binding["source_commit"],
+            "source_tree_sha256": teacher_binding["source_tree_sha256"],
+            "frozen_split_sha256": teacher_binding["frozen_split_sha256"],
+            "correction_version": teacher_binding["correction_version"],
+            "qualification_passed": True,
+            "reference_rtl_supplied": False,
+            "support_files": [],
+        }
+        _validate_repair_binding_object(binding, "repair binding")
+        if output_path.exists() or output_path.is_symlink():
+            raise WorkflowError(f"refusing to replace existing repair binding: {output_path}")
+        _atomic_write(output_path, _json_bytes(binding, pretty=True))
+        os.chmod(output_path, 0o600)
+        return {"ok": True, "binding": _display_path(output_path), "errors": [], "warnings": []}, 0
+    except (WorkflowError, OSError, UnicodeError, ValueError) as exc:
+        return {"ok": False, "errors": [_report_error(exc)], "warnings": []}, 1
+
+
 def _validate_plan(plan: Any, label: str) -> dict[str, Any]:
     if isinstance(plan, dict) and "qualification_binding" not in plan:
         plan = {**plan, "qualification_binding": None}
     if isinstance(plan, dict) and "teacher_generation_binding" not in plan:
         plan = {**plan, "teacher_generation_binding": None}
+    if isinstance(plan, dict) and "repair_binding" not in plan:
+        plan = {**plan, "repair_binding": None}
     _strict_fields(plan, PLAN_FIELDS, label)
     if plan["schema_version"] != PLAN_SCHEMA_VERSION or plan["verification_profile"] != PROFILE or plan["testbench_top"] != TESTBENCH_TOP or plan["simulation_result_contract"] != SIMULATION_CONTRACT:
         raise WorkflowError(f"{label} has an unsupported verification contract")
@@ -1484,6 +1746,8 @@ def _validate_plan(plan: Any, label: str) -> dict[str, Any]:
             plan["teacher_generation_binding"],
             f"{label}.teacher_generation_binding",
         )
+    if plan["repair_binding"] is not None:
+        _validate_repair_binding_object(plan["repair_binding"], f"{label}.repair_binding")
     _identifier(plan["top_module"], f"{label}.top_module")
     if plan["requested_checks"] != REQUESTED_CHECKS:
         raise WorkflowError(f"{label}.requested_checks is invalid")
@@ -1975,3 +2239,4 @@ validate_rtl_teacher_candidate_response_set = validate_teacher_candidate_respons
 prepare_rtl_candidate_verification = prepare_candidate_verification
 ingest_rtl_candidate_evidence = ingest_candidate_evidence
 export_rtl_teacher_repair_packets = export_teacher_repair_packets
+create_rtl_teacher_repair_binding = create_teacher_repair_binding

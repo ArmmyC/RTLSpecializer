@@ -13,6 +13,16 @@ if __package__ in {None, ""}:
 from scripts.dataset.rtl_generation_dataset import validate_generation_sft_package
 
 
+def _parse_hashes(values: list[str] | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for value in values or []:
+        key, separator, digest = value.partition("=")
+        if not separator or not key or not digest or key in result:
+            raise ValueError("expected artifact hashes must use unique KEY=SHA256 entries")
+        result[key] = digest
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", required=True, type=Path)
@@ -35,7 +45,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-recovery-reason")
     parser.add_argument("--require-recovery-lineage", action="store_true")
     parser.add_argument("--require-consumable", action="store_true")
+    parser.add_argument(
+        "--expected-artifact-hash",
+        action="append",
+        metavar="KEY=SHA256",
+        help="require a manifest artifact binding to match this SHA-256",
+    )
     args = parser.parse_args(argv)
+    try:
+        expected_artifact_bindings = _parse_hashes(args.expected_artifact_hash)
+    except ValueError as exc:
+        parser.error(str(exc))
     report, code = validate_generation_sft_package(
         args.input_dir,
         require_asset_qualification=args.require_asset_qualification,
@@ -57,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_recovery_reason=args.expected_recovery_reason,
         require_recovery_lineage=args.require_recovery_lineage,
         require_consumable=args.require_consumable,
+        expected_artifact_bindings=expected_artifact_bindings or None,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return code

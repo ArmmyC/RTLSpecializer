@@ -1,4 +1,4 @@
-"""Static controls for the bounded batch-20 verification correction overlay.
+"""Static controls for a bounded verification correction overlay.
 
 This module records only authored testbench metadata and hashes.  It never
 reads reference or original testbench bytes, never executes RTL, and never
@@ -67,6 +67,26 @@ FORBIDDEN_DEPENDENCY_MARKERS = (
 )
 
 MUTATION_NAMES = {
+    "Prob004_vector2": ("constant_zero", "wrong_byte_order"),
+    "Prob006_vectorr": ("constant_zero", "wrong_bit_order"),
+    "Prob010_mt2015_q4a": ("constant_zero", "wrong_boolean_expression"),
+    "Prob015_vector1": ("constant_zero", "swapped_halves"),
+    "Prob026_alwaysblock1": ("constant_zero", "always_output_mismatch"),
+    "Prob036_ringer": ("constant_zero", "wrong_vibrate_selection"),
+    "Prob042_vector4": ("constant_zero", "zero_extend"),
+    "Prob051_gates4": ("constant_zero", "wrong_xor"),
+    "Prob064_vector3": ("constant_zero", "wrong_concat_tail"),
+    "Prob069_truthtable1": ("constant_zero", "wrong_truth_table"),
+    "Prob070_ece241_2013_q2": ("constant_zero", "wrong_boolean_form"),
+    "Prob087_gates": ("constant_zero", "wrong_nand"),
+    "Prob045_edgedetect2": ("constant_zero", "same_cycle_edge"),
+    "Prob049_m2014_q4b": ("synchronous_reset", "wrong_data_capture"),
+    "Prob054_edgedetect": ("constant_zero", "same_cycle_pedge"),
+    "Prob058_alwaysblock2": ("constant_zero", "no_ff_delay"),
+    "Prob074_ece241_2014_q4": ("constant_zero", "wrong_gate_feedback"),
+    "Prob088_ece241_2014_q5b": ("synchronous_reset", "wrong_mealy_output"),
+    "Prob095_review2015_fsmshift": ("constant_zero", "three_cycles_only"),
+    "Prob096_review2015_fsmseq": ("constant_zero", "clear_on_nonmatch"),
     "Prob029_m2014_q4g": ("constant_zero", "inverted_output"),
     "Prob055_conditional": ("constant_zero", "wrong_min_operand"),
     "Prob092_gatesv100": ("constant_zero", "wrong_neighbor_direction"),
@@ -229,6 +249,7 @@ def create_batch_manifest(
     expected_inventory_sha256: str = BASE_INVENTORY_SHA256,
     expected_split_sha256: str = BASE_SPLIT_SHA256,
     correction_version: str = CORRECTION_VERSION,
+    expected_source_ids: list[str] | None = None,
 ) -> tuple[dict[str, Any], int]:
     errors: list[str] = []
     try:
@@ -253,10 +274,17 @@ def create_batch_manifest(
         errors.append("selection inventory binding mismatch")
     if selection.get("base_split_sha256") != expected_split_sha256:
         errors.append("selection split binding mismatch")
+    if selection.get("ok") is not True or selection.get("split") != "train":
+        errors.append("selection report is not a successful train-only selection")
     if selection.get("correction_version") != correction_version:
         errors.append("selection correction version mismatch")
-    if ids != list(BATCH20_SOURCE_IDS):
-        errors.append("selection IDs do not match the frozen batch-20 order")
+    pinned_source_ids = expected_source_ids if expected_source_ids is not None else list(BATCH20_SOURCE_IDS)
+    if ids != pinned_source_ids:
+        errors.append("selection IDs do not match the expected correction order")
+    if len(ids) < 20 or len(ids) > 40:
+        errors.append("selection is outside the bounded 20-40 task range")
+    if selection.get("selected_count") != len(ids):
+        errors.append("selection report count does not match the selected task count")
     rows: list[dict[str, Any]] = []
     static_errors: dict[str, list[str]] = {}
     for source_id in ids:
@@ -304,9 +332,15 @@ def create_batch_manifest(
             "verification_readiness": "pending_qualification",
             "static_audit": audit,
         }
+        if correction_version == "assetfix_v004":
+            row.update({
+                "public_specification_sha256": source.get("source_prompt_sha256"),
+                "selection_ids_sha256": sha256_file(ids_path),
+                "selection_report_sha256": sha256_file(selection_path),
+            })
         rows.append(row)
-    if len(rows) != 20:
-        errors.append("correction manifest must contain exactly 20 rows")
+    if len(rows) != len(ids):
+        errors.append(f"correction manifest must contain exactly {len(ids)} rows")
     manifest_metadata = {
         "base_inventory_sha256": expected_inventory_sha256,
         "base_split_sha256": expected_split_sha256,
@@ -340,6 +374,7 @@ def create_batch_manifest(
 __all__ = [
     "BATCH20_SOURCE_IDS",
     "MANIFEST_SCHEMA_VERSION",
+    "MUTATION_NAMES",
     "ROW_SCHEMA_VERSION",
     "create_batch_manifest",
     "sha256_file",
