@@ -185,6 +185,97 @@ endmodule
     assert overlaid[0].support_files == {}
 
 
+def test_normalization_export_audits_the_overlaid_support_closure(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.jsonl"
+    source_path.write_text(
+        json.dumps({
+            "source_id": "Prob002_m2014_q4i",
+            "source_dataset": "VerilogEval",
+            "design_family": "combinational",
+            "specification": "public interface metadata",
+            "artifacts": {
+                "rtl_code": "module Ref; endmodule\n",
+                "testbench": "module tb; TopModule dut(); endmodule\n",
+                "support_files": {
+                    "Prob002_m2014_q4i_ifc.txt": "public interface metadata",
+                },
+            },
+            "license": "MIT",
+            "provenance": {
+                "public_dataset_name": "VerilogEval",
+                "original_source_id": "Prob002_m2014_q4i",
+                "source_commit": "a" * 40,
+            },
+            "design_context": {
+                "target_module_name": "TopModule",
+                "interface_ports_from_prompt": [
+                    {"name": "a", "direction": "input"},
+                ],
+            },
+        }) + "\n",
+        encoding="utf-8",
+    )
+    correction_root = tmp_path / "correction"
+    testbench_path = correction_root / "tasks" / "Prob002_m2014_q4i" / "testbench.sv"
+    testbench_path.parent.mkdir(parents=True)
+    corrected_testbench = (
+        "module tb;\n"
+        "  TopModule dut();\n"
+        "  initial begin\n"
+        "    $display(\"Mismatches: %0d\", 0);\n"
+        "    $finish;\n"
+        "  end\n"
+        "endmodule\n"
+    ).encode("utf-8")
+    testbench_path.write_bytes(corrected_testbench)
+    correction_manifest = tmp_path / "correction.jsonl"
+    correction_manifest.write_text(
+        json.dumps({
+            "schema_version": "rtl_verification_asset_correction_row_v0.2",
+            "source_dataset": "VerilogEval",
+            "source_id": "Prob002_m2014_q4i",
+            "task_id": "rtlgen_verilogeval_prob002_m2014_q4i_aaaaaaaaaaaa",
+            "split": "train",
+            "top_module": "TopModule",
+            "upstream_commit": "a" * 40,
+            "original_prompt_sha256": "b" * 64,
+            "original_reference_rtl_sha256": "c" * 64,
+            "original_testbench_sha256": "d" * 64,
+            "corrected_testbench_sha256": hashlib.sha256(corrected_testbench).hexdigest(),
+            "correction_version": "assetfix_v005",
+            "reference_modified": False,
+            "reference_copied_to_support": False,
+            "testbench_path": "tasks/Prob002_m2014_q4i/testbench.sv",
+            "support_files": [],
+            "dependency_closure": "passed",
+            "verification_readiness": "executable_ready",
+            "qualification_status": "qualified",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    result, code = export_generation_normalization_batches(
+        source_path,
+        tmp_path / "public",
+        tmp_path / "private",
+        batch_size=1,
+        source_commit="a" * 40,
+        source_ids=["Prob002_m2014_q4i"],
+        correction_manifest=correction_manifest,
+        correction_root=correction_root,
+        correction_version="assetfix_v005",
+    )
+
+    assert code == 0, result
+    assert result["exported_rows"] == 1
+    assets = [
+        json.loads(line)
+        for line in (tmp_path / "private" / "verification_assets.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert assets[0]["support_files"] == []
+
+
 def test_interface_hints_preserve_parenthetical_bit_widths() -> None:
     ports = _interface_hints(
         """

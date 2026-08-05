@@ -1351,8 +1351,14 @@ def export_generation_normalization_batches(
         )
         errors.extend(correction_errors)
         correction_count = len(correction_rows)
-    tasks = [(row, _task_id(row)) for row in selected]
     private_tasks = [(row, _task_id(row)) for row in private_selected]
+    # The correction overlay is authoritative for both the private asset
+    # closure and the leak audit.  The public row does not serialize RTL,
+    # testbench, or support bytes, but auditing the pre-overlay source row can
+    # falsely report a public *_ifc.txt companion as leaked support content.
+    # The overlaid row preserves the public specification and interface while
+    # carrying the corrected testbench and declared empty support closure.
+    tasks = private_tasks
     task_ids = [task_id for _, task_id in tasks]
     if len(task_ids) != len(set(task_ids)): errors.append("duplicate deterministic task_id")
     batch_count = (len(tasks) + batch_size - 1) // batch_size if tasks else 0
