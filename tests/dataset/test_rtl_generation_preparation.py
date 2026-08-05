@@ -69,6 +69,63 @@ endmodule
     assert rows == [row]
 
 
+def test_v005_qualified_correction_manifest_is_accepted_by_generation_overlay_loader(tmp_path: Path) -> None:
+    correction_root = tmp_path / "correction"
+    testbench = correction_root / "tasks" / "Prob002_m2014_q4i" / "testbench.sv"
+    testbench.parent.mkdir(parents=True)
+    content = b'''module tb;
+  logic a;
+  logic y;
+  TopModule dut(.a(a), .y(y));
+  initial begin
+    $display("Mismatches: %0d", 0);
+    $finish;
+  end
+endmodule
+'''
+    testbench.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    row = {
+        "schema_version": "rtl_verification_asset_correction_row_v0.2",
+        "source_dataset": "VerilogEval",
+        "source_id": "Prob002_m2014_q4i",
+        "task_id": "task_prob002",
+        "split": "train",
+        "design_family": "combinational",
+        "top_module": "TopModule",
+        "upstream_commit": "a" * 40,
+        "original_prompt_sha256": "b" * 64,
+        "original_reference_rtl_sha256": "c" * 64,
+        "original_testbench_sha256": "d" * 64,
+        "corrected_testbench_sha256": digest,
+        "correction_version": "assetfix_v005",
+        "correction_reason": "public-specification correction",
+        "authoring_method": "trusted_manual_public_spec",
+        "reference_modified": False,
+        "reference_copied_to_support": False,
+        "testbench_path": "tasks/Prob002_m2014_q4i/testbench.sv",
+        "support_files": [],
+        "dependency_closure": "passed",
+        "verification_readiness": "executable_ready",
+        "qualification_status": "qualified",
+        "qualification_result": "passed",
+        "public_specification_sha256": "e" * 64,
+        "selection_ids_sha256": "f" * 64,
+        "selection_report_sha256": "0" * 64,
+    }
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    rows, errors = load_correction_manifest(
+        manifest,
+        correction_root,
+        expected_correction_version="assetfix_v005",
+    )
+
+    assert errors == []
+    assert rows == [row]
+
+
 def test_interface_hints_preserve_parenthetical_bit_widths() -> None:
     ports = _interface_hints(
         """

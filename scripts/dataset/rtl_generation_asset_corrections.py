@@ -40,6 +40,22 @@ CORRECTION_SELECTION_SCHEMA_VERSION = "rtl_verification_asset_correction_selecti
 CORRECTION_VALIDATION_SCHEMA_VERSION = "rtl_verification_asset_correction_validation_v0.1"
 V003_MANIFEST_SCHEMA_VERSION = "rtl_verification_asset_correction_v0.2"
 V003_ROW_SCHEMA_VERSION = "rtl_verification_asset_correction_row_v0.2"
+EXTENDED_ROW_CORRECTION_VERSIONS = frozenset({"assetfix_v003", "assetfix_v005"})
+
+EXTENDED_ROW_FIELDS = {
+    "schema_version", "source_dataset", "source_id", "task_id", "split",
+    "design_family", "top_module", "upstream_commit", "original_prompt_sha256",
+    "original_reference_rtl_sha256", "original_testbench_sha256",
+    "corrected_testbench_sha256", "correction_version", "correction_reason",
+    "authoring_method", "reference_modified", "reference_copied_to_support",
+    "testbench_path", "support_files", "dependency_closure",
+    "verification_readiness", "qualification_status", "mutation_contracts",
+    "static_audit", "frozen_split_sha256", "source_tree_sha256",
+    "public_specification_sha256", "selection_ids_sha256", "selection_report_sha256",
+    "qualification_evidence_sha256", "qualification_freeze_sha256",
+    "qualification_report_sha256", "qualification_result",
+    "qualification_runner_sidecar_sha256",
+}
 
 EXPECTED_SOURCE_IDS = (
     "Prob001_zero",
@@ -273,22 +289,12 @@ def load_correction_manifest(
     errors: list[str] = []
     seen: set[str] = set()
     for index, row in enumerate(rows, 1):
-        is_v003 = (
-            expected_correction_version == "assetfix_v003"
+        is_extended = (
+            expected_correction_version in EXTENDED_ROW_CORRECTION_VERSIONS
             and row.get("schema_version") == V003_ROW_SCHEMA_VERSION
         )
         allowed_fields = (
-            {
-                "schema_version", "source_dataset", "source_id", "task_id", "split",
-                "design_family", "top_module", "upstream_commit", "original_prompt_sha256",
-                "original_reference_rtl_sha256", "original_testbench_sha256",
-                "corrected_testbench_sha256", "correction_version", "correction_reason",
-                "authoring_method", "reference_modified", "reference_copied_to_support",
-                "testbench_path", "support_files", "dependency_closure",
-                "verification_readiness", "qualification_status", "mutation_contracts", "static_audit",
-                "frozen_split_sha256", "source_tree_sha256",
-            }
-            if is_v003 else CORRECTION_ROW_FIELDS
+            EXTENDED_ROW_FIELDS if is_extended else CORRECTION_ROW_FIELDS
         )
         required_fields = (
             {
@@ -299,13 +305,13 @@ def load_correction_manifest(
                 "reference_copied_to_support", "testbench_path", "support_files",
                 "dependency_closure", "verification_readiness",
             }
-            if is_v003 else CORRECTION_ROW_FIELDS
+            if is_extended else CORRECTION_ROW_FIELDS
         )
         unknown = sorted(set(row) - allowed_fields)
         missing = sorted(required_fields - set(row))
         errors.extend(f"manifest row {index}: unknown field {key}" for key in unknown)
         errors.extend(f"manifest row {index}: missing field {key}" for key in missing)
-        expected_schema = V003_ROW_SCHEMA_VERSION if expected_correction_version == "assetfix_v003" else CORRECTION_ROW_SCHEMA_VERSION
+        expected_schema = V003_ROW_SCHEMA_VERSION if is_extended else CORRECTION_ROW_SCHEMA_VERSION
         if row.get("schema_version") != expected_schema:
             errors.append(f"manifest row {index}: wrong schema version")
         source_id = row.get("source_id")
@@ -341,6 +347,11 @@ def load_correction_manifest(
             errors.append(f"manifest row {index}: dependency closure did not pass")
         if row.get("verification_readiness") != "executable_ready":
             errors.append(f"manifest row {index}: verification readiness is not executable_ready")
+        if expected_correction_version == "assetfix_v005":
+            if row.get("qualification_status") != "qualified":
+                errors.append(f"manifest row {index}: v005 overlay row is not qualified")
+            if row.get("qualification_result") not in {None, "passed"}:
+                errors.append(f"manifest row {index}: v005 qualification result is not passed")
         path, path_error = _safe_relative_path(correction_root, row.get("testbench_path"), require_suffix=".sv")
         if path_error:
             errors.append(f"manifest row {index}: {path_error}")
