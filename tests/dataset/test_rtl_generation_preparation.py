@@ -15,7 +15,10 @@ from scripts.dataset.rtl_generation_preparation import (
     _verification_dependency_report,
     export_generation_normalization_batches,
 )
-from scripts.dataset.rtl_generation_asset_corrections import load_correction_manifest
+from scripts.dataset.rtl_generation_asset_corrections import (
+    load_correction_manifest,
+    overlay_source_rows,
+)
 from tests.dataset.rtl_generation_test_helpers import load_batch, make_checkout
 
 
@@ -124,6 +127,62 @@ endmodule
 
     assert errors == []
     assert rows == [row]
+
+
+def test_correction_overlay_clears_source_adapter_support_files(tmp_path: Path) -> None:
+    correction_root = tmp_path / "correction"
+    testbench = correction_root / "tasks" / "Prob002_m2014_q4i" / "testbench.sv"
+    testbench.parent.mkdir(parents=True)
+    content = b'''module tb;
+  logic a;
+  logic y;
+  TopModule dut(.a(a), .y(y));
+  initial begin
+    $display("Mismatches: %0d", 0);
+    $finish;
+  end
+endmodule
+'''
+    testbench.write_bytes(content)
+    row = {
+        "schema_version": "rtl_verification_asset_correction_row_v0.2",
+        "source_dataset": "VerilogEval",
+        "source_id": "Prob002_m2014_q4i",
+        "task_id": "task_prob002",
+        "split": "train",
+        "top_module": "TopModule",
+        "upstream_commit": "a" * 40,
+        "original_prompt_sha256": "b" * 64,
+        "original_reference_rtl_sha256": "c" * 64,
+        "original_testbench_sha256": "d" * 64,
+        "corrected_testbench_sha256": hashlib.sha256(content).hexdigest(),
+        "correction_version": "assetfix_v005",
+        "reference_modified": False,
+        "reference_copied_to_support": False,
+        "testbench_path": "tasks/Prob002_m2014_q4i/testbench.sv",
+        "support_files": [],
+        "dependency_closure": "passed",
+        "verification_readiness": "executable_ready",
+        "qualification_status": "qualified",
+    }
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    source = replace(
+        _dependency_row("module tb; TopModule dut(); endmodule\n"),
+        source_id="Prob002_m2014_q4i",
+        support_files={"Prob002_m2014_q4i_ifc.txt": b"public interface metadata"},
+    )
+
+    overlaid, errors, _ = overlay_source_rows(
+        [source],
+        manifest,
+        correction_root,
+        expected_correction_version="assetfix_v005",
+    )
+
+    assert errors == []
+    assert overlaid[0].testbench == content.decode("utf-8")
+    assert overlaid[0].support_files == {}
 
 
 def test_interface_hints_preserve_parenthetical_bit_widths() -> None:

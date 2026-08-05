@@ -503,7 +503,14 @@ def overlay_source_rows(
             continue
         if _sha256(content) != correction.get("corrected_testbench_sha256"):
             errors.append(f"{row.source_id}: corrected testbench hash mismatch")
-        result.append(replace(row, testbench=text))
+        # The correction manifest is authoritative for the private asset
+        # closure.  A corrected row declaring no support files must also clear
+        # any source-adapter metadata file (for example a public *_ifc.txt
+        # companion) that discovery attached to the raw row.  Leaving it on
+        # the overlaid SourceRow would copy it into the private asset view and
+        # can make the public-leak detector mistake public interface text for
+        # leaked support content.
+        result.append(replace(row, testbench=text, support_files={}))
     unknown = sorted(set(by_id) - {row.source_id for row in rows})
     errors.extend(f"correction manifest source ID is absent from source rows: {source_id}" for source_id in unknown)
     return result, sorted(set(errors)), by_id
