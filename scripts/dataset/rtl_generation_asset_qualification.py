@@ -139,6 +139,18 @@ def _require_directory(path: Path) -> None:
         raise QualificationError(f"required path is not a directory: {path}")
 
 
+def _require_empty_staged_output(qualification_root: Path) -> Path:
+    """Require the runner's output parent before authorization or execution."""
+    staged = qualification_root / "staged"
+    _require_directory(staged)
+    metadata = staged.lstat()
+    if stat.S_IMODE(metadata.st_mode) != 0o700:
+        raise QualificationError(f"runner output directory is not 0700: {staged}")
+    if any(staged.iterdir()):
+        raise QualificationError(f"runner output directory is not empty: {staged}")
+    return staged
+
+
 def _safe_relative(value: Any) -> str:
     if not isinstance(value, str) or not value or value.startswith("/") or "\\" in value:
         raise QualificationError("artifact paths must be relative POSIX paths")
@@ -819,6 +831,7 @@ def validate_prepared_qualification(
     _require_directory(correction_root)
     _require_directory(authoring_root)
     _require_directory(qualification_root)
+    _require_empty_staged_output(qualification_root)
     permission_uid, permission_gid, permission_file_count = _validate_private_tree_permissions(qualification_root)
     _validate_private_tree_permissions(authoring_root)
 
@@ -831,18 +844,36 @@ def validate_prepared_qualification(
             raise QualificationError("correction static-validation report is not successful")
         static_hash = sha256_file(correction_static_report_path)
 
-    expected_top_level = {"case_manifest.jsonl", "input", "preparation_report.json"}
+    expected_top_level = {"case_manifest.jsonl", "input", "preparation_report.json", "staged"}
     actual_top_level = {path.name for path in qualification_root.iterdir()}
     unexpected_top_level = actual_top_level - expected_top_level - {"reports"}
     if unexpected_top_level:
         raise QualificationError("qualification attempt has unexpected top-level entries")
     reports_root = qualification_root / "reports"
+    run_reports_root = qualification_root.parent.parent / "reports"
     if reports_root.exists():
         _require_directory(reports_root)
         report_entries = {path.name for path in reports_root.iterdir()}
         expected_report_name = authorization_path.name
-        if authorization_path.parent != reports_root or report_entries != {expected_report_name}:
+        if authorization_path.parent == reports_root and report_entries != {expected_report_name}:
             raise QualificationError("qualification reports contain unexpected entries")
+    if authorization_path.parent not in {reports_root, run_reports_root}:
+        raise QualificationError("authorization must be in qualification reports or retry reports")
+    if authorization_path.parent == run_reports_root:
+        _require_directory(run_reports_root)
+        report_entries = {path.name for path in run_reports_root.iterdir()}
+        if report_entries != {authorization_path.name}:
+            raise QualificationError("retry reports contain unexpected entries")
+    authorization_metadata = authorization_path.lstat()
+    if (
+        stat.S_ISLNK(authorization_metadata.st_mode)
+        or not stat.S_ISREG(authorization_metadata.st_mode)
+        or stat.S_IMODE(authorization_metadata.st_mode) != 0o600
+        or authorization_metadata.st_nlink != 1
+        or authorization_metadata.st_uid != permission_uid
+        or authorization_metadata.st_gid != permission_gid
+    ):
+        raise QualificationError("authorization is not a private 0600 regular file")
     input_root = qualification_root / "input"
     workspace = input_root / "workspace"
     _require_directory(input_root)
@@ -1066,6 +1097,8 @@ def validate_prepared_qualification(
         "candidate_case_count": expected_case_count,
         "positive_case_count": expected_positive_count,
         "negative_case_count": expected_negative_count,
+        "staged_output_path": str((qualification_root / "staged").resolve()),
+        "staged_output_ready": True,
         "qualification_status_before": "pending_isolated_qualification",
         "reference_rtl_supplied": False,
         "support_file_count": 0,
@@ -1157,6 +1190,7 @@ def create_authorization(
         if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
             raise QualificationError(f"preparation report lacks a valid hash: {key}")
     _require_directory(qualification_input)
+    staged_output = _require_empty_staged_output(qualification_input.parent)
     candidate_manifest = qualification_input / "candidate_manifest.jsonl"
     workspace = qualification_input / "workspace"
     if sha256_file(candidate_manifest) != preparation_report["candidate_manifest_sha256"]:
@@ -1214,6 +1248,8 @@ def create_authorization(
             "network_policy": "none",
         },
         "qualification_input": str(qualification_input.resolve()),
+        "staged_output_path": str(staged_output.resolve()),
+        "staged_output_ready": True,
         "exact_command": [
             str(rtlbench_root / ".venv/bin/python"),
             "runner/run_isolated.py",

@@ -230,7 +230,17 @@ def test_aggregation_rejects_runner_hash_mismatch(tmp_path: Path, monkeypatch: p
     assert not (output / "qualified_task_ids.txt").exists()
 
 
-def _preflight_authorization(output: Path, preparation: dict, tmp_path: Path) -> dict:
+def _preflight_authorization(
+    output: Path,
+    preparation: dict,
+    tmp_path: Path,
+    *,
+    create_staged: bool = True,
+) -> dict:
+    if create_staged:
+        staged = output / "staged"
+        staged.mkdir(mode=0o700)
+        staged.chmod(0o700)
     input_root = output / "input"
     return {
         "schema_version": qualification.AUTHORIZATION_SCHEMA_VERSION,
@@ -280,6 +290,56 @@ def _preflight_authorization(output: Path, preparation: dict, tmp_path: Path) ->
     }
 
 
+def _prepared_preflight_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    create_staged: bool = True,
+):
+    values = _fixture(tmp_path, monkeypatch)
+    source_ids, inventory, split, ids, selection, correction_manifest, correction_root, author_manifest, author_root = values
+    output = tmp_path / "qualification"
+    preparation = qualification.prepare_qualification_input(
+        selection_path=selection,
+        ids_path=ids,
+        correction_manifest_path=correction_manifest,
+        correction_root=correction_root,
+        inventory_path=inventory,
+        split_path=split,
+        authoring_manifest_path=author_manifest,
+        authoring_root=author_root,
+        output_root=output,
+        expected_correction_manifest_sha256=_sha(correction_manifest),
+    )
+    reports = output / "reports"
+    reports.mkdir(mode=0o700)
+    reports.chmod(0o700)
+    authorization_path = reports / "authorization.json"
+    _write_json(
+        authorization_path,
+        _preflight_authorization(output, preparation, tmp_path, create_staged=create_staged),
+    )
+    authorization_path.chmod(0o600)
+    return values, output, authorization_path
+
+
+def _validate_prepared_fixture(values, output: Path, authorization_path: Path, tmp_path: Path):
+    _, inventory, split, ids, selection, correction_manifest, correction_root, author_manifest, author_root = values
+    return qualification.validate_prepared_qualification(
+        selection_path=selection,
+        ids_path=ids,
+        correction_manifest_path=correction_manifest,
+        correction_root=correction_root,
+        inventory_path=inventory,
+        split_path=split,
+        authoring_manifest_path=author_manifest,
+        authoring_root=author_root,
+        qualification_root=output,
+        authorization_path=authorization_path,
+        report_output=tmp_path / "preflight.json",
+    )
+
+
 def test_preflight_validates_the_staged_boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     values = _fixture(tmp_path, monkeypatch)
     source_ids, inventory, split, ids, selection, correction_manifest, correction_root, author_manifest, author_root = values
@@ -296,8 +356,12 @@ def test_preflight_validates_the_staged_boundary(tmp_path: Path, monkeypatch: py
         output_root=output,
         expected_correction_manifest_sha256=_sha(correction_manifest),
     )
-    authorization_path = tmp_path / "authorization.json"
+    reports = output / "reports"
+    reports.mkdir(mode=0o700)
+    reports.chmod(0o700)
+    authorization_path = reports / "authorization.json"
     _write_json(authorization_path, _preflight_authorization(output, preparation, tmp_path))
+    authorization_path.chmod(0o600)
     report = qualification.validate_prepared_qualification(
         selection_path=selection,
         ids_path=ids,
@@ -319,6 +383,45 @@ def test_preflight_validates_the_staged_boundary(tmp_path: Path, monkeypatch: py
     assert report["verification_plan_staged"] is False
     assert report["reference_rtl_supplied"] is False
     assert report["selected_source_ids"] == list(source_ids)
+
+
+def test_preflight_rejects_missing_staged_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    values, output, authorization_path = _prepared_preflight_fixture(
+        tmp_path, monkeypatch, create_staged=False
+    )
+    with pytest.raises(qualification.QualificationError):
+        _validate_prepared_fixture(values, output, authorization_path, tmp_path)
+
+
+def test_preflight_rejects_staged_path_that_is_a_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    values, output, authorization_path = _prepared_preflight_fixture(
+        tmp_path, monkeypatch, create_staged=False
+    )
+    (output / "staged").write_text("not a directory\n", encoding="utf-8")
+    with pytest.raises(qualification.QualificationError):
+        _validate_prepared_fixture(values, output, authorization_path, tmp_path)
+
+
+def test_preflight_rejects_staged_directory_with_wrong_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    values, output, authorization_path = _prepared_preflight_fixture(tmp_path, monkeypatch)
+    (output / "staged").chmod(0o755)
+    with pytest.raises(qualification.QualificationError):
+        _validate_prepared_fixture(values, output, authorization_path, tmp_path)
+
+
+def test_preflight_rejects_nonempty_staged_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    values, output, authorization_path = _prepared_preflight_fixture(tmp_path, monkeypatch)
+    marker = output / "staged" / "unexpected-output"
+    marker.write_text("unexpected\n", encoding="utf-8")
+    marker.chmod(0o600)
+    with pytest.raises(qualification.QualificationError):
+        _validate_prepared_fixture(values, output, authorization_path, tmp_path)
+
+
+def test_preflight_accepts_empty_0700_staged_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    values, output, authorization_path = _prepared_preflight_fixture(tmp_path, monkeypatch)
+    report = _validate_prepared_fixture(values, output, authorization_path, tmp_path)
+    assert report["status"] == "ready_for_isolated_execution"
 
 
 def test_preflight_accepts_authorization_in_run_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -378,8 +481,12 @@ def test_preflight_rejects_wrong_case_order(tmp_path: Path, monkeypatch: pytest.
     cases = qualification._load_jsonl(output / "case_manifest.jsonl")
     cases[0], cases[3] = cases[3], cases[0]
     _write_jsonl(output / "case_manifest.jsonl", cases)
-    authorization_path = tmp_path / "authorization.json"
+    reports = output / "reports"
+    reports.mkdir(mode=0o700)
+    reports.chmod(0o700)
+    authorization_path = reports / "authorization.json"
     _write_json(authorization_path, _preflight_authorization(output, preparation, tmp_path))
+    authorization_path.chmod(0o600)
     with pytest.raises(qualification.QualificationError, match="case manifest does not preserve"):
         qualification.validate_prepared_qualification(
             selection_path=selection,

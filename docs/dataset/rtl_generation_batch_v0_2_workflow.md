@@ -46,6 +46,20 @@ run HDL. Obtain an explicit isolated-runner authorization only after static
 validation succeeds. Execute that qualification batch once, validate the
 runner evidence once, and freeze qualified and failed ID lists.
 
+Before authorization, the qualification attempt's runner output parent must
+already exist as an empty private directory with mode `0700`:
+
+```text
+qualification/attempt_01/staged/
+```
+
+Preflight rejects a missing staged directory, a file at that path, incorrect
+permissions, or nonempty contents. If the runner discovers this defect first,
+preserve the zero-case failed invocation, create only the empty staged
+directory, run the preflight regression tests, and issue a separate
+qualification-only recovery authorization. The recovery is not a candidate
+rerun when the first invocation started zero cases.
+
 ### Qualification-failure retry boundary
 
 When a negative mutation is not detected, diagnose it from the public

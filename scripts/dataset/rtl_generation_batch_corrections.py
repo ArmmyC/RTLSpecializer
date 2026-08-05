@@ -107,6 +107,36 @@ MUTATION_NAMES = {
     "Prob110_fsm2": ("missing_reset", "wrong_fsm_transition"),
     "Prob111_fsm2s": ("missing_reset", "wrong_fsm_transition"),
     "Prob133_2014_q3fsm": ("missing_reset", "wrong_sequence_count"),
+    "Prob002_m2014_q4i": ("constant_one", "unknown_output"),
+    "Prob003_step_one": ("constant_zero", "unknown_output"),
+    "Prob005_notgate": ("identity_output", "constant_zero"),
+    "Prob008_m2014_q4h": ("inverted_output", "constant_zero"),
+    "Prob011_norgate": ("wrong_or", "wrong_and"),
+    "Prob013_m2014_q4e": ("wrong_or", "wrong_and"),
+    "Prob014_andgate": ("wrong_or", "wrong_nand"),
+    "Prob023_vector100r": ("identity_order", "constant_zero"),
+    "Prob028_m2014_q4a": ("combinational_assign", "wrong_enable"),
+    "Prob032_vector0": ("wrong_bit_positions", "constant_zero"),
+    "Prob043_vector5": ("xor_comparison", "constant_zero"),
+    "Prob044_vectorgates": ("wrong_inverse_halves", "logical_and"),
+    "Prob050_kmap1": ("wrong_and_reduction", "constant_zero"),
+    "Prob057_kmap2": ("wrong_truth_table", "constant_zero"),
+    "Prob113_2012_q1g": ("wrong_truth_table", "constant_zero"),
+    "Prob089_ece241_2014_q5a": ("always_invert", "never_complement"),
+    "Prob091_2012_q2b": ("wrong_y3_enable", "constant_zero"),
+    "Prob119_fsm3": ("wrong_transition", "constant_output"),
+    "Prob120_fsm3s": ("wrong_transition", "missing_reset"),
+    "Prob121_2014_q3bfsm": ("wrong_x1_transition", "constant_zero"),
+    "Prob128_fsm_ps2": ("done_after_two", "accept_without_header"),
+    "Prob129_ece241_2013_q8": ("non_overlapping", "wrong_output_timing"),
+    "Prob134_2014_q3c": ("wrong_x1_transition", "wrong_output"),
+    "Prob137_fsm_serial": ("seven_data_bits", "accept_zero_stop"),
+    "Prob140_fsm_hdlc": ("flag_at_five", "no_error_after_seven"),
+    "Prob143_fsm_onehot": ("wrong_transition", "outputs_zero"),
+    "Prob149_ece241_2013_q4": ("no_dfr", "wrong_flow_levels"),
+    "Prob150_review2015_fsmonehot": ("wrong_next_state", "outputs_zero"),
+    "Prob151_review2015_fsm": ("shift_three_cycles", "ignore_ack"),
+    "Prob156_review2015_fancytimer": ("off_by_one_count", "no_reset"),
 }
 
 
@@ -332,12 +362,11 @@ def create_batch_manifest(
             "verification_readiness": "pending_qualification",
             "static_audit": audit,
         }
-        if correction_version == "assetfix_v004":
-            row.update({
-                "public_specification_sha256": source.get("source_prompt_sha256"),
-                "selection_ids_sha256": sha256_file(ids_path),
-                "selection_report_sha256": sha256_file(selection_path),
-            })
+        row.update({
+            "public_specification_sha256": source.get("source_prompt_sha256"),
+            "selection_ids_sha256": sha256_file(ids_path),
+            "selection_report_sha256": sha256_file(selection_path),
+        })
         rows.append(row)
     if len(rows) != len(ids):
         errors.append(f"correction manifest must contain exactly {len(ids)} rows")

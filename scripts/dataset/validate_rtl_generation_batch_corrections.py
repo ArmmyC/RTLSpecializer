@@ -128,14 +128,13 @@ def validate_batch(
         for field, expected in expected_fields:
             if row.get(field) != expected:
                 errors.append(f"row {index}: {field} mismatch")
-        if correction_version == "assetfix_v004":
-            for field, expected in (
-                ("public_specification_sha256", source.get("source_prompt_sha256")),
-                ("selection_ids_sha256", sha256_file(ids_path)),
-                ("selection_report_sha256", sha256_file(selection_path)),
-            ):
-                if row.get(field) != expected:
-                    errors.append(f"row {index}: {field} mismatch")
+        for field, expected in (
+            ("public_specification_sha256", source.get("source_prompt_sha256")),
+            ("selection_ids_sha256", sha256_file(ids_path)),
+            ("selection_report_sha256", sha256_file(selection_path)),
+        ):
+            if row.get(field) != expected:
+                errors.append(f"row {index}: {field} mismatch")
         if source_id not in expected_train:
             errors.append(f"row {index}: source ID is outside train split")
         correction_path = correction_root / row.get("testbench_path", "")
