@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+import pytest
+
 from scripts.dataset.rtl_generation_dataset import (
     GENERATION_SFT_SCHEMA_VERSION,
     SMOKE_SOURCE_IDS,
@@ -398,7 +400,14 @@ def test_private_scan_ignores_metadata_keys_but_checks_values() -> None:
     assert _contains_private_marker({"diagnostic": "/tmp/private.sv"}) is True
 
 
-def test_qualified_subset_provenance_accepts_passed_subset_binding(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "binding_schema",
+    [
+        "rtl_generation_qualified_subset_binding_v0.1",
+        "rtl_generation_qualified_subset_binding_v0.3",
+    ],
+)
+def test_qualified_subset_provenance_accepts_passed_subset_binding(tmp_path, binding_schema) -> None:
     task = _task()
     split_path = tmp_path / "split.json"
     split_path.write_text(json.dumps(_split(task, split_path)) + "\n", encoding="utf-8")
@@ -426,7 +435,7 @@ def test_qualified_subset_provenance_accepts_passed_subset_binding(tmp_path) -> 
     }) + "\n", encoding="utf-8")
     binding = tmp_path / "binding.json"
     binding.write_text(json.dumps({
-        "schema_version": "rtl_generation_qualified_subset_binding_v0.1",
+        "schema_version": binding_schema,
         "source_commit": "a" * 40,
         "source_tree_sha256": "b" * 64,
         "frozen_split_sha256": hashlib.sha256(split_path.read_bytes()).hexdigest(),

@@ -30,6 +30,12 @@ VERIFICATION_ATTEMPT_ROOT_RE = re.compile(r"verification/attempt_0[1-4](?:_retry
 VERIFICATION_WORKSPACE_DIR_RE = re.compile(
     r"verification/attempt_0[1-4](?:_retry_(?:0[1-9]|[1-9][0-9]*))?/workspace(?:/.*)?"
 )
+VERIFICATION_PACKET_DIR_RE = re.compile(
+    r"verification/attempt_0[1-4](?:_retry_(?:0[1-9]|[1-9][0-9]*))?/packet_[0-9]{4}"
+)
+VERIFICATION_PACKET_WORKSPACE_DIR_RE = re.compile(
+    r"verification/attempt_0[1-4](?:_retry_(?:0[1-9]|[1-9][0-9]*))?/packet_[0-9]{4}/workspace(?:/.*)?"
+)
 VERIFICATION_ATTEMPT_PATH_RE = re.compile(
     r"verification/attempt_0[1-4](?:_retry_(?:0[1-9]|[1-9][0-9]*))?(?:/.*)?"
 )
@@ -685,6 +691,8 @@ def _is_valid_verification_directory(relative: str) -> bool:
     return bool(
         VERIFICATION_ATTEMPT_ROOT_RE.fullmatch(relative)
         or VERIFICATION_WORKSPACE_DIR_RE.fullmatch(relative)
+        or VERIFICATION_PACKET_DIR_RE.fullmatch(relative)
+        or VERIFICATION_PACKET_WORKSPACE_DIR_RE.fullmatch(relative)
     )
 
 

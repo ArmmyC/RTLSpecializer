@@ -37,10 +37,14 @@ PROFILE = "verilog_eval_mismatch_v1"
 TESTBENCH_TOP = "tb"
 SIMULATION_CONTRACT = "mismatch_count_v1"
 REQUESTED_CHECKS = {"compile": True, "simulation": True, "lint": False, "synthesis": False}
-# Teacher-generation handoff bindings exist for both the v0.1 qualified-16
-# overlay and the v0.2 qualified-20 overlay.  Keep rejecting older correction
-# contracts while allowing the active v0.2 run to reach its handoff gate.
-TEACHER_GENERATION_CORRECTION_VERSIONS = frozenset({"assetfix_v003", "assetfix_v004"})
+# Teacher-generation handoff bindings are versioned with their private asset
+# correction overlay.  Keep rejecting older correction contracts while
+# allowing the active v0.5 run to reach its handoff gate.
+TEACHER_GENERATION_CORRECTION_VERSIONS = frozenset({
+    "assetfix_v003",
+    "assetfix_v004",
+    "assetfix_v005",
+})
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_RTL_BYTES = 2 * 1024 * 1024
 MAX_SUMMARY_BYTES = 8 * 1024
@@ -1565,13 +1569,13 @@ def _validate_repair_binding_object(value: Any, label: str) -> dict[str, Any]:
             raise WorkflowError(f"{label}.{field} is invalid")
     if not isinstance(value["source_commit"], str) or re.fullmatch(r"[0-9a-f]{40}", value["source_commit"]) is None:
         raise WorkflowError(f"{label}.source_commit is invalid")
-    if type(value["attempt"]) is not int or value["attempt"] != 2:
-        raise WorkflowError(f"{label}.attempt must be 2")
-    if type(value["previous_attempt"]) is not int or value["previous_attempt"] != 1:
-        raise WorkflowError(f"{label}.previous_attempt must be 1")
-    if value["candidate_id"] != f"{value['task_id']}_attempt_02":
+    if type(value["attempt"]) is not int or not 2 <= value["attempt"] <= 4:
+        raise WorkflowError(f"{label}.attempt must be in 2..4")
+    if type(value["previous_attempt"]) is not int or value["previous_attempt"] != value["attempt"] - 1:
+        raise WorkflowError(f"{label}.previous_attempt must immediately precede attempt")
+    if value["candidate_id"] != f"{value['task_id']}_attempt_{value['attempt']:02d}":
         raise WorkflowError(f"{label}.candidate_id is not deterministic")
-    if value["previous_candidate_id"] != f"{value['task_id']}_attempt_01":
+    if value["previous_candidate_id"] != f"{value['task_id']}_attempt_{value['previous_attempt']:02d}":
         raise WorkflowError(f"{label}.previous_candidate_id is not deterministic")
     if value["qualification_passed"] is not True or value["reference_rtl_supplied"] is not False:
         raise WorkflowError(f"{label} has an unsafe qualification state")
@@ -1611,34 +1615,36 @@ def create_teacher_repair_binding(
         candidate = next((row for row in candidates if row["candidate_id"] == candidate_id), None)
         if candidate is None:
             raise WorkflowError(f"missing repair candidate: {candidate_id}")
-        if candidate["attempt"] != 2:
-            raise WorkflowError("repair binding candidate must be attempt 2")
+        repair_attempt = candidate["attempt"]
+        if not 2 <= repair_attempt <= 4:
+            raise WorkflowError("repair binding candidate must be an attempt from 2 through 4")
         task = task_by_id.get(candidate["task_id"])
         if task is None or candidate["source_id"] != task["source_id"]:
             raise WorkflowError("repair candidate/task identity mismatch")
         asset = assets.get(task["task_id"])
         if asset is None:
             raise WorkflowError("repair task has no private asset")
-        previous_candidate_id = f"{task['task_id']}_attempt_01"
+        previous_attempt_number = repair_attempt - 1
+        previous_candidate_id = f"{task['task_id']}_attempt_{previous_attempt_number:02d}"
         previous_candidate = next((row for row in candidates if row["candidate_id"] == previous_candidate_id), None)
-        if previous_candidate is None or previous_candidate["attempt"] != 1:
-            raise WorkflowError("missing attempt-1 candidate for repair lineage")
+        if previous_candidate is None or previous_candidate["attempt"] != previous_attempt_number:
+            raise WorkflowError("missing immediately preceding candidate for repair lineage")
         previous_attempt = next((row for row in attempts if row["candidate_id"] == previous_candidate_id), None)
-        if previous_attempt is None or previous_attempt["attempt"] != 1 or previous_attempt["accepted"] is not False:
-            raise WorkflowError("attempt-1 repair source is missing or accepted")
+        if previous_attempt is None or previous_attempt["attempt"] != previous_attempt_number or previous_attempt["accepted"] is not False:
+            raise WorkflowError("immediately preceding repair source is missing or accepted")
         if previous_attempt["failure_category"] not in REPAIRABLE_FAILURE_CATEGORIES:
-            raise WorkflowError("attempt-1 failure is not candidate-repairable")
+            raise WorkflowError("immediately preceding failure is not candidate-repairable")
 
         evidence_rows = _load_jsonl(prior_evidence_path, maximum=MAX_JSONL_BYTES)
         evidence = next((row for row in evidence_rows if row.get("candidate_id") == previous_candidate_id), None)
         if evidence is None:
-            raise WorkflowError("attempt-1 evidence row is missing")
+            raise WorkflowError("immediately preceding evidence row is missing")
         if evidence.get("accepted") is not False or evidence.get("failure_category") != previous_attempt["failure_category"]:
-            raise WorkflowError("attempt-1 evidence does not match repair source")
+            raise WorkflowError("immediately preceding evidence does not match repair source")
 
         packet = _load_packet(repair_packet_path)
-        if packet["packet_kind"] != "repair" or packet["target_attempt"] != 2 or packet["row_count"] != 1:
-            raise WorkflowError("repair packet is not a single attempt-2 packet")
+        if packet["packet_kind"] != "repair" or packet["target_attempt"] != repair_attempt or packet["row_count"] != 1:
+            raise WorkflowError("repair packet does not target the candidate attempt")
         packet_task = packet["rows"][0]["task"]
         if packet_task != task or packet["rows"][0]["previous_candidate"] != previous_candidate["candidate"]:
             raise WorkflowError("repair packet does not bind the exact failed candidate")
@@ -1674,14 +1680,14 @@ def create_teacher_repair_binding(
         candidate_hash = candidate["candidate_sha256"]
         previous_candidate_hash = previous_candidate["candidate_sha256"]
         if candidate_hash == previous_candidate_hash:
-            raise WorkflowError("repair candidate is byte-identical to attempt 1")
+            raise WorkflowError("repair candidate is byte-identical to the preceding attempt")
         if not isinstance(previous_workspace_tree_sha256, str) or SHA256_RE.fullmatch(previous_workspace_tree_sha256) is None:
             raise WorkflowError("previous workspace-tree hash is invalid")
         run_root = tasks_path.resolve().parent.parent
         sidecar_path = prior_evidence_path.with_name(prior_evidence_path.name + ".runner.json")
-        previous_manifest_path = run_root / "verification" / "attempt_01" / "candidate_manifest.jsonl"
+        previous_manifest_path = prior_evidence_path.parent / "candidate_manifest.jsonl"
         if not sidecar_path.is_file() or not previous_manifest_path.is_file():
-            raise WorkflowError("attempt-1 sidecar or manifest is missing")
+            raise WorkflowError("preceding attempt sidecar or manifest is missing")
 
         binding = {
             "schema_version": REPAIR_HANDOFF_BINDING_SCHEMA_VERSION,
@@ -1689,10 +1695,10 @@ def create_teacher_repair_binding(
             "task_id": task["task_id"],
             "source_id": task["source_id"],
             "top_module": task["top_module"],
-            "attempt": 2,
+            "attempt": repair_attempt,
             "candidate_id": candidate["candidate_id"],
             "candidate_sha256": candidate_hash,
-            "previous_attempt": 1,
+            "previous_attempt": previous_attempt_number,
             "previous_candidate_id": previous_candidate_id,
             "previous_candidate_sha256": previous_candidate_hash,
             "previous_evidence_sha256": _sha256_file(prior_evidence_path),

@@ -19,6 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-root", required=True, type=Path)
     parser.add_argument("--rtlspecializer-commit", required=True)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--json", action="store_true", help="emit the JSON report (the default output format)")
     args = parser.parse_args(argv)
     report, code = create_teacher_generation_binding(
         args.run_root,

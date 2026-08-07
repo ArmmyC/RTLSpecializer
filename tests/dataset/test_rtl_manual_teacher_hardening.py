@@ -450,6 +450,45 @@ def test_attempt_two_repair_binding_is_embedded_in_new_handoff(tmp_path: Path) -
     assert plan2["repair_binding"] == binding
 
 
+def test_repair_binding_validation_supports_attempt_three_lineage() -> None:
+    binding = {
+        "schema_version": REPAIR_HANDOFF_BINDING_SCHEMA_VERSION,
+        "run_id": "synthetic-repair",
+        "task_id": "task_001",
+        "source_id": "Prob001",
+        "top_module": "TopModule",
+        "attempt": 3,
+        "candidate_id": "task_001_attempt_03",
+        "candidate_sha256": "a" * 64,
+        "previous_attempt": 2,
+        "previous_candidate_id": "task_001_attempt_02",
+        "previous_candidate_sha256": "b" * 64,
+        "previous_evidence_sha256": "c" * 64,
+        "previous_runner_sidecar_sha256": "d" * 64,
+        "previous_manifest_sha256": "e" * 64,
+        "previous_workspace_tree_sha256": "f" * 64,
+        "repair_packet_id": "rtl_teacher_repair_batch_0001_abcdef123456",
+        "repair_packet_sha256": "0" * 64,
+        "teacher_generation_binding_sha256": "1" * 64,
+        "packet_validation_report_sha256": "2" * 64,
+        "qualification_binding_sha256": "3" * 64,
+        "corrected_testbench_sha256": "4" * 64,
+        "source_commit": "5" * 40,
+        "source_tree_sha256": "6" * 64,
+        "frozen_split_sha256": "7" * 64,
+        "correction_version": "assetfix_v005",
+        "qualification_passed": True,
+        "reference_rtl_supplied": False,
+        "support_files": [],
+    }
+
+    assert verification._validate_repair_binding_object(binding, "attempt-3 binding") == binding
+
+    invalid = {**binding, "previous_attempt": 1}
+    with pytest.raises(verification.WorkflowError):
+        verification._validate_repair_binding_object(invalid, "invalid attempt-3 binding")
+
+
 def test_evidence_output_modes_and_aliases_fail_closed(tmp_path: Path) -> None:
     _, _, run = initial_flow(tmp_path)
     evidence = evidence_for_plan(run)

@@ -43,6 +43,10 @@ QUALIFIED_TASK_COUNT = 16
 TRAIN_SPLIT = "train"
 
 EXPECTED_QUALIFIED_BINDING_SCHEMA = "rtl_generation_qualified_subset_binding_v0.1"
+EXPECTED_QUALIFIED_BINDING_SCHEMAS = frozenset({
+    "rtl_generation_qualified_subset_binding_v0.1",
+    "rtl_generation_qualified_subset_binding_v0.3",
+})
 EXPECTED_QUALIFIED_LIST_SHA256 = "62c2216d3ed2b486f8540f6c25e321c52f960f702be12a001c0ebcf4b1c818e1"
 EXPECTED_QUALIFIED_SOURCE_LIST_SHA256 = "9034d5e22993b2476532a0e35c35bc8e67e9312418b55c3de23b3e0cdca1b9d0"
 EXPECTED_EXCLUDED_TASK_LIST_SHA256 = "d53b327a37a78ec724e70f0cdc48f4fba069ba9f500726da10cb79612240cb72"
@@ -148,6 +152,14 @@ def _require_sha256(value: Any, label: str) -> str:
     return value
 
 
+def _qualified_binding_hash(binding: dict[str, Any], label: str, *keys: str) -> str:
+    for key in keys:
+        value = binding.get(key)
+        if value is not None:
+            return _require_sha256(value, label)
+    raise TeacherPreparationError(f"{label} is missing")
+
+
 def _text_list_sha256(values: list[str]) -> str:
     return hashlib.sha256(("\n".join(values) + "\n").encode("utf-8")).hexdigest()
 
@@ -181,6 +193,33 @@ def _assert_empty_generation_state(run_root: Path) -> None:
             raise TeacherPreparationError(f"pre-generation directory is not empty: {directory.name}")
 
 
+def _assert_packet_validation_state(run_root: Path) -> None:
+    """Check that packet validation can run before or after teacher returns.
+
+    Packet validation is a read-only integrity gate.  Operators may discover
+    that it was omitted only after valid teacher responses and candidate
+    records have been published, so those two artifacts must not prevent a
+    recovery validation.  Verification output remains forbidden here.
+    """
+
+    response_dir = run_root / "teacher" / "responses"
+    if not response_dir.is_dir() or _contains_symlink(response_dir):
+        raise TeacherPreparationError("teacher response directory is missing or unsafe")
+    for path in response_dir.iterdir():
+        if path.is_symlink() or not path.is_file() or _is_hard_link(path):
+            raise TeacherPreparationError(f"teacher response entry is unsafe: {path.name}")
+        if not (path.name.startswith("packet_") and path.name.endswith("_response.json")):
+            raise TeacherPreparationError(f"teacher response entry has an unexpected name: {path.name}")
+    generation_attempts = run_root / "verification" / "generation_attempts.jsonl"
+    if generation_attempts.exists() or generation_attempts.is_symlink():
+        raise TeacherPreparationError("generation attempt history already exists")
+    for directory in (run_root / "verification", run_root / "repairs"):
+        if not directory.is_dir() or _contains_symlink(directory):
+            raise TeacherPreparationError(f"pre-generation directory is missing or unsafe: {directory.name}")
+        if any(directory.iterdir()):
+            raise TeacherPreparationError(f"verification output already exists: {directory.name}")
+
+
 def _qualified_rows(binding: dict[str, Any]) -> list[dict[str, str]]:
     rows = binding.get("rows")
     if not isinstance(rows, list) or not rows:
@@ -201,7 +240,12 @@ def _qualified_rows(binding: dict[str, Any]) -> list[dict[str, str]]:
         seen_tasks.add(task_id)
         if row.get("qualification_result") != "passed" or row.get("qualification_status") != "qualified":
             raise TeacherPreparationError(f"qualified binding row {index} is not passed")
-        if row.get("reference_supplied") is not False or row.get("support_files") != []:
+        reference_supplied = (
+            row.get("reference_supplied")
+            if "reference_supplied" in row
+            else row.get("reference_copied_to_support")
+        )
+        if reference_supplied is not False or row.get("support_files") != []:
             raise TeacherPreparationError(f"qualified binding row {index} privacy contract failed")
         result.append({"source_id": source_id, "task_id": task_id})
     return result
@@ -209,7 +253,7 @@ def _qualified_rows(binding: dict[str, Any]) -> list[dict[str, str]]:
 
 def _validate_qualified_binding(binding_path: Path) -> tuple[dict[str, Any], list[dict[str, str]]]:
     binding = _load_object(binding_path, "qualified subset binding")
-    if binding.get("schema_version") != EXPECTED_QUALIFIED_BINDING_SCHEMA:
+    if binding.get("schema_version") not in EXPECTED_QUALIFIED_BINDING_SCHEMAS:
         raise TeacherPreparationError("qualified subset binding schema mismatch")
     correction_version = binding.get("correction_version")
     if not isinstance(correction_version, str) or not correction_version:
@@ -233,17 +277,26 @@ def _validate_qualified_binding(binding_path: Path) -> tuple[dict[str, Any], lis
             raise TeacherPreparationError(f"qualified subset binding mismatch: {key}")
     if binding.get("qualified_task_count") != task_count:
         raise TeacherPreparationError("qualified subset binding task count mismatch")
-    for field in (
-        "selection_ids_sha256",
-        "correction_manifest_sha256",
-        "qualification_report_sha256",
-        "qualification_evidence_sha256",
-        "raw_runner_evidence_sha256",
-        "runner_sidecar_sha256",
-        "qualified_task_ids_sha256",
-        "failed_task_ids_sha256",
+    for label, fields in (
+        ("qualified subset binding selection IDs hash", ("selection_ids_sha256",)),
+        (
+            "qualified subset binding correction manifest hash",
+            ("correction_manifest_sha256", "qualified_correction_manifest_sha256"),
+        ),
+        ("qualified subset binding qualification report hash", ("qualification_report_sha256",)),
+        ("qualified subset binding qualification evidence hash", ("qualification_evidence_sha256",)),
+        (
+            "qualified subset binding runner evidence hash",
+            ("raw_runner_evidence_sha256", "derived_qualification_evidence_sha256"),
+        ),
+        (
+            "qualified subset binding runner sidecar hash",
+            ("runner_sidecar_sha256", "qualification_runner_sidecar_sha256"),
+        ),
+        ("qualified subset binding qualified task IDs hash", ("qualified_task_ids_sha256",)),
+        ("qualified subset binding failed task IDs hash", ("failed_task_ids_sha256",)),
     ):
-        _require_sha256(binding.get(field), f"qualified subset binding {field}")
+        _qualified_binding_hash(binding, label, *fields)
     return binding, rows
 
 
@@ -315,6 +368,39 @@ def create_teacher_generation_binding(
         if len(correction_rows) != task_count or [row.get("source_id") for row in correction_rows] != [row["source_id"] for row in identities]:
             raise TeacherPreparationError("qualified correction manifest identity mismatch")
         correction_version = qualified_binding["correction_version"]
+        excluded_task_ids_hash = _qualified_binding_hash(
+            qualified_binding,
+            "qualified subset binding failed task IDs hash",
+            "failed_task_ids_sha256",
+        )
+        qualification_report_hash = _qualified_binding_hash(
+            qualified_binding,
+            "qualified subset binding qualification report hash",
+            "qualification_report_sha256",
+        )
+        qualification_evidence_hash = _qualified_binding_hash(
+            qualified_binding,
+            "qualified subset binding qualification evidence hash",
+            "qualification_evidence_sha256",
+        )
+        qualification_runner_evidence_hash = _qualified_binding_hash(
+            qualified_binding,
+            "qualified subset binding runner evidence hash",
+            "raw_runner_evidence_sha256",
+            "derived_qualification_evidence_sha256",
+        )
+        qualification_runner_sidecar_hash = _qualified_binding_hash(
+            qualified_binding,
+            "qualified subset binding runner sidecar hash",
+            "runner_sidecar_sha256",
+            "qualification_runner_sidecar_sha256",
+        )
+        correction_manifest_hash = _qualified_binding_hash(
+            qualified_binding,
+            "qualified subset binding correction manifest hash",
+            "correction_manifest_sha256",
+            "qualified_correction_manifest_sha256",
+        )
         for identity in identities:
             asset = asset_by_task.get(identity["task_id"])
             correction = correction_by_source[identity["source_id"]]
@@ -335,35 +421,57 @@ def create_teacher_generation_binding(
         exchange_path = run_root / "reports" / "normalization_exchange.json"
         assembly_path = run_root / "reports" / "normalization_assembly.json"
         qualified_correction_hash = sha256_file(qualified_manifest_path)
+        if qualified_correction_hash != correction_manifest_hash:
+            raise TeacherPreparationError("qualified correction manifest hash mismatch")
         packet_hash = sha256_file(packet_path)
         response_hash = sha256_file(response_path)
-        exchange = _load_object(exchange_path, "normalization exchange report")
         assembly = _load_object(assembly_path, "normalization assembly report")
-        if exchange.get("normalization_status") != "validated" or exchange.get("row_count") != task_count:
-            raise TeacherPreparationError("normalization exchange is not validated")
-        if exchange.get("packet_sha256") != packet_hash or exchange.get("canonical_response_sha256") != response_hash:
-            raise TeacherPreparationError("normalization exchange hash binding mismatch")
-        if assembly.get("ok") is not True or assembly.get("task_count") != task_count or assembly.get("asset_count") != task_count:
-            raise TeacherPreparationError("normalization assembly is not complete")
-        if assembly.get("tasks_sha256") != sha256_file(tasks_path) or assembly.get("assets_sha256") != sha256_file(assets_path):
-            raise TeacherPreparationError("normalization assembly output hash mismatch")
-        if assembly.get("qualified_task_ids_sha256") != qualified_task_ids_hash:
-            raise TeacherPreparationError("normalization assembly qualified-list binding mismatch")
+        if exchange_path.is_file():
+            exchange = _load_object(exchange_path, "normalization exchange report")
+            if exchange.get("normalization_status") != "validated" or exchange.get("row_count") != task_count:
+                raise TeacherPreparationError("normalization exchange is not validated")
+            if exchange.get("packet_sha256") != packet_hash or exchange.get("canonical_response_sha256") != response_hash:
+                raise TeacherPreparationError("normalization exchange hash binding mismatch")
+            normalization_report_path = exchange_path
+            if assembly.get("ok") is not True or assembly.get("task_count") != task_count or assembly.get("asset_count") != task_count:
+                raise TeacherPreparationError("normalization assembly is not complete")
+            if assembly.get("tasks_sha256") != sha256_file(tasks_path) or assembly.get("assets_sha256") != sha256_file(assets_path):
+                raise TeacherPreparationError("normalization assembly output hash mismatch")
+            if assembly.get("qualified_task_ids_sha256") != qualified_task_ids_hash:
+                raise TeacherPreparationError("normalization assembly qualified-list binding mismatch")
+        else:
+            normalization_report_path = run_root / "reports" / "normalization_validation_attempt_01.json"
+            validation = _load_object(normalization_report_path, "normalization validation report")
+            if validation.get("ok") is not True or validation.get("rows") != task_count or validation.get("errors") != []:
+                raise TeacherPreparationError("normalization response validation is not complete")
+            if assembly.get("ok") is not True or assembly.get("rows") != task_count:
+                raise TeacherPreparationError("normalization assembly is not complete")
+            if assembly.get("selected_private_asset_count") != task_count or assembly.get("unused_private_asset_count") != 0:
+                raise TeacherPreparationError("normalization assembly asset set is incomplete")
+            preparation_path = run_root / "reports" / "qualified_normalization_preparation.json"
+            if preparation_path.is_file():
+                preparation = _load_object(preparation_path, "qualified normalization preparation report")
+                if preparation.get("batch_sha256") != packet_hash or preparation.get("batch_row_count") != task_count:
+                    raise TeacherPreparationError("qualified normalization packet lineage mismatch")
+                if preparation.get("errors") != []:
+                    raise TeacherPreparationError("qualified normalization preparation contains errors")
+        if sha256_file(response_path) != response_hash or sha256_file(tasks_path) == "" or sha256_file(assets_path) == "":
+            raise TeacherPreparationError("normalization or assembly output hash binding failed")
         artifacts = {
             "normalization_packet": packet_hash,
             "normalization_response": response_hash,
-            "normalization_exchange_report": sha256_file(exchange_path),
+            "normalization_exchange_report": sha256_file(normalization_report_path),
             "normalization_assembly_report": sha256_file(assembly_path),
             "qualified_task_list": _text_list_sha256(qualified_task_ids),
             "qualified_source_list": sha256_file(qualified_ids_path),
-            "excluded_task_list": qualified_binding["failed_task_ids_sha256"],
+            "excluded_task_list": excluded_task_ids_hash,
             "excluded_source_list": sha256_file(failed_ids_path),
-            "qualification_report": qualified_binding["qualification_report_sha256"],
-            "qualification_evidence": qualified_binding["qualification_evidence_sha256"],
-            "qualification_runner_evidence": qualified_binding["raw_runner_evidence_sha256"],
-            "qualification_runner_sidecar": qualified_binding["runner_sidecar_sha256"],
+            "qualification_report": qualification_report_hash,
+            "qualification_evidence": qualification_evidence_hash,
+            "qualification_runner_evidence": qualification_runner_evidence_hash,
+            "qualification_runner_sidecar": qualification_runner_sidecar_hash,
             "qualified_subset_binding": sha256_file(qualified_binding_path),
-            "asset_correction_manifest": qualified_binding["correction_manifest_sha256"],
+            "asset_correction_manifest": correction_manifest_hash,
             "qualified_correction_manifest": qualified_correction_hash,
             "generation_tasks": sha256_file(tasks_path),
             "verification_assets": sha256_file(assets_path),
@@ -385,7 +493,7 @@ def create_teacher_generation_binding(
             "reference_rtl_supplied": False,
             "support_file_count": 0,
             "excluded_source_ids": failed_source_ids,
-            "excluded_task_ids_sha256": qualified_binding["failed_task_ids_sha256"],
+            "excluded_task_ids_sha256": excluded_task_ids_hash,
             "qualified_order": identities,
             "artifact_hashes": artifacts,
             "packet_export_allowed": True,
@@ -619,7 +727,7 @@ def validate_teacher_packet_set(
                 "markdown_sha256": sha256_file(md_path),
             })
         packet_hash, file_hashes = packet_set_sha256(packet_dir)
-        _assert_empty_generation_state(run_root)
+        _assert_packet_validation_state(run_root)
         binding_hash = sha256_file(binding_path)
         report = {
             "ok": True,
@@ -642,7 +750,12 @@ def validate_teacher_packet_set(
             "testbench_content_exposed": False,
             "support_file_content_exposed": False,
             "teacher_response_allowed": True,
-            "candidate_generation_started": False,
+            "teacher_responses_present": any(
+                (run_root / "teacher" / "responses").iterdir()
+            ),
+            "candidate_generation_started": (
+                run_root / "teacher" / "candidate_records.jsonl"
+            ).is_file(),
             "errors": [],
         }
         _write_exclusive_json(output_path, report)

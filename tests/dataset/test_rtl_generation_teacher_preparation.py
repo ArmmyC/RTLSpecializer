@@ -83,6 +83,22 @@ def test_qualified_binding_rejects_wrong_hash_and_order(tmp_path: Path) -> None:
     assert [row["task_id"] for row in rows[:2]] == ["Task001", "Task000"]
 
 
+def test_qualified_binding_accepts_v003_reference_privacy_field(tmp_path: Path) -> None:
+    binding = _qualified_binding_fixture()
+    binding["schema_version"] = "rtl_generation_qualified_subset_binding_v0.3"
+    binding["qualified_correction_manifest_sha256"] = binding.pop("correction_manifest_sha256")
+    binding["derived_qualification_evidence_sha256"] = binding.pop("raw_runner_evidence_sha256")
+    binding["qualification_runner_sidecar_sha256"] = binding.pop("runner_sidecar_sha256")
+    for row in binding["rows"]:
+        row["reference_copied_to_support"] = row.pop("reference_supplied")
+    path = tmp_path / "binding-v003.json"
+    path.write_text(json.dumps(binding), encoding="utf-8")
+
+    loaded, rows = _validate_qualified_binding(path)
+    assert loaded["schema_version"] == "rtl_generation_qualified_subset_binding_v0.3"
+    assert len(rows) == 16
+
+
 def _make_sixteen_task_fixture(tmp_path: Path) -> Path:
     original = json.loads((FIXTURE_ROOT / "generation_tasks.jsonl").read_text(encoding="utf-8"))
     rows = []
@@ -185,6 +201,30 @@ def test_packet_validation_rejects_order_and_extra_entries(tmp_path: Path) -> No
     assert "unexpected" in report["errors"][0]
 
 
+def test_packet_validation_allows_published_teacher_returns(tmp_path: Path) -> None:
+    run, binding_path = _make_packet_run(tmp_path)
+    response_dir = run / "teacher" / "responses"
+    for index in range(1, 17):
+        (response_dir / f"packet_{index:04d}_response.json").write_text(
+            '{"rows": []}\n', encoding="utf-8"
+        )
+    (run / "teacher" / "candidate_records.jsonl").write_text(
+        '{"schema_version":"rtl_teacher_candidate_record_v0.1"}\n',
+        encoding="utf-8",
+    )
+
+    report, code = validate_teacher_packet_set(
+        run,
+        binding_path=binding_path,
+        output_path=run / "reports" / "validation.json",
+    )
+
+    assert code == 0, report
+    assert report["ok"] is True
+    assert report["teacher_responses_present"] is True
+    assert report["candidate_generation_started"] is True
+
+
 def test_teacher_generation_binding_is_preserved_in_verification_plan() -> None:
     digest = "a" * 64
     binding = {
@@ -232,6 +272,10 @@ def test_teacher_generation_binding_is_preserved_in_verification_plan() -> None:
     v004_plan = dict(plan)
     v004_plan["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v004"}
     assert _validate_plan(v004_plan, "synthetic v004 plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v004"
+
+    v005_plan = dict(plan)
+    v005_plan["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v005"}
+    assert _validate_plan(v005_plan, "synthetic v005 plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v005"
 
     invalid = dict(plan)
     invalid["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v002"}

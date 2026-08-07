@@ -99,6 +99,10 @@ RECOVERY_PACKAGE_ID = "rtl_generation_smoke_v001_retry_01"
 RECOVERY_PARENT_PACKAGE_ID = "rtl_generation_smoke_v001"
 RECOVERY_REASON = "packaging_source_defect"
 QUALIFIED_SUBSET_BINDING_SCHEMA = "rtl_generation_qualified_subset_binding_v0.1"
+QUALIFIED_SUBSET_BINDING_SCHEMAS = {
+    QUALIFIED_SUBSET_BINDING_SCHEMA,
+    "rtl_generation_qualified_subset_binding_v0.3",
+}
 QUALIFIED_SUBSET_CORRECTION_VERSION = "assetfix_v003"
 QUALIFIED_SUBSET_REPORT_SCHEMA = "rtl_asset_qualification_report_v0.1"
 COMBINED_QUALIFICATION_BINDING_SCHEMA = "rtl_generation_combined_qualification_binding_v0.1"
@@ -987,7 +991,7 @@ def _validate_qualified_subset_provenance(
     }:
         errors.append("qualified-subset qualification report has the wrong schema")
         report = {}
-    if not isinstance(binding, dict) or binding.get("schema_version") != QUALIFIED_SUBSET_BINDING_SCHEMA:
+    if not isinstance(binding, dict) or binding.get("schema_version") not in QUALIFIED_SUBSET_BINDING_SCHEMAS:
         errors.append("qualified-subset binding has the wrong schema")
         binding = {}
     if not isinstance(base_split, (dict, type(None))):
@@ -1393,7 +1397,7 @@ def validate_generation_sft_package(
                         binding = _load_json(qualification_binding_path)
                         qualified_subset_mode = (
                             isinstance(binding, dict)
-                            and binding.get("schema_version") == QUALIFIED_SUBSET_BINDING_SCHEMA
+                            and binding.get("schema_version") in QUALIFIED_SUBSET_BINDING_SCHEMAS
                         )
                         if not qualified_subset_mode:
                             from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
@@ -1684,7 +1688,7 @@ def package_verified_rtl_generation_dataset(
             qualification_binding = _load_json(qualification_binding_path)
             qualified_subset_mode = (
                 isinstance(qualification_binding, dict)
-                and qualification_binding.get("schema_version") == QUALIFIED_SUBSET_BINDING_SCHEMA
+                and qualification_binding.get("schema_version") in QUALIFIED_SUBSET_BINDING_SCHEMAS
             )
             if require_smoke_provenance or not qualified_subset_mode:
                 from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
