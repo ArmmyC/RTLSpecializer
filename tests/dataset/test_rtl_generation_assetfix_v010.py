@@ -9,6 +9,9 @@ from scripts.dataset.author_rtl_generation_assetfix_v010 import (
     SOURCE_IDS,
 )
 from scripts.dataset.rtl_generation_batch_corrections import static_testbench_audit
+from scripts.dataset.rtl_generation_asset_qualification import (
+    _normalize_qualification_correction,
+)
 
 
 def test_v010_is_exactly_the_two_diagnosed_asset_tasks() -> None:
@@ -53,3 +56,36 @@ def test_v010_fixture_catalog_has_two_negative_mutations_per_task() -> None:
             "positive",
             *MUTATION_NAMES[source_id],
         ]
+
+
+def test_v010_compact_manifest_normalizes_without_mutating_input() -> None:
+    source_id = SOURCE_IDS[0]
+    original = {
+        "correction_version": "assetfix_v010",
+        "fixture_hashes": {
+            "no_dfr": "a" * 64,
+            "positive": "b" * 64,
+            "wrong_flow_levels": "c" * 64,
+        },
+        "original_prompt_sha256": "d" * 64,
+        "source_id": source_id,
+    }
+
+    normalized = _normalize_qualification_correction(original)
+
+    assert original == {
+        "correction_version": "assetfix_v010",
+        "fixture_hashes": {
+            "no_dfr": "a" * 64,
+            "positive": "b" * 64,
+            "wrong_flow_levels": "c" * 64,
+        },
+        "original_prompt_sha256": "d" * 64,
+        "source_id": source_id,
+    }
+    assert normalized["testbench_path"] == (
+        f"tasks/{source_id}/testbench.sv"
+    )
+    assert [
+        contract["name"] for contract in normalized["mutation_contracts"]
+    ] == ["public_spec_candidate", "no_dfr", "wrong_flow_levels"]

@@ -186,6 +186,66 @@ def _contained_path(root: Path, relative: str, *, label: str) -> Path:
     return path
 
 
+def _normalize_qualification_correction(row: dict[str, Any]) -> dict[str, Any]:
+    """Normalize compact assetfix_v010 rows for the qualification preparer.
+
+    The v010 static-authoring manifest intentionally stores fixture hashes as
+    a compact mapping.  The older qualification-preparation contract expects
+    explicit mutation contracts and a workspace-relative testbench path.  Do
+    this in memory so the immutable correction manifest remains byte-for-byte
+    unchanged.
+    """
+    if row.get("mutation_contracts") is not None:
+        return row
+    if row.get("correction_version") != "assetfix_v010":
+        return row
+
+    source_id = row.get("source_id")
+    fixture_hashes = row.get("fixture_hashes")
+    if not isinstance(source_id, str) or not isinstance(fixture_hashes, dict):
+        raise QualificationError(
+            f"assetfix_v010 row lacks fixture hashes: {source_id}"
+        )
+    fixture_names = list(fixture_hashes)
+    if "positive" not in fixture_names:
+        raise QualificationError(
+            f"assetfix_v010 row lacks positive fixture: {source_id}"
+        )
+    negative_names = sorted(name for name in fixture_names if name != "positive")
+    if not negative_names:
+        raise QualificationError(
+            f"assetfix_v010 row lacks negative fixtures: {source_id}"
+        )
+
+    normalized = dict(row)
+    normalized["testbench_path"] = f"tasks/{source_id}/testbench.sv"
+    normalized["public_specification_sha256"] = row.get(
+        "original_prompt_sha256"
+    )
+    normalized["mutation_contracts"] = [
+        {
+            "execution_status": "pending_isolated_qualification",
+            "expected_outcome": "accepted",
+            "kind": "positive",
+            "name": "public_spec_candidate",
+            "oracle_basis": "public_specification_only",
+            "schema_version": "rtl_correction_mutation_contract_v0.1",
+        },
+        *(
+            {
+                "execution_status": "pending_isolated_qualification",
+                "expected_outcome": "rejected",
+                "kind": "negative",
+                "name": name,
+                "oracle_basis": "public_specification_only",
+                "schema_version": "rtl_correction_mutation_contract_v0.1",
+            }
+            for name in negative_names
+        ),
+    ]
+    return normalized
+
+
 def _write_exclusive(path: Path, value: bytes, *, mode: int = 0o600) -> None:
     if path.exists() or path.is_symlink():
         raise QualificationError(f"refusing to replace existing output: {path}")
@@ -278,7 +338,10 @@ def _selection_and_manifest(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
     selection = _load_json(selection_path)
     ids = [line.strip() for line in ids_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    corrections = _load_jsonl(correction_manifest_path)
+    corrections = [
+        _normalize_qualification_correction(row)
+        for row in _load_jsonl(correction_manifest_path)
+    ]
     inventory = _load_jsonl(inventory_path)
     split = _load_json(split_path)
     if not ids or len(ids) != len(set(ids)):
