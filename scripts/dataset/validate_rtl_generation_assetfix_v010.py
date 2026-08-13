@@ -131,6 +131,7 @@ def validate(*, correction_root: Path, inventory_path: Path, selection_path: Pat
 
     return {
         "ok": True,
+        "errors": [],
         "correction_version": CORRECTION_VERSION,
         "source_ids": list(SOURCE_IDS),
         "selected_count": len(SOURCE_IDS),
