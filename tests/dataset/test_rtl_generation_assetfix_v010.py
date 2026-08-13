@@ -86,6 +86,15 @@ def test_v010_compact_manifest_normalizes_without_mutating_input() -> None:
     assert normalized["testbench_path"] == (
         f"tasks/{source_id}/testbench.sv"
     )
+    assert normalized["upstream_commit"] == (
+        "c498220d0a52248f8e3fdffe279075215bde2da6"
+    )
+    assert normalized["source_tree_sha256"] == (
+        "e88d556887c67467147757ae4bb772836ae0224e313581785e8c705fe56f304f"
+    )
+    assert normalized["frozen_split_sha256"] == (
+        "6675f0dc7369c0bff167d56d0e1e5f4ea50f3b94cf9a6d94eae0e6478321f608"
+    )
     assert [
         contract["name"] for contract in normalized["mutation_contracts"]
     ] == ["public_spec_candidate", "no_dfr", "wrong_flow_levels"]
