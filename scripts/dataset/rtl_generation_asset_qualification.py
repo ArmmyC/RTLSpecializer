@@ -222,6 +222,7 @@ def _normalize_qualification_correction(row: dict[str, Any]) -> dict[str, Any]:
     normalized["source_tree_sha256"] = SOURCE_TREE_SHA256
     normalized["frozen_split_sha256"] = BASE_SPLIT_SHA256
     normalized["testbench_path"] = f"tasks/{source_id}/testbench.sv"
+    normalized["verification_readiness"] = "pending_qualification"
     normalized["public_specification_sha256"] = row.get(
         "original_prompt_sha256"
     )

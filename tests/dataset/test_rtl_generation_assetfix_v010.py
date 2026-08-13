@@ -86,6 +86,9 @@ def test_v010_compact_manifest_normalizes_without_mutating_input() -> None:
     assert normalized["testbench_path"] == (
         f"tasks/{source_id}/testbench.sv"
     )
+    assert normalized["verification_readiness"] == (
+        "pending_qualification"
+    )
     assert normalized["upstream_commit"] == (
         "c498220d0a52248f8e3fdffe279075215bde2da6"
     )
