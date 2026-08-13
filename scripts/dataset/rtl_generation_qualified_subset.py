@@ -22,7 +22,13 @@ from scripts.dataset.rtl_generation_batch_selection import (
     SOURCE_COMMIT,
     SOURCE_TREE_SHA256,
 )
-from scripts.dataset.rtl_generation_preparation import export_generation_normalization_batches
+from scripts.dataset.rtl_generation_preparation import (
+    _sha256,
+    _task_id,
+    _text_bytes,
+    discover_source_rows,
+    export_generation_normalization_batches,
+)
 from scripts.dataset.rtl_generation_inventory import source_tree_sha256
 
 
@@ -140,6 +146,70 @@ def _assert_hash(path: Path, expected: str, label: str) -> None:
         raise QualifiedSubsetError(f"{label} hash mismatch")
 
 
+def _validate_source_input_alignment(
+    *,
+    source_input: Path,
+    source_root: Path,
+    inventory: dict[str, dict[str, Any]],
+    selected_ids: list[str],
+) -> None:
+    """Prove that the exported source view matches the pinned inventory."""
+
+    if source_input.is_symlink() or not source_input.is_dir():
+        raise QualifiedSubsetError("source input must be a regular directory")
+    try:
+        source_input.resolve().relative_to(source_root.resolve())
+    except ValueError as exc:
+        raise QualifiedSubsetError("source input must be beneath source root") from exc
+
+    source_rows, discovery_errors = discover_source_rows(source_input)
+    if discovery_errors:
+        raise QualifiedSubsetError(
+            "source input discovery failed: " + "; ".join(discovery_errors)
+        )
+    by_source_id = {row.source_id: row for row in source_rows}
+    if len(by_source_id) != len(source_rows):
+        raise QualifiedSubsetError("source input contains duplicate source IDs")
+
+    for source_id in selected_ids:
+        source_row = by_source_id.get(source_id)
+        inventory_row = inventory.get(source_id)
+        if source_row is None or inventory_row is None:
+            raise QualifiedSubsetError(
+                f"source input and inventory are missing selected source: {source_id}"
+            )
+        if source_row.source_dataset != inventory_row.get("source_dataset"):
+            raise QualifiedSubsetError(f"source dataset mismatch: {source_id}")
+        source_commit = inventory_row.get("source_commit")
+        if not isinstance(source_commit, str) or not source_commit:
+            raise QualifiedSubsetError(f"inventory source commit is missing: {source_id}")
+        source_row.source_commit = source_commit
+        source_row.provenance["source_commit"] = source_commit
+        if _task_id(source_row) != inventory_row.get("task_id"):
+            raise QualifiedSubsetError(f"source task identity mismatch: {source_id}")
+        for label, value, expected in (
+            (
+                "prompt",
+                _sha256(_text_bytes(source_row.specification)),
+                inventory_row.get("source_prompt_sha256"),
+            ),
+            (
+                "reference RTL",
+                _sha256(_text_bytes(source_row.reference_rtl)),
+                inventory_row.get("reference_rtl_sha256"),
+            ),
+            (
+                "original testbench",
+                _sha256(_text_bytes(source_row.testbench)),
+                inventory_row.get("testbench_sha256"),
+            ),
+        ):
+            if value != expected:
+                raise QualifiedSubsetError(
+                    f"source input {label} hash mismatch: {source_id}"
+                )
+
+
 def _require_sha256(value: Any, label: str) -> str:
     if not isinstance(value, str) or len(value) != 64:
         raise QualifiedSubsetError(f"{label} must be a SHA-256 string")
@@ -148,6 +218,53 @@ def _require_sha256(value: Any, label: str) -> str:
     except ValueError as exc:
         raise QualifiedSubsetError(f"{label} must be a SHA-256 string") from exc
     return value
+
+
+def _normalize_qualification_output_hashes(value: Any) -> dict[str, Any]:
+    """Accept both qualification-output hash field generations.
+
+    The qualification recorder's current schema uses explicit artifact names,
+    while qualified-subset preparation historically consumed two shorter
+    aliases.  Normalize those names only after proving that every supplied
+    alias agrees, so downstream binding code can keep one canonical contract.
+    """
+
+    if not isinstance(value, dict):
+        raise QualifiedSubsetError("qualification output hashes must be an object")
+    normalized = dict(value)
+    aliases = {
+        "evidence_sha256": (
+            "evidence_sha256",
+            "raw_candidate_evidence_sha256",
+            "runner_evidence_sha256",
+        ),
+        "qualification_validation_report_sha256": (
+            "qualification_validation_report_sha256",
+            "qualification_report_sha256",
+        ),
+        "qualification_evidence_sha256": ("qualification_evidence_sha256",),
+        "runner_sidecar_sha256": ("runner_sidecar_sha256",),
+        "qualified_task_ids_sha256": ("qualified_task_ids_sha256",),
+        "failed_or_inconclusive_task_ids_sha256": (
+            "failed_or_inconclusive_task_ids_sha256",
+        ),
+    }
+    for canonical, names in aliases.items():
+        supplied = {
+            name: _require_sha256(value[name], f"qualification output hash: {name}")
+            for name in names
+            if value.get(name) is not None
+        }
+        if not supplied:
+            raise QualifiedSubsetError(
+                f"qualification output hash is missing: {canonical}"
+            )
+        if len(set(supplied.values())) != 1:
+            raise QualifiedSubsetError(
+                f"qualification output hash aliases disagree: {canonical}"
+            )
+        normalized[canonical] = next(iter(supplied.values()))
+    return normalized
 
 
 def _qualification_rows(
@@ -175,12 +292,24 @@ def _qualification_rows(
         raise QualifiedSubsetError("qualification report contains duplicate identities")
     if [row.get("source_id") for row in report_rows] != selected_ids:
         raise QualifiedSubsetError("qualification report does not preserve the pinned selection order")
-    expected_qualified = [row["task_id"] for row in (by_source[source_id] for source_id in selected_ids) if row.get("qualification_passed") is True]
-    expected_failed = [row["task_id"] for row in (by_source[source_id] for source_id in selected_ids) if row.get("qualification_passed") is not True]
-    if qualified_task_ids != expected_qualified:
-        raise QualifiedSubsetError("qualified task list is not the filtered pinned order")
-    if failed_task_ids != expected_failed:
-        raise QualifiedSubsetError("failed task list is not the filtered pinned order")
+    ordered_rows = [by_source[source_id] for source_id in selected_ids]
+    expected_task_ids = (
+        [row["task_id"] for row in ordered_rows if row.get("qualification_passed") is True],
+        [row["task_id"] for row in ordered_rows if row.get("qualification_passed") is not True],
+    )
+    expected_source_ids = (
+        [row["source_id"] for row in ordered_rows if row.get("qualification_passed") is True],
+        [row["source_id"] for row in ordered_rows if row.get("qualification_passed") is not True],
+    )
+    supplied_ids = (qualified_task_ids, failed_task_ids)
+    if supplied_ids == expected_task_ids:
+        identity_key = "task_id"
+    elif supplied_ids == expected_source_ids:
+        identity_key = "source_id"
+    else:
+        raise QualifiedSubsetError(
+            "qualified task list is not the filtered pinned order"
+        )
     if not qualified_task_ids:
         raise QualifiedSubsetError("qualified task list must contain at least one task")
     if len(qualified_task_ids) != len(set(qualified_task_ids)) or len(failed_task_ids) != len(set(failed_task_ids)):
@@ -188,12 +317,16 @@ def _qualification_rows(
     if set(qualified_task_ids) & set(failed_task_ids):
         raise QualifiedSubsetError("qualified and failed task lists overlap")
     qualified_rows = []
-    for task_id in qualified_task_ids:
-        row = by_task[task_id]
+    for identity in qualified_task_ids:
+        row = by_task[identity] if identity_key == "task_id" else by_source[identity]
         if row.get("qualification_status") != "qualified":
-            raise QualifiedSubsetError(f"qualified task has non-qualified status: {task_id}")
+            raise QualifiedSubsetError(f"qualified task has non-qualified status: {identity}")
         qualified_rows.append(row)
-    return qualified_rows, [by_task[task_id] for task_id in failed_task_ids]
+    failed_rows = [
+        by_task[identity] if identity_key == "task_id" else by_source[identity]
+        for identity in failed_task_ids
+    ]
+    return qualified_rows, failed_rows
 
 
 def _validate_inputs(
@@ -215,17 +348,9 @@ def _validate_inputs(
     selection_ids_hash = sha256_file(selection_ids_path)
     qualified_task_ids = _read_ids(qualified_task_ids_path, "qualified task IDs")
     failed_task_ids = _read_optional_ids(failed_task_ids_path, "failed task IDs")
-    hashes = _load_json(qualification_output_hashes_path)
-    if not isinstance(hashes, dict):
-        raise QualifiedSubsetError("qualification output hashes must be an object")
-    for key in (
-        "evidence_sha256",
-        "runner_sidecar_sha256",
-        "qualified_task_ids_sha256",
-        "failed_or_inconclusive_task_ids_sha256",
-        "qualification_validation_report_sha256",
-    ):
-        _require_sha256(hashes.get(key), f"qualification output hash: {key}")
+    hashes = _normalize_qualification_output_hashes(
+        _load_json(qualification_output_hashes_path)
+    )
     qualified_ids_hash = sha256_file(qualified_task_ids_path)
     failed_ids_hash = sha256_file(failed_task_ids_path)
     report_hash = sha256_file(qualification_report_path)
@@ -248,6 +373,14 @@ def _validate_inputs(
     if actual_source_tree != SOURCE_TREE_SHA256:
         raise QualifiedSubsetError("source tree hash mismatch")
     report = _load_json(qualification_report_path)
+    if report.get("qualification_evidence_sha256") != hashes["qualification_evidence_sha256"]:
+        raise QualifiedSubsetError("qualification evidence hash is not bound")
+    if report.get("qualification_sidecar_sha256") != hashes["runner_sidecar_sha256"]:
+        raise QualifiedSubsetError("qualification runner sidecar hash is not bound")
+    if report.get("correction_manifest_sha256") != correction_hash:
+        raise QualifiedSubsetError("qualification report correction manifest hash mismatch")
+    if hashes.get("asset_manifest_sha256") not in {None, correction_hash}:
+        raise QualifiedSubsetError("qualification output asset manifest hash mismatch")
     qualified_rows, failed_rows = _qualification_rows(
         qualification_report=report,
         selected_ids=selected_ids,
@@ -337,6 +470,12 @@ def prepare_qualified_normalization_run(
             inventory_path=inventory_path,
             split_path=split_path,
             source_root=source_root,
+        )
+        _validate_source_input_alignment(
+            source_input=source_input,
+            source_root=source_root,
+            inventory=values["inventory"],
+            selected_ids=values["selected_ids"],
         )
         reports_root = run_root / "reports"
         qualified_source_ids_path = reports_root / "qualified_source_ids.txt"

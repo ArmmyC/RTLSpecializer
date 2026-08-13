@@ -34,6 +34,9 @@ from scripts.dataset.rtl_generation_batch_selection import (
     SOURCE_TREE_SHA256,
     sha256_file,
 )
+from scripts.dataset.rtl_generation_batch_corrections import (
+    is_qualification_retry_selection,
+)
 
 
 QUALIFICATION_CASE_SCHEMA_VERSION = "rtl_asset_qualification_case_v0.1"
@@ -305,7 +308,11 @@ def _selection_and_manifest(
     correction_version = selection.get("correction_version")
     if not isinstance(correction_version, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", correction_version):
         raise QualificationError("selection correction version is invalid")
-    if len(ids) != len(BATCH20_SOURCE_IDS) and not 20 <= len(ids) <= 40:
+    if (
+        len(ids) != len(BATCH20_SOURCE_IDS)
+        and not 20 <= len(ids) <= 40
+        and not is_qualification_retry_selection(selection)
+    ):
         raise QualificationError("selection is outside the bounded 20-40 task range")
     if sha256_file(inventory_path) != BASE_INVENTORY_SHA256:
         raise QualificationError("inventory hash mismatch")
@@ -378,7 +385,12 @@ def _authoring_rows(
     correction_by_id = {row.get("source_id"): row for row in corrections}
     for row in rows:
         required = {"schema_version", "source_id", "task_id", "top_module", "positive_rtl_path", "negative_mutations", "reference_used", "support_files"}
-        if set(row) != required:
+        optional_metadata = {
+            "lineage",
+            "prior_assetfix_versions",
+            "selection_role",
+        }
+        if not required.issubset(row) or set(row) - required - optional_metadata:
             raise QualificationError(f"authoring row has an invalid field set: {row.get('source_id')}")
         source_id = row["source_id"]
         source = inventory_by_id[source_id]
@@ -434,6 +446,9 @@ def prepare_qualification_input(
     authors = _authoring_rows(authoring_manifest_path, corrections, inventory, source_ids)
     author_by_id = {row["source_id"]: row for row in authors}
     output_root.mkdir(mode=0o700, parents=True)
+    staged_output = output_root / "staged"
+    staged_output.mkdir(mode=0o700)
+    os.chmod(staged_output, 0o700)
     input_root = output_root / "input"
     input_root.mkdir(mode=0o700)
     workspace = input_root / "workspace"

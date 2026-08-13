@@ -160,6 +160,17 @@ def _qualified_binding_hash(binding: dict[str, Any], label: str, *keys: str) -> 
     raise TeacherPreparationError(f"{label} is missing")
 
 
+def _qualified_correction_manifest_hash(binding: dict[str, Any]) -> str:
+    """Select the qualified manifest hash, falling back to legacy bindings."""
+
+    return _qualified_binding_hash(
+        binding,
+        "qualified subset binding correction manifest hash",
+        "qualified_correction_manifest_sha256",
+        "correction_manifest_sha256",
+    )
+
+
 def _text_list_sha256(values: list[str]) -> str:
     return hashlib.sha256(("\n".join(values) + "\n").encode("utf-8")).hexdigest()
 
@@ -279,10 +290,6 @@ def _validate_qualified_binding(binding_path: Path) -> tuple[dict[str, Any], lis
         raise TeacherPreparationError("qualified subset binding task count mismatch")
     for label, fields in (
         ("qualified subset binding selection IDs hash", ("selection_ids_sha256",)),
-        (
-            "qualified subset binding correction manifest hash",
-            ("correction_manifest_sha256", "qualified_correction_manifest_sha256"),
-        ),
         ("qualified subset binding qualification report hash", ("qualification_report_sha256",)),
         ("qualified subset binding qualification evidence hash", ("qualification_evidence_sha256",)),
         (
@@ -297,6 +304,7 @@ def _validate_qualified_binding(binding_path: Path) -> tuple[dict[str, Any], lis
         ("qualified subset binding failed task IDs hash", ("failed_task_ids_sha256",)),
     ):
         _qualified_binding_hash(binding, label, *fields)
+    _qualified_correction_manifest_hash(binding)
     return binding, rows
 
 
@@ -395,12 +403,7 @@ def create_teacher_generation_binding(
             "runner_sidecar_sha256",
             "qualification_runner_sidecar_sha256",
         )
-        correction_manifest_hash = _qualified_binding_hash(
-            qualified_binding,
-            "qualified subset binding correction manifest hash",
-            "correction_manifest_sha256",
-            "qualified_correction_manifest_sha256",
-        )
+        correction_manifest_hash = _qualified_correction_manifest_hash(qualified_binding)
         for identity in identities:
             asset = asset_by_task.get(identity["task_id"])
             correction = correction_by_source[identity["source_id"]]

@@ -40,7 +40,16 @@ CORRECTION_SELECTION_SCHEMA_VERSION = "rtl_verification_asset_correction_selecti
 CORRECTION_VALIDATION_SCHEMA_VERSION = "rtl_verification_asset_correction_validation_v0.1"
 V003_MANIFEST_SCHEMA_VERSION = "rtl_verification_asset_correction_v0.2"
 V003_ROW_SCHEMA_VERSION = "rtl_verification_asset_correction_row_v0.2"
-EXTENDED_ROW_CORRECTION_VERSIONS = frozenset({"assetfix_v003", "assetfix_v005"})
+EXTENDED_ROW_CORRECTION_VERSIONS = frozenset({
+    "assetfix_v003",
+    "assetfix_v005",
+    "assetfix_v006",
+    "assetfix_v006_retry_02",
+    "assetfix_v007",
+    "assetfix_v008",
+    "assetfix_v008_retry_01",
+    "assetfix_v009",
+})
 
 EXTENDED_ROW_FIELDS = {
     "schema_version", "source_dataset", "source_id", "task_id", "split",

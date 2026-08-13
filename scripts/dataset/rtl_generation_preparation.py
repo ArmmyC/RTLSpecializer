@@ -599,7 +599,7 @@ def _reset_synchrony_hint(
         if isinstance(name, str) and name
     )
     reset_pattern = r"(?:" + "|".join(reset_terms) + r")"
-    mode_pattern = r"(?:asynchronous|async|synchronous|sync)"
+    mode_pattern = r"(?:asynchronously|asynchronous|async|synchronously|synchronous|sync)"
     separator = r"[^,.;!?]{0,80}"
     modes: set[bool] = set()
 
@@ -608,13 +608,13 @@ def _reset_synchrony_hint(
         specification,
         re.IGNORECASE,
     ):
-        modes.add(match.group("mode").lower() in {"synchronous", "sync"})
+        modes.add(match.group("mode").lower() in {"synchronously", "synchronous", "sync"})
     for match in re.finditer(
         rf"\b(?:{reset_pattern})\b{separator}\b(?P<mode>{mode_pattern})\b",
         specification,
         re.IGNORECASE,
     ):
-        modes.add(match.group("mode").lower() in {"synchronous", "sync"})
+        modes.add(match.group("mode").lower() in {"synchronously", "synchronous", "sync"})
 
     if len(modes) == 1:
         return modes.pop()

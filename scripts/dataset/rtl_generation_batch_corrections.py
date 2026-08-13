@@ -38,6 +38,14 @@ _MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", re.IGNORECASE
 _TOP_INSTANCE_RE = re.compile(r"\bTopModule\s+[A-Za-z_][A-Za-z0-9_$]*\s*\(", re.IGNORECASE)
 _RESULT_RE = re.compile(r"(?i)Mismatches\s*:\s*%[0-9]*d\b")
 
+QUALIFICATION_RETRY_REQUIRED_FIELDS = (
+    "parent_run_id",
+    "parent_qualification_report_sha256",
+    "parent_qualification_evidence_sha256",
+    "parent_qualified_subset_binding_sha256",
+    "retry_reason",
+)
+
 PRIVATE_MARKERS = (
     "/home/",
     "/tmp/",
@@ -67,6 +75,31 @@ FORBIDDEN_DEPENDENCY_MARKERS = (
 )
 
 MUTATION_NAMES = {
+    "Prob007_wire": ("constant_zero", "inverted_wire"),
+    "Prob012_xnorgate": ("constant_zero", "xor_instead_of_xnor"),
+    "Prob019_m2014_q4f": ("constant_zero", "missing_input_bubble"),
+    "Prob052_gates100": ("constant_zero", "wrong_reductions"),
+    "Prob059_wire4": ("constant_zero", "swapped_wire"),
+    "Prob065_7420": ("constant_zero", "nand_as_and"),
+    "Prob081_7458": ("constant_zero", "wrong_grouping"),
+    "Prob083_mt2015_q4b": ("constant_zero", "xor_instead_of_xnor"),
+    "Prob090_circuit1": ("constant_zero", "or_instead_of_and"),
+    "Prob094_gatesv": ("constant_zero", "wrong_neighbor_direction"),
+    "Prob098_circuit7": ("constant_zero", "hold_state"),
+    "Prob101_circuit4": ("constant_zero", "wrong_signal"),
+    "Prob102_circuit3": ("constant_zero", "missing_d_term"),
+    "Prob103_circuit2": ("constant_zero", "parity_instead_of_even"),
+    "Prob108_rule90": ("constant_zero", "wrong_neighbor_xor"),
+    "Prob116_m2014_q3": ("constant_zero", "defined_minterm_flip"),
+    "Prob117_circuit9": ("constant_zero", "increments_when_held"),
+    "Prob131_mt2015_q4": ("constant_zero", "wrong_composition"),
+    "Prob144_conwaylife": ("constant_zero", "wrong_neighbor_rule"),
+    "Prob145_circuit8": ("constant_zero", "wrong_edge_register"),
+    "Prob124_rule110": ("constant_zero", "rule90_instead_of_rule110"),
+    "Prob099_m2014_q6c": ("constant_zero", "wrong_y3"),
+    "Prob125_kmap3": ("constant_zero", "defined_minterm_flip"),
+    "Prob126_circuit6": ("constant_zero", "wrong_case_value"),
+    "Prob130_circuit5": ("constant_zero", "wrong_c_selector"),
     "Prob004_vector2": ("constant_zero", "wrong_byte_order"),
     "Prob006_vectorr": ("constant_zero", "wrong_bit_order"),
     "Prob010_mt2015_q4a": ("constant_zero", "wrong_boolean_expression"),
@@ -126,18 +159,46 @@ MUTATION_NAMES = {
     "Prob091_2012_q2b": ("wrong_y3_enable", "constant_zero"),
     "Prob119_fsm3": ("wrong_transition", "constant_output"),
     "Prob120_fsm3s": ("wrong_transition", "missing_reset"),
+    "Prob127_lemmings1": ("constant_zero", "ignore_bump"),
+    "Prob135_m2014_q6b": ("constant_zero", "wrong_transition"),
+    "Prob136_m2014_q6": ("constant_zero", "wrong_transition"),
     "Prob121_2014_q3bfsm": ("wrong_x1_transition", "constant_zero"),
+    "Prob138_2012_q2fsm": ("constant_zero", "wrong_transition"),
+    "Prob139_2013_q2bfsm": ("missing_reset", "wrong_sequence_timing"),
     "Prob128_fsm_ps2": ("done_after_two", "accept_without_header"),
     "Prob129_ece241_2013_q8": ("non_overlapping", "wrong_output_timing"),
     "Prob134_2014_q3c": ("wrong_x1_transition", "wrong_output"),
     "Prob137_fsm_serial": ("seven_data_bits", "accept_zero_stop"),
+    "Prob142_lemmings2": ("constant_zero", "bump_while_falling"),
+    "Prob146_fsm_serialdata": ("constant_zero", "wrong_data_bit_order"),
+    "Prob148_2013_q2afsm": ("constant_zero", "wrong_priority"),
     "Prob140_fsm_hdlc": ("flag_at_five", "no_error_after_seven"),
     "Prob143_fsm_onehot": ("wrong_transition", "outputs_zero"),
     "Prob149_ece241_2013_q4": ("no_dfr", "wrong_flow_levels"),
     "Prob150_review2015_fsmonehot": ("wrong_next_state", "outputs_zero"),
+    "Prob152_lemmings3": ("constant_zero", "ignore_dig"),
+    "Prob154_fsm_ps2data": ("constant_zero", "done_too_early"),
+    "Prob155_lemmings4": ("constant_zero", "splatter_threshold"),
     "Prob151_review2015_fsm": ("shift_three_cycles", "ignore_ack"),
     "Prob156_review2015_fancytimer": ("off_by_one_count", "no_reset"),
 }
+
+
+def is_qualification_retry_selection(selection: dict[str, Any]) -> bool:
+    """Return whether a selection explicitly authorizes a bounded retry.
+
+    Normal correction batches remain constrained to the 20--40 task range.
+    A retry may contain only the unresolved source IDs, but only when its
+    parent run, qualification artifacts, and public retry reason are bound in
+    the selection record.
+    """
+
+    if selection.get("selection_kind") != "qualification_retry":
+        return False
+    return all(
+        isinstance(selection.get(field), str) and selection[field]
+        for field in QUALIFICATION_RETRY_REQUIRED_FIELDS
+    )
 
 
 def _load_json(path: Path) -> Any:
@@ -311,7 +372,7 @@ def create_batch_manifest(
     pinned_source_ids = expected_source_ids if expected_source_ids is not None else list(BATCH20_SOURCE_IDS)
     if ids != pinned_source_ids:
         errors.append("selection IDs do not match the expected correction order")
-    if len(ids) < 20 or len(ids) > 40:
+    if (len(ids) < 20 or len(ids) > 40) and not is_qualification_retry_selection(selection):
         errors.append("selection is outside the bounded 20-40 task range")
     if selection.get("selected_count") != len(ids):
         errors.append("selection report count does not match the selected task count")
@@ -404,8 +465,10 @@ __all__ = [
     "BATCH20_SOURCE_IDS",
     "MANIFEST_SCHEMA_VERSION",
     "MUTATION_NAMES",
+    "QUALIFICATION_RETRY_REQUIRED_FIELDS",
     "ROW_SCHEMA_VERSION",
     "create_batch_manifest",
+    "is_qualification_retry_selection",
     "sha256_file",
     "static_testbench_audit",
 ]

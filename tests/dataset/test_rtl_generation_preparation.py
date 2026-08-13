@@ -6,6 +6,8 @@ import re
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from scripts.dataset.rtl_generation_preparation import (
     SourceRow,
     _clock_reset_hints,
@@ -72,7 +74,14 @@ endmodule
     assert rows == [row]
 
 
-def test_v005_qualified_correction_manifest_is_accepted_by_generation_overlay_loader(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "correction_version",
+    ["assetfix_v005", "assetfix_v006", "assetfix_v007", "assetfix_v009"],
+)
+def test_extended_correction_manifest_is_accepted_by_generation_overlay_loader(
+    tmp_path: Path,
+    correction_version: str,
+) -> None:
     correction_root = tmp_path / "correction"
     testbench = correction_root / "tasks" / "Prob002_m2014_q4i" / "testbench.sv"
     testbench.parent.mkdir(parents=True)
@@ -101,7 +110,7 @@ endmodule
         "original_reference_rtl_sha256": "c" * 64,
         "original_testbench_sha256": "d" * 64,
         "corrected_testbench_sha256": digest,
-        "correction_version": "assetfix_v005",
+        "correction_version": correction_version,
         "correction_reason": "public-specification correction",
         "authoring_method": "trusted_manual_public_spec",
         "reference_modified": False,
@@ -122,7 +131,7 @@ endmodule
     rows, errors = load_correction_manifest(
         manifest,
         correction_root,
-        expected_correction_version="assetfix_v005",
+        expected_correction_version=correction_version,
     )
 
     assert errors == []
@@ -318,6 +327,25 @@ def test_clock_reset_hints_ignore_synchronous_nonreset_clause_for_async_reset() 
 
     Implement a shift register with asynchronous positive edge triggered
     areset, synchronous active high signals load, and enable.
+    """
+    ports = _interface_hints(specification)
+
+    _, resets = _clock_reset_hints(specification, ports)
+
+    assert resets == [{
+        "signal": "areset",
+        "active_level": "high",
+        "synchronous": False,
+    }]
+
+
+def test_clock_reset_hints_accept_adverbial_asynchronous_reset() -> None:
+    specification = """
+    - input clk
+    - input areset
+    - output q
+
+    It should asynchronously reset when reset is high.
     """
     ports = _interface_hints(specification)
 

@@ -5,8 +5,11 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from scripts.dataset.rtl_generation_asset_corrections import (
     CORRECTION_ROW_SCHEMA_VERSION,
+    V003_ROW_SCHEMA_VERSION,
     _mutation_contract,
     _structural_errors,
     overlay_source_rows,
@@ -222,6 +225,87 @@ endmodule
     assert overlay[0].testbench == corrected
     assert overlay[0].specification == row.specification
     assert overlay[0].reference_rtl == row.reference_rtl
+
+
+@pytest.mark.parametrize(
+    "correction_version",
+    ["assetfix_v006_retry_02", "assetfix_v008", "assetfix_v008_retry_01"],
+)
+def test_overlay_accepts_extended_manifest_versions(
+    tmp_path: Path,
+    correction_version: str,
+) -> None:
+    source = make_checkout(tmp_path, rows=1)
+    from scripts.dataset.rtl_generation_preparation import discover_source_rows, _sha256, _text_bytes, _task_id
+
+    rows, errors = discover_source_rows(source)
+    assert errors == []
+    row = rows[0]
+    row.source_commit = COMMIT
+    row.provenance["source_commit"] = COMMIT
+    corrected = """module tb;
+wire zero;
+TopModule dut (.zero(zero));
+initial begin
+  $display(\"Mismatches: %0d\", 0);
+  $finish;
+end
+endmodule
+"""
+    root = tmp_path / "correction"
+    path = root / "tasks" / row.source_id / "testbench.sv"
+    path.parent.mkdir(parents=True)
+    path.write_text(corrected, encoding="utf-8")
+    manifest = root / "manifest.jsonl"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": V003_ROW_SCHEMA_VERSION,
+                "source_dataset": row.source_dataset,
+                "source_id": row.source_id,
+                "task_id": _task_id(row),
+                "split": "train",
+                "design_family": row.design_family,
+                "top_module": "TopModule",
+                "upstream_commit": COMMIT,
+                "original_prompt_sha256": _sha256(_text_bytes(row.specification)),
+                "original_reference_rtl_sha256": _sha256(_text_bytes(row.reference_rtl)),
+                "original_testbench_sha256": _sha256(_text_bytes(row.testbench)),
+                "corrected_testbench_sha256": _sha256(corrected.encode("utf-8")),
+                "correction_version": correction_version,
+                "correction_reason": "retry compatibility test",
+                "authoring_method": "trusted_manual_public_spec",
+                "reference_modified": False,
+                "reference_copied_to_support": False,
+                "testbench_path": f"tasks/{row.source_id}/testbench.sv",
+                "support_files": [],
+                "dependency_closure": "passed",
+                "verification_readiness": "executable_ready",
+                "qualification_status": "qualified",
+                "mutation_contracts": [],
+                "static_audit": {},
+                "frozen_split_sha256": "a" * 64,
+                "source_tree_sha256": "b" * 64,
+                "public_specification_sha256": "c" * 64,
+                "selection_ids_sha256": "d" * 64,
+                "selection_report_sha256": "e" * 64,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    overlay, overlay_errors, correction_rows = overlay_source_rows(
+        rows,
+        manifest,
+        root,
+        expected_correction_version=correction_version,
+    )
+
+    assert overlay_errors == []
+    assert set(correction_rows) == {row.source_id}
+    assert overlay[0].testbench == corrected
 
 
 def test_export_overlay_keeps_correction_bytes_private(tmp_path: Path) -> None:

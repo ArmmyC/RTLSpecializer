@@ -38,12 +38,17 @@ TESTBENCH_TOP = "tb"
 SIMULATION_CONTRACT = "mismatch_count_v1"
 REQUESTED_CHECKS = {"compile": True, "simulation": True, "lint": False, "synthesis": False}
 # Teacher-generation handoff bindings are versioned with their private asset
-# correction overlay.  Keep rejecting older correction contracts while
-# allowing the active v0.5 run to reach its handoff gate.
+# correction overlay. Keep rejecting older correction contracts while allowing
+# each explicitly supported active overlay to reach its handoff gate.
 TEACHER_GENERATION_CORRECTION_VERSIONS = frozenset({
     "assetfix_v003",
     "assetfix_v004",
     "assetfix_v005",
+    "assetfix_v006",
+    "assetfix_v007",
+    "assetfix_v008",
+    "assetfix_v008_retry_01",
+    "assetfix_v009",
 })
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_RTL_BYTES = 2 * 1024 * 1024

@@ -146,7 +146,35 @@ def test_preparation_creates_exactly_sixty_cases_and_runner_input(tmp_path: Path
     assert len(manifest) == 60
     assert len({(row["task_id"], row["attempt"]) for row in manifest}) == 60
     assert not (output / "input/run_instructions.md").exists()
+    assert (output / "staged").is_dir()
+    assert (output / "staged").stat().st_mode & 0o777 == 0o700
+    assert not list((output / "staged").iterdir())
     assert not list(output.rglob("reference.sv"))
+
+
+def test_preparation_accepts_bounded_lineage_metadata_on_authoring_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    values = _fixture(tmp_path, monkeypatch)
+    source_ids, inventory, split, ids, selection, correction_manifest, correction_root, author_manifest, author_root = values
+    rows = qualification._load_jsonl(author_manifest)
+    rows[0]["lineage"] = "qualification_retry_overlay"
+    rows[0]["prior_assetfix_versions"] = ["assetfix_v005"]
+    rows[0]["selection_role"] = "qualification_retry_after_prior_failure"
+    _write_jsonl(author_manifest, rows)
+
+    output = tmp_path / "qualification"
+    report = qualification.prepare_qualification_input(
+        selection_path=selection,
+        ids_path=ids,
+        correction_manifest_path=correction_manifest,
+        correction_root=correction_root,
+        inventory_path=inventory,
+        split_path=split,
+        authoring_manifest_path=author_manifest,
+        authoring_root=author_root,
+        output_root=output,
+        expected_correction_manifest_sha256=_sha(correction_manifest),
+    )
+    assert report["case_count"] == 60
 
 
 def _synthetic_evidence(case_rows, qualification_root: Path):
@@ -239,7 +267,7 @@ def _preflight_authorization(
 ) -> dict:
     if create_staged:
         staged = output / "staged"
-        staged.mkdir(mode=0o700)
+        staged.mkdir(mode=0o700, exist_ok=True)
         staged.chmod(0o700)
     input_root = output / "input"
     return {
@@ -311,6 +339,8 @@ def _prepared_preflight_fixture(
         output_root=output,
         expected_correction_manifest_sha256=_sha(correction_manifest),
     )
+    if not create_staged:
+        (output / "staged").rmdir()
     reports = output / "reports"
     reports.mkdir(mode=0o700)
     reports.chmod(0o700)

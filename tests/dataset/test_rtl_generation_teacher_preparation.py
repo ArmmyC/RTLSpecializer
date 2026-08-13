@@ -14,6 +14,7 @@ from scripts.dataset.rtl_generation_teacher_preparation import (
     FROZEN_SPLIT_SHA256,
     SOURCE_COMMIT,
     SOURCE_TREE_SHA256,
+    _qualified_correction_manifest_hash,
     _text_list_sha256,
     _validate_qualified_binding,
     packet_set_sha256,
@@ -97,6 +98,20 @@ def test_qualified_binding_accepts_v003_reference_privacy_field(tmp_path: Path) 
     loaded, rows = _validate_qualified_binding(path)
     assert loaded["schema_version"] == "rtl_generation_qualified_subset_binding_v0.3"
     assert len(rows) == 16
+
+
+def test_qualified_correction_manifest_hash_prefers_qualified_subset() -> None:
+    binding = _qualified_binding_fixture()
+    qualified_hash = "a" * 64
+    binding["qualified_correction_manifest_sha256"] = qualified_hash
+
+    assert _qualified_correction_manifest_hash(binding) == qualified_hash
+
+
+def test_qualified_correction_manifest_hash_accepts_legacy_binding() -> None:
+    binding = _qualified_binding_fixture()
+
+    assert _qualified_correction_manifest_hash(binding) == binding["correction_manifest_sha256"]
 
 
 def _make_sixteen_task_fixture(tmp_path: Path) -> Path:
@@ -276,6 +291,26 @@ def test_teacher_generation_binding_is_preserved_in_verification_plan() -> None:
     v005_plan = dict(plan)
     v005_plan["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v005"}
     assert _validate_plan(v005_plan, "synthetic v005 plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v005"
+
+    v006_plan = dict(plan)
+    v006_plan["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v006"}
+    assert _validate_plan(v006_plan, "synthetic v006 plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v006"
+
+    v007_plan = dict(plan)
+    v007_plan["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v007"}
+    assert _validate_plan(v007_plan, "synthetic v007 plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v007"
+
+    v008_plan = dict(plan)
+    v008_plan["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v008"}
+    assert _validate_plan(v008_plan, "synthetic v008 plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v008"
+
+    v008_retry_plan = dict(plan)
+    v008_retry_plan["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v008_retry_01"}
+    assert _validate_plan(v008_retry_plan, "synthetic v008 retry plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v008_retry_01"
+
+    v009_plan = dict(plan)
+    v009_plan["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v009"}
+    assert _validate_plan(v009_plan, "synthetic v009 plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v009"
 
     invalid = dict(plan)
     invalid["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v002"}
