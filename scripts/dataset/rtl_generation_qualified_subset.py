@@ -341,6 +341,12 @@ def _validate_inputs(
     inventory_path: Path,
     split_path: Path,
     source_root: Path,
+    expected_source_commit: str = SOURCE_COMMIT,
+    expected_source_tree_sha256: str = SOURCE_TREE_SHA256,
+    expected_inventory_sha256: str = BASE_INVENTORY_SHA256,
+    expected_split_sha256: str = BASE_SPLIT_SHA256,
+    expected_correction_version: str | None = None,
+    source_correction_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
     selected_ids = _read_ids(selection_ids_path, "selection IDs")
     if not selected_ids:
@@ -363,23 +369,26 @@ def _validate_inputs(
         raise QualifiedSubsetError("qualification report hash is not bound")
     if hashes.get("selection_ids_sha256") not in {None, selection_ids_hash}:
         raise QualifiedSubsetError("selection ID hash is not bound")
-    if sha256_file(inventory_path) != BASE_INVENTORY_SHA256:
+    if sha256_file(inventory_path) != expected_inventory_sha256:
         raise QualifiedSubsetError("inventory hash mismatch")
-    if sha256_file(split_path) != BASE_SPLIT_SHA256:
+    if sha256_file(split_path) != expected_split_sha256:
         raise QualifiedSubsetError("split hash mismatch")
     actual_source_tree, symlink_count, tree_errors = source_tree_sha256(source_root)
     if tree_errors or symlink_count:
         raise QualifiedSubsetError("source tree contains invalid entries")
-    if actual_source_tree != SOURCE_TREE_SHA256:
+    if actual_source_tree != expected_source_tree_sha256:
         raise QualifiedSubsetError("source tree hash mismatch")
     report = _load_json(qualification_report_path)
     if report.get("qualification_evidence_sha256") != hashes["qualification_evidence_sha256"]:
         raise QualifiedSubsetError("qualification evidence hash is not bound")
     if report.get("qualification_sidecar_sha256") != hashes["runner_sidecar_sha256"]:
         raise QualifiedSubsetError("qualification runner sidecar hash is not bound")
-    if report.get("correction_manifest_sha256") != correction_hash:
+    allowed_correction_hashes = {correction_hash}
+    if source_correction_manifest_sha256 is not None:
+        allowed_correction_hashes.add(source_correction_manifest_sha256)
+    if report.get("correction_manifest_sha256") not in allowed_correction_hashes:
         raise QualifiedSubsetError("qualification report correction manifest hash mismatch")
-    if hashes.get("asset_manifest_sha256") not in {None, correction_hash}:
+    if hashes.get("asset_manifest_sha256") not in {None, *allowed_correction_hashes}:
         raise QualifiedSubsetError("qualification output asset manifest hash mismatch")
     qualified_rows, failed_rows = _qualification_rows(
         qualification_report=report,
@@ -398,14 +407,16 @@ def _validate_inputs(
     if len(correction_versions) != 1 or not isinstance(next(iter(correction_versions), None), str):
         raise QualifiedSubsetError("correction manifest has inconsistent correction versions")
     correction_version = next(iter(correction_versions))
+    if expected_correction_version is not None and correction_version != expected_correction_version:
+        raise QualifiedSubsetError("correction manifest version mismatch")
     for source_id in selected_ids:
         source = inventory.get(source_id)
         correction = correction_by_source.get(source_id)
         if source is None or correction is None:
             raise QualifiedSubsetError(f"missing inventory or correction row: {source_id}")
-        if source.get("source_commit") != SOURCE_COMMIT:
+        if source.get("source_commit") != expected_source_commit:
             raise QualifiedSubsetError(f"source commit mismatch: {source_id}")
-        if correction.get("upstream_commit") != SOURCE_COMMIT:
+        if correction.get("upstream_commit") != expected_source_commit:
             raise QualifiedSubsetError(f"correction source commit mismatch: {source_id}")
         if source_id not in train_ids or correction.get("split") != "train":
             raise QualifiedSubsetError(f"qualified source is not train-only: {source_id}")
@@ -436,6 +447,11 @@ def _validate_inputs(
         "correction_version": correction_version,
         "selection_ids_sha256": selection_ids_hash,
         "correction_manifest_sha256": correction_hash,
+        "source_correction_manifest_sha256": source_correction_manifest_sha256,
+        "expected_source_commit": expected_source_commit,
+        "expected_source_tree_sha256": expected_source_tree_sha256,
+        "expected_inventory_sha256": expected_inventory_sha256,
+        "expected_split_sha256": expected_split_sha256,
     }
 
 
@@ -453,6 +469,13 @@ def prepare_qualified_normalization_run(
     correction_manifest_path: Path,
     correction_root: Path,
     run_root: Path,
+    expected_source_commit: str = SOURCE_COMMIT,
+    expected_source_tree_sha256: str = SOURCE_TREE_SHA256,
+    expected_inventory_sha256: str = BASE_INVENTORY_SHA256,
+    expected_split_sha256: str = BASE_SPLIT_SHA256,
+    expected_correction_version: str | None = None,
+    source_correction_manifest_sha256: str | None = None,
+    source_selection_report_sha256: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     try:
         if run_root.is_symlink() or not run_root.is_dir():
@@ -470,6 +493,12 @@ def prepare_qualified_normalization_run(
             inventory_path=inventory_path,
             split_path=split_path,
             source_root=source_root,
+            expected_source_commit=expected_source_commit,
+            expected_source_tree_sha256=expected_source_tree_sha256,
+            expected_inventory_sha256=expected_inventory_sha256,
+            expected_split_sha256=expected_split_sha256,
+            expected_correction_version=expected_correction_version,
+            source_correction_manifest_sha256=source_correction_manifest_sha256,
         )
         _validate_source_input_alignment(
             source_input=source_input,
@@ -500,12 +529,15 @@ def prepare_qualified_normalization_run(
             "qualification_scope": "qualification_only",
             "generic_manual_run_validator_applicable": False,
             "qualification_validator_authoritative": True,
-            "source_commit": SOURCE_COMMIT,
-            "source_tree_sha256": SOURCE_TREE_SHA256,
-            "frozen_split_sha256": BASE_SPLIT_SHA256,
+            "source_commit": values["expected_source_commit"],
+            "source_tree_sha256": values["expected_source_tree_sha256"],
+            "base_inventory_sha256": values["expected_inventory_sha256"],
+            "frozen_split_sha256": values["expected_split_sha256"],
             "selection_ids_sha256": values["selection_ids_sha256"],
+            "selection_report_sha256": source_selection_report_sha256,
             "correction_version": values["correction_version"],
             "correction_manifest_sha256": values["correction_manifest_sha256"],
+            "source_correction_manifest_sha256": values["source_correction_manifest_sha256"],
             "qualification_report_sha256": values["hashes"]["qualification_validation_report_sha256"],
             "qualification_evidence_sha256": values["report"].get("qualification_evidence_sha256"),
             "raw_runner_evidence_sha256": values["hashes"]["evidence_sha256"],
@@ -543,7 +575,7 @@ def prepare_qualified_normalization_run(
             run_root / "normalization" / "packets",
             run_root / "private_assets",
             batch_size=len(qualified_source_ids),
-            source_commit=SOURCE_COMMIT,
+            source_commit=values["expected_source_commit"],
             source_ids=qualified_source_ids,
             correction_manifest=subset_manifest_path,
             correction_root=correction_root,

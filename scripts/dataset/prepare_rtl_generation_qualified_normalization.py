@@ -39,6 +39,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--runs-root", required=True, type=Path)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--expected-source-commit")
+    parser.add_argument("--expected-source-tree-sha256")
+    parser.add_argument("--expected-inventory-sha256")
+    parser.add_argument("--expected-split-sha256")
+    parser.add_argument("--expected-correction-version")
+    parser.add_argument("--source-correction-manifest-sha256")
+    parser.add_argument("--source-selection-report-sha256")
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -66,6 +73,19 @@ def main(argv: list[str] | None = None) -> int:
             correction_manifest_path=args.correction_manifest,
             correction_root=args.correction_root,
             run_root=run_root,
+            **{
+                key: value
+                for key, value in {
+                    "expected_source_commit": args.expected_source_commit,
+                    "expected_source_tree_sha256": args.expected_source_tree_sha256,
+                    "expected_inventory_sha256": args.expected_inventory_sha256,
+                    "expected_split_sha256": args.expected_split_sha256,
+                    "expected_correction_version": args.expected_correction_version,
+                    "source_correction_manifest_sha256": args.source_correction_manifest_sha256,
+                    "source_selection_report_sha256": args.source_selection_report_sha256,
+                }.items()
+                if value is not None
+            },
         )
         result = {"initialized": initialized, **result}
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:

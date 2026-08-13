@@ -49,6 +49,7 @@ EXTENDED_ROW_CORRECTION_VERSIONS = frozenset({
     "assetfix_v008",
     "assetfix_v008_retry_01",
     "assetfix_v009",
+    "assetfix_v010",
 })
 
 EXTENDED_ROW_FIELDS = {
@@ -64,6 +65,7 @@ EXTENDED_ROW_FIELDS = {
     "qualification_evidence_sha256", "qualification_freeze_sha256",
     "qualification_report_sha256", "qualification_result",
     "qualification_runner_sidecar_sha256",
+    "fixture_hashes",
 }
 
 EXPECTED_SOURCE_IDS = (
