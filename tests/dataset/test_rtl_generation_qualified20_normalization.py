@@ -81,14 +81,22 @@ def test_freeze_retry_lists_rejects_disagreeing_validator_list(tmp_path: Path) -
         )
 
 
-def test_execution_reports_are_sanitized_and_append_only(tmp_path: Path) -> None:
+@pytest.mark.parametrize("nested_qualification_layout", [False, True])
+def test_execution_reports_are_sanitized_and_append_only(
+    tmp_path: Path, nested_qualification_layout: bool
+) -> None:
     run_root = tmp_path / "pilot_007_assetfix_v004_retry_01"
+    qualification_root = (
+        run_root / "qualification" / "attempt_01"
+        if nested_qualification_layout
+        else run_root
+    )
     control_root = tmp_path / "control"
     (run_root / "reports").mkdir(parents=True)
-    (run_root / "input").mkdir()
-    (run_root / "staged").mkdir()
+    (qualification_root / "input").mkdir(parents=True)
+    (qualification_root / "staged").mkdir()
     control_root.mkdir()
-    (run_root / "input/candidate_manifest.jsonl").write_text("{}\n", encoding="utf-8")
+    (qualification_root / "input/candidate_manifest.jsonl").write_text("{}\n", encoding="utf-8")
     evidence_rows = []
     for index in range(6):
         positive = index < 2
@@ -104,9 +112,9 @@ def test_execution_reports_are_sanitized_and_append_only(tmp_path: Path) -> None
             },
             "mismatch_summary": {"maximum_count": 0 if positive else 1, "timeout_reported": False},
         })
-    evidence_path = run_root / "staged/candidate_evidence.jsonl"
+    evidence_path = qualification_root / "staged/candidate_evidence.jsonl"
     evidence_path.write_text("".join(json.dumps(row) + "\n" for row in evidence_rows), encoding="utf-8")
-    sidecar_path = run_root / "staged/candidate_evidence.jsonl.runner.json"
+    sidecar_path = qualification_root / "staged/candidate_evidence.jsonl.runner.json"
     _write_json(sidecar_path, {
         "image_id": "image",
         "rtlbench_commit": "commit",

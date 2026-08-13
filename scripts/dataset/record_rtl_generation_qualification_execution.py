@@ -75,12 +75,15 @@ def record_execution_reports(
     authorization_path: Path,
     validation_path: Path,
 ) -> dict[str, Any]:
+    qualification_root = run_root / "qualification" / "attempt_01"
+    if not qualification_root.is_dir():
+        qualification_root = run_root
     authorization = _read_json(authorization_path)
     validation = _read_json(validation_path)
     preflight = _read_json(run_root / "reports" / "asset_qualification_preflight.json")
-    evidence_path = run_root / "staged" / "candidate_evidence.jsonl"
+    evidence_path = qualification_root / "staged" / "candidate_evidence.jsonl"
     sidecar_path = evidence_path.with_name(evidence_path.name + ".runner.json")
-    manifest_path = run_root / "input" / "candidate_manifest.jsonl"
+    manifest_path = qualification_root / "input" / "candidate_manifest.jsonl"
     evidence = _read_jsonl(evidence_path)
     sidecar = _read_json(sidecar_path)
     exit_text = (control_root / "isolated-runner-exit.txt").read_text(encoding="utf-8")
