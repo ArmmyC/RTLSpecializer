@@ -76,7 +76,7 @@ endmodule
 
 @pytest.mark.parametrize(
     "correction_version",
-    ["assetfix_v005", "assetfix_v006", "assetfix_v007", "assetfix_v009"],
+    ["assetfix_v005", "assetfix_v006", "assetfix_v007", "assetfix_v009", "assetfix_v010"],
 )
 def test_extended_correction_manifest_is_accepted_by_generation_overlay_loader(
     tmp_path: Path,

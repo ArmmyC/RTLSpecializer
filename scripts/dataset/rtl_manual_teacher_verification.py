@@ -49,6 +49,7 @@ TEACHER_GENERATION_CORRECTION_VERSIONS = frozenset({
     "assetfix_v008",
     "assetfix_v008_retry_01",
     "assetfix_v009",
+    "assetfix_v010",
 })
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_RTL_BYTES = 2 * 1024 * 1024
