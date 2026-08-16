@@ -229,7 +229,12 @@ endmodule
 
 @pytest.mark.parametrize(
     "correction_version",
-    ["assetfix_v006_retry_02", "assetfix_v008", "assetfix_v008_retry_01"],
+    [
+        "assetfix_v006_retry_02",
+        "assetfix_v008",
+        "assetfix_v008_retry_01",
+        "assetfix_v012_prob149_retry_01",
+    ],
 )
 def test_overlay_accepts_extended_manifest_versions(
     tmp_path: Path,

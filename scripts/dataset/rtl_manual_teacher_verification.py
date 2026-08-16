@@ -50,7 +50,20 @@ TEACHER_GENERATION_CORRECTION_VERSIONS = frozenset({
     "assetfix_v008_retry_01",
     "assetfix_v009",
     "assetfix_v010",
+    "assetfix_v011_final_recovery_reuse_retry_01",
+    "assetfix_v012_prob149_retry_01",
 })
+QUALIFIED_SUBSET_BINDING_SCHEMAS = frozenset({
+    "rtl_generation_qualified_subset_binding_v0.1",
+    "rtl_generation_qualified_subset_binding_v0.3",
+})
+QUALIFICATION_BINDING_SOURCES = frozenset({
+    "asset_qualification_retry_01",
+    "qualified_subset_binding",
+})
+QUALIFICATION_BINDING_CORRECTION_VERSIONS = (
+    TEACHER_GENERATION_CORRECTION_VERSIONS | {"assetfix_v002"}
+)
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_RTL_BYTES = 2 * 1024 * 1024
 MAX_SUMMARY_BYTES = 8 * 1024
@@ -1172,6 +1185,93 @@ def _plan_qualification_binding(row: dict[str, Any], report: dict[str, Any]) -> 
     }
 
 
+def _qualified_subset_report(
+    binding_path: Path,
+    tasks: list[dict[str, Any]],
+    assets: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Adapt a passed qualified-subset binding to the handoff plan contract.
+
+    Qualified-subset bindings deliberately stop before teacher generation and
+    therefore do not contain the per-task plan fields used by the RTLBench
+    handoff.  Derive those fields from the already-validated public task and
+    asset records without reading or exposing private artifact contents here.
+    """
+
+    from scripts.dataset.rtl_generation_teacher_preparation import (
+        _validate_qualified_binding,
+    )
+
+    binding, qualified_rows = _validate_qualified_binding(binding_path)
+    task_by_id = {task.get("task_id"): task for task in tasks}
+    if len(task_by_id) != len(tasks):
+        raise WorkflowError("qualified-subset task records contain duplicate task IDs")
+    if len(qualified_rows) != len(tasks):
+        raise WorkflowError("qualified-subset binding count does not match task count")
+
+    qualification_manifest_hash = (
+        binding.get("qualified_correction_manifest_sha256")
+        or binding.get("correction_manifest_sha256")
+    )
+    qualification_evidence_hash = (
+        binding.get("qualification_evidence_sha256")
+        or binding.get("raw_runner_evidence_sha256")
+        or binding.get("derived_qualification_evidence_sha256")
+    )
+    runner_sidecar_hash = (
+        binding.get("runner_sidecar_sha256")
+        or binding.get("qualification_runner_sidecar_sha256")
+    )
+    for label, value in (
+        ("qualified-subset correction manifest", qualification_manifest_hash),
+        ("qualified-subset qualification evidence", qualification_evidence_hash),
+        ("qualified-subset runner sidecar", runner_sidecar_hash),
+    ):
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+            raise WorkflowError(f"{label} hash is invalid")
+
+    binding_rows = {
+        row.get("task_id"): row
+        for row in binding.get("rows", [])
+        if isinstance(row, dict)
+    }
+    rows: list[dict[str, Any]] = []
+    for qualified in qualified_rows:
+        task_id = qualified["task_id"]
+        task = task_by_id.get(task_id)
+        asset = assets.get(task_id)
+        if task is None or asset is None or asset.get("source_id") != qualified["source_id"]:
+            raise WorkflowError(f"qualified-subset identity is not present in task and asset records: {task_id}")
+        binding_row = binding_rows.get(task_id)
+        if binding_row is None:
+            raise WorkflowError(f"qualified-subset row metadata is missing: {task_id}")
+        corrected_testbench_hash = binding_row.get("corrected_testbench_sha256")
+        if not isinstance(corrected_testbench_hash, str) or SHA256_RE.fullmatch(corrected_testbench_hash) is None:
+            raise WorkflowError(f"qualified-subset corrected testbench hash is invalid: {task_id}")
+        rows.append({
+            "source_id": qualified["source_id"],
+            "task_id": task_id,
+            "qualification_source": "qualified_subset_binding",
+            "qualification_result": "passed",
+            "qualification_report_sha256": binding["qualification_report_sha256"],
+            "mutation_evidence_sha256": qualification_evidence_hash,
+            "runner_sidecar_sha256": runner_sidecar_hash,
+            "corrected_testbench_sha256": corrected_testbench_hash,
+            "task_record_sha256": _sha256_bytes(_json_bytes(task)),
+            "asset_record_sha256": _sha256_bytes(_json_bytes(asset)),
+            "reference_supplied": False,
+        })
+
+    return {
+        "correction_version": binding["correction_version"],
+        "source_commit": binding["source_commit"],
+        "source_tree_sha256": binding["source_tree_sha256"],
+        "frozen_split_sha256": binding["frozen_split_sha256"],
+        "qualification_manifest_sha256": qualification_manifest_hash,
+        "rows": rows,
+    }
+
+
 def _validate_candidate_task_join(tasks: list[dict[str, Any]], assets: dict[str, dict[str, Any]], records: list[dict[str, Any]], private_root: Path) -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any], bytes, bytes, list[tuple[str, bytes]]]]:
     task_map = {task["task_id"]: task for task in tasks}
     if set(assets) != set(task_map):
@@ -1267,9 +1367,20 @@ def prepare_candidate_verification(
         if len(binding_paths) > 1:
             raise WorkflowError("qualification, teacher-generation, and repair bindings are mutually exclusive")
         if qualification_binding_path is not None:
-            from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
+            binding_object = _read_json(qualification_binding_path, maximum=MAX_RESPONSE_BYTES)
+            if (
+                isinstance(binding_object, dict)
+                and binding_object.get("schema_version") in QUALIFIED_SUBSET_BINDING_SCHEMAS
+            ):
+                qualification_report = _qualified_subset_report(
+                    qualification_binding_path,
+                    tasks,
+                    assets,
+                )
+            else:
+                from scripts.dataset.rtl_generation_qualification_binding import validate_binding_report
 
-            qualification_report = validate_binding_report(qualification_binding_path)
+                qualification_report = validate_binding_report(qualification_binding_path)
             qualification_rows = {row["task_id"]: row for row in qualification_report["rows"]}
         if repair_binding_path is not None:
             repair_binding = _read_json(repair_binding_path, maximum=MAX_RESPONSE_BYTES)
@@ -1479,9 +1590,9 @@ def _validate_qualification_binding(value: Any, label: str) -> dict[str, Any]:
     _strict_fields(value, QUALIFICATION_BINDING_FIELDS, label)
     if value["binding_schema_version"] != "rtl_generation_qualification_binding_v0.1":
         raise WorkflowError(f"{label} has the wrong binding schema")
-    if value["qualification_source"] != "asset_qualification_retry_01" or value["qualification_result"] != "passed":
+    if value["qualification_source"] not in QUALIFICATION_BINDING_SOURCES or value["qualification_result"] != "passed":
         raise WorkflowError(f"{label} is not a passed retry qualification")
-    if value["correction_version"] != "assetfix_v002" or value["reference_supplied"] is not False:
+    if value["correction_version"] not in QUALIFICATION_BINDING_CORRECTION_VERSIONS or value["reference_supplied"] is not False:
         raise WorkflowError(f"{label} has an unsafe qualification binding")
     patterns = {
         "source_commit": r"^[0-9a-f]{40}$",

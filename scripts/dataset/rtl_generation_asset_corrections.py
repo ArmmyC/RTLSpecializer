@@ -50,6 +50,7 @@ EXTENDED_ROW_CORRECTION_VERSIONS = frozenset({
     "assetfix_v008_retry_01",
     "assetfix_v009",
     "assetfix_v010",
+    "assetfix_v012_prob149_retry_01",
 })
 
 EXTENDED_ROW_FIELDS = {

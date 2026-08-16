@@ -11,11 +11,67 @@ import jsonschema
 import scripts.dataset.rtl_manual_teacher_verification as verification
 from scripts.dataset.rtl_manual_teacher_verification import (
     REPAIR_HANDOFF_BINDING_SCHEMA_VERSION,
+    _qualified_subset_report,
+    _validate_qualification_binding,
     export_teacher_repair_packets,
     ingest_candidate_evidence,
     prepare_candidate_verification,
     validate_teacher_candidate_batch,
 )
+
+
+def test_qualified_subset_binding_is_adapted_to_handoff_plan_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    task = {"task_id": "task_manual", "source_id": "SourceManual", "top_module": "TopModule"}
+    asset = {"task_id": task["task_id"], "source_id": task["source_id"]}
+    rows = [{
+        "source_id": task["source_id"],
+        "task_id": task["task_id"],
+        "qualification_result": "passed",
+        "qualification_status": "qualified",
+        "corrected_testbench_sha256": "1" * 64,
+        "reference_supplied": False,
+        "support_files": [],
+    }]
+    binding = {
+        "schema_version": "rtl_generation_qualified_subset_binding_v0.1",
+        "correction_version": "assetfix_v011_final_recovery_reuse_retry_01",
+        "source_commit": "a" * 40,
+        "source_tree_sha256": "b" * 64,
+        "frozen_split_sha256": "c" * 64,
+        "qualification_report_sha256": "d" * 64,
+        "qualified_correction_manifest_sha256": "e" * 64,
+        "qualification_evidence_sha256": "f" * 64,
+        "runner_sidecar_sha256": "0" * 64,
+        "rows": rows,
+    }
+    binding_path = tmp_path / "qualified_subset_binding.json"
+    binding_path.write_text("{}", encoding="utf-8")
+
+    import scripts.dataset.rtl_generation_teacher_preparation as teacher_preparation
+
+    monkeypatch.setattr(teacher_preparation, "_validate_qualified_binding", lambda _: (binding, rows))
+    report = _qualified_subset_report(binding_path, [task], {task["task_id"]: asset})
+
+    assert report["qualification_manifest_sha256"] == "e" * 64
+    assert report["rows"][0]["qualification_source"] == "qualified_subset_binding"
+    assert report["rows"][0]["qualification_result"] == "passed"
+    plan_binding = {
+        key: value
+        for key, value in report["rows"][0].items()
+        if key not in {"source_id", "task_id"}
+    }
+    _validate_qualification_binding(plan_binding | {
+        "binding_schema_version": "rtl_generation_qualification_binding_v0.1",
+        "qualification_manifest_sha256": report["qualification_manifest_sha256"],
+        "correction_version": binding["correction_version"],
+        "source_commit": binding["source_commit"],
+        "source_tree_sha256": binding["source_tree_sha256"],
+        "frozen_split_sha256": binding["frozen_split_sha256"],
+        "reference_supplied": False,
+    }, "qualified subset plan")
 from tests.dataset.manual_rtl_teacher_helpers import FIXTURE_ROOT, evidence_for_plan, initial_flow
 
 

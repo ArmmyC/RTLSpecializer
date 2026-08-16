@@ -316,6 +316,20 @@ def test_teacher_generation_binding_is_preserved_in_verification_plan() -> None:
     v010_plan["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v010"}
     assert _validate_plan(v010_plan, "synthetic v010 plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v010"
 
+    v011_recovery_plan = dict(plan)
+    v011_recovery_plan["teacher_generation_binding"] = {
+        **binding,
+        "correction_version": "assetfix_v011_final_recovery_reuse_retry_01",
+    }
+    assert _validate_plan(v011_recovery_plan, "synthetic v011 recovery plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v011_final_recovery_reuse_retry_01"
+
+    v012_retry_plan = dict(plan)
+    v012_retry_plan["teacher_generation_binding"] = {
+        **binding,
+        "correction_version": "assetfix_v012_prob149_retry_01",
+    }
+    assert _validate_plan(v012_retry_plan, "synthetic v012 retry plan")["teacher_generation_binding"]["correction_version"] == "assetfix_v012_prob149_retry_01"
+
     invalid = dict(plan)
     invalid["teacher_generation_binding"] = {**binding, "correction_version": "assetfix_v002"}
     with pytest.raises(ValueError, match="correction_version"):
