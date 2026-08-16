@@ -42,7 +42,7 @@ def normalized_task_from_raw(raw: dict) -> dict:
         "reset": {
             "signal": resets[0]["signal"] if resets else None,
             "active_level": resets[0]["active_level"] if resets else None,
-            "synchronous": None,
+            "synchronous": resets[0]["synchronous"] if resets else None,
         },
         "latency_contract": None,
         "behavioral_constraints": [],

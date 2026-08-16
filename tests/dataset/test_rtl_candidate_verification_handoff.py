@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
 
 from tests.dataset.manual_rtl_teacher_helpers import FIXTURE_ROOT, initial_flow
@@ -18,3 +20,18 @@ def test_handoff_contains_candidate_testbench_support_but_no_reference(tmp_path:
     instructions = (run / "run_instructions.md").read_text(encoding="utf-8")
     assert "rtlbench verify-candidates" in instructions
     assert "did not execute RTLBench" in instructions
+
+
+def test_handoff_directories_are_private_under_permissive_umask(tmp_path: Path) -> None:
+    previous_umask = os.umask(0o022)
+    try:
+        _, _, run = initial_flow(tmp_path)
+    finally:
+        os.umask(previous_umask)
+
+    for path in (run, *sorted(run.rglob("*"))):
+        mode = stat.S_IMODE(path.stat().st_mode)
+        if path.is_dir():
+            assert mode == 0o700, (path, oct(mode))
+        elif path.is_file():
+            assert mode == 0o600, (path, oct(mode))

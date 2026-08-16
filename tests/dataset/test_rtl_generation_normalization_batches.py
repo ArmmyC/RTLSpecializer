@@ -27,6 +27,41 @@ def test_batch_order_size_and_safe_force_preserve_unrelated_files(tmp_path) -> N
     assert not (output / "batch_002.json").exists()
 
 
+def test_explicit_source_allowlist_order_is_preserved(tmp_path) -> None:
+    source = make_checkout(tmp_path, rows=3)
+    output = tmp_path / "batches"
+    private = tmp_path / "private"
+    requested = ["Prob003_task", "Prob001_task", "Prob002_task"]
+    result, code = export_generation_normalization_batches(
+        source,
+        output,
+        private,
+        batch_size=5,
+        source_ids=requested,
+    )
+    assert code == 0, result
+    payload = load_batch(output / "batch_001.json")
+    assert [row["source_id"] for row in payload["rows"]] == requested
+
+
+def test_source_dataset_override_preserves_canonical_task_identity(tmp_path) -> None:
+    source = make_checkout(tmp_path, rows=1)
+    output = tmp_path / "batches"
+    private = tmp_path / "private"
+    result, code = export_generation_normalization_batches(
+        source,
+        output,
+        private,
+        source_dataset_override="CanonicalDataset",
+        license_override="MIT",
+    )
+    assert code == 0, result
+    payload = load_batch(output / "batch_001.json")
+    assert payload["rows"][0]["source_dataset"] == "CanonicalDataset"
+    assert payload["rows"][0]["license"] == "MIT"
+    assert payload["rows"][0]["provenance"]["public_dataset_name"] == "CanonicalDataset"
+
+
 def test_public_payload_rejects_private_text_even_when_source_prompt_mentions_it(tmp_path) -> None:
     source = make_checkout(tmp_path, rows=1)
     ref = source / "Prob001_task_ref.sv"

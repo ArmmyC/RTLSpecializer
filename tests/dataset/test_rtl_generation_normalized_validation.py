@@ -24,6 +24,39 @@ def test_valid_normalized_batch_is_accepted(tmp_path) -> None:
     assert code == 0, report
 
 
+def test_strict_normalization_response_requires_only_rows_object(tmp_path) -> None:
+    raw, normalized, assets, _ = _export_one(tmp_path)
+    rows = json.loads(normalized.read_text(encoding="utf-8"))
+
+    report, code = validate_generation_normalized_batch(
+        raw,
+        normalized,
+        assets,
+        require_response_object=True,
+    )
+    assert code == 1
+    assert any("top-level rows" in error for error in report["errors"])
+
+    normalized.write_text(json.dumps({"rows": rows}) + "\n", encoding="utf-8")
+    report, code = validate_generation_normalized_batch(
+        raw,
+        normalized,
+        assets,
+        require_response_object=True,
+    )
+    assert code == 0, report
+
+    normalized.write_text(json.dumps({"rows": rows, "provider": "local"}) + "\n", encoding="utf-8")
+    report, code = validate_generation_normalized_batch(
+        raw,
+        normalized,
+        assets,
+        require_response_object=True,
+    )
+    assert code == 1
+    assert any("only the top-level rows" in error for error in report["errors"])
+
+
 def test_validator_rejects_changed_text_ids_unknown_fields_and_private_content(tmp_path) -> None:
     raw, normalized, assets, _ = _export_one(tmp_path)
     rows = json.loads(normalized.read_text(encoding="utf-8"))
@@ -149,3 +182,88 @@ def test_validator_rejects_inconsistent_clock_reset_and_latency_contracts(tmp_pa
     assert any("reset signal must name" in error for error in errors)
     assert any("min_cycles" in error for error in errors)
     assert any("cycles conflicts" in error for error in errors)
+
+
+def test_validator_rejects_drift_from_deterministic_width_and_reset_hints(tmp_path) -> None:
+    _, normalized, _, raw = _export_one(tmp_path)
+    task = json.loads(normalized.read_text(encoding="utf-8"))[0]
+    raw_row = raw["rows"][0]
+
+    raw_row["deterministic_interface_hints"][0]["width_bits"] = 2
+    errors = _task_shape_errors(task, raw_row)
+    assert any("port widths do not preserve" in error for error in errors)
+
+    raw_row["deterministic_reset_hints"] = [{
+        "signal": "rst",
+        "active_level": "high",
+        "synchronous": True,
+    }]
+    errors = _task_shape_errors(task, raw_row)
+    assert any("reset contract does not preserve" in error for error in errors)
+
+
+def test_validator_uses_explicit_async_reset_language_when_export_hint_is_unknown(tmp_path) -> None:
+    raw_path, normalized, _, raw = _export_one(tmp_path)
+    raw_row = raw["rows"][0]
+    raw_row["raw_specification"] = (
+        "Implement a shift register with asynchronous positive edge triggered "
+        "areset, synchronous active high signals load, and enable.\n"
+    )
+    raw_row["deterministic_interface_hints"] = [
+        {
+            "name": "clk",
+            "direction": "input",
+            "declaration": "input clk",
+            "packed_range": None,
+            "width_bits": 1,
+            "signed": False,
+            "description": None,
+        },
+        {
+            "name": "areset",
+            "direction": "input",
+            "declaration": "input areset",
+            "packed_range": None,
+            "width_bits": 1,
+            "signed": False,
+            "description": None,
+        },
+        {
+            "name": "load",
+            "direction": "input",
+            "declaration": "input load",
+            "packed_range": None,
+            "width_bits": 1,
+            "signed": False,
+            "description": None,
+        },
+    ]
+    raw_row["deterministic_reset_hints"] = [{
+        "signal": "areset",
+        "active_level": "high",
+        "synchronous": None,
+    }]
+    task_rows = json.loads(normalized.read_text(encoding="utf-8"))
+    task_rows[0]["specification"] = raw_row["raw_specification"]
+    task_rows[0]["interface"] = {"ports": raw_row["deterministic_interface_hints"]}
+    task_rows[0]["reset"] = {
+        "signal": "areset",
+        "active_level": "high",
+        "synchronous": False,
+    }
+    task_rows[0]["ambiguities"] = [{
+        "topic": "reset",
+        "statement": "The specification explicitly describes an asynchronous reset.",
+        "evidence": "raw_specification",
+    }]
+    raw_path.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    normalized.write_text(json.dumps({"rows": task_rows}, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    report, code = validate_generation_normalized_batch(
+        raw_path,
+        normalized,
+        tmp_path / "private" / "verification_assets.jsonl",
+        require_response_object=True,
+    )
+
+    assert code == 0, report

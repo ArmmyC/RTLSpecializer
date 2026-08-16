@@ -52,6 +52,9 @@ PORT_BULLET_RE = re.compile(
 PORT_DECL_RE = re.compile(
     r"\b(input|output|inout)\b\s+([^;,)\n]+)", re.IGNORECASE
 )
+PARENTHETICAL_WIDTH_RE = re.compile(
+    r"\(\s*(\d+)\s*[- ]?\s*bits?\s*\)", re.IGNORECASE
+)
 MODULE_RE = re.compile(r"\bmodule\s+([A-Za-z_][A-Za-z0-9_$]*)\b", re.IGNORECASE)
 PRIVATE_FIELD_NAMES = {
     "raw_reference_rtl",
@@ -87,6 +90,7 @@ LICENSE_PLACEHOLDER_RE = re.compile(
     re.IGNORECASE,
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 ASSET_FIELDS = {
     "schema_version", "task_id", "source_id", "top_module",
@@ -320,8 +324,11 @@ def _sv_probable_instantiations(tokens: list[str]) -> tuple[list[str], bool]:
         instance_index = index + 1
         if tokens[instance_index] == "#":
             instance_index += 1
+            # Procedural delay controls commonly appear as ``#5`` after an
+            # identifier. Only ``Type #(params) instance(...)`` is a
+            # parameterized instantiation candidate; a non-parenthesized
+            # delay must not poison the whole dependency analysis.
             if instance_index >= len(tokens) or tokens[instance_index] != "(":
-                ambiguous = True
                 index += 1
                 continue
             instance_index = _sv_skip_parenthesized(tokens, instance_index)
@@ -547,12 +554,17 @@ def _interface_hints(text: str | None) -> list[dict[str, Any]]:
         seen.add(name)
         packed_match = re.search(r"\[[^\]]+\]", declaration)
         packed_range = packed_match.group(0) if packed_match else None
+        width_bits = _width_bits(packed_range)
+        if packed_range is None:
+            parenthetical_width = PARENTHETICAL_WIDTH_RE.search(declaration)
+            if parenthetical_width:
+                width_bits = int(parenthetical_width.group(1))
         result.append({
             "name": name,
             "direction": direction,
             "declaration": declaration,
             "packed_range": packed_range,
-            "width_bits": _width_bits(packed_range),
+            "width_bits": width_bits,
             "signed": bool(re.search(r"\bsigned\b", declaration, re.IGNORECASE)),
             "description": None,
         })
@@ -568,23 +580,84 @@ def _hints_from_interface_file(raw: bytes) -> tuple[str | None, list[dict[str, A
     return (names[0] if len(names) == 1 else None), _interface_hints(text)
 
 
+def _reset_synchrony_hint(
+    specification: str,
+    reset_names: list[str],
+) -> bool | None:
+    """Infer synchrony from language attached to the reset clause.
+
+    Specifications can describe synchronous enables alongside an asynchronous
+    reset, for example ``asynchronous ... areset, synchronous ... load``.
+    Looking for timing words across the whole specification incorrectly makes
+    that reset ambiguous.  Keep the hint conservative and only associate a
+    timing word with a nearby reset term without crossing clause punctuation.
+    """
+    reset_terms = [r"reset", r"rst"]
+    reset_terms.extend(
+        re.escape(name)
+        for name in reset_names
+        if isinstance(name, str) and name
+    )
+    reset_pattern = r"(?:" + "|".join(reset_terms) + r")"
+    mode_pattern = r"(?:asynchronously|asynchronous|async|synchronously|synchronous|sync)"
+    separator = r"[^,.;!?]{0,80}"
+    modes: set[bool] = set()
+
+    for match in re.finditer(
+        rf"\b(?P<mode>{mode_pattern})\b{separator}\b(?:{reset_pattern})\b",
+        specification,
+        re.IGNORECASE,
+    ):
+        modes.add(match.group("mode").lower() in {"synchronously", "synchronous", "sync"})
+    for match in re.finditer(
+        rf"\b(?:{reset_pattern})\b{separator}\b(?P<mode>{mode_pattern})\b",
+        specification,
+        re.IGNORECASE,
+    ):
+        modes.add(match.group("mode").lower() in {"synchronously", "synchronous", "sync"})
+
+    if len(modes) == 1:
+        return modes.pop()
+    return None
+
+
 def _clock_reset_hints(specification: str | None, ports: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not isinstance(specification, str):
         return [], []
     clocks: list[dict[str, Any]] = []
     resets: list[dict[str, Any]] = []
+    has_reset_language = bool(re.search(r"\breset\b", specification, re.IGNORECASE))
+    active_level_match = re.search(r"\bactive[- ](high|low)\b", specification, re.IGNORECASE)
+    explicit_active_level = active_level_match.group(1).lower() if active_level_match else None
+
+    def is_reset_name(name: str) -> bool:
+        lowered = name.lower()
+        return (
+            lowered in {"rst", "reset", "rst_n", "reset_n", "resetn", "areset", "aresetn", "areset_n", "ar"}
+            or lowered.startswith("reset_") or lowered.startswith("rst_")
+            or (lowered == "r" and has_reset_language)
+        )
+
+    reset_names = [
+        str(port["name"])
+        for port in ports
+        if isinstance(port, dict) and "name" in port and is_reset_name(str(port["name"]))
+    ]
+    explicit_synchronous = _reset_synchrony_hint(specification, reset_names)
     for port in ports:
         name = str(port["name"])
         lowered = name.lower()
         if lowered in {"clk", "clock"} or lowered.endswith("_clk"):
             edge = "negedge" if re.search(r"negative[- ]edge|negedge", specification, re.IGNORECASE) else "posedge"
             clocks.append({"signal": name, "edge": edge})
-        if (
-            lowered in {"rst", "reset", "rst_n", "reset_n", "resetn", "areset", "aresetn", "areset_n", "ar"}
-            or lowered.startswith("reset_") or lowered.startswith("rst_")
-        ):
+        reset_name = is_reset_name(name)
+        if reset_name:
             active = "low" if lowered.endswith("_n") or lowered.endswith("n") else "high"
-            resets.append({"signal": name, "active_level": active, "synchronous": None})
+            resets.append({
+                "signal": name,
+                "active_level": explicit_active_level or active,
+                "synchronous": explicit_synchronous,
+            })
     return clocks, resets
 
 
@@ -1196,10 +1269,52 @@ def export_generation_normalization_batches(
     limit: int | None = None,
     start_index: int = 0,
     force: bool = False,
+    source_commit: str | None = None,
+    source_ids: Iterable[str] | None = None,
+    correction_manifest: Path | None = None,
+    correction_root: Path | None = None,
+    correction_version: str | None = None,
+    source_dataset_override: str | None = None,
+    license_override: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     errors: list[str] = []
     rows, discovery_errors = discover_source_rows(input_path)
     errors.extend(discovery_errors)
+    if source_dataset_override is not None:
+        if not isinstance(source_dataset_override, str) or not source_dataset_override.strip():
+            errors.append("source_dataset_override must be a non-empty string")
+        else:
+            for row in rows:
+                row.source_dataset = source_dataset_override
+                if isinstance(row.provenance, dict):
+                    row.provenance["public_dataset_name"] = source_dataset_override
+    if license_override is not None:
+        if not isinstance(license_override, str) or not license_override.strip():
+            errors.append("license_override must be a non-empty string")
+        else:
+            for row in rows:
+                row.license = license_override
+    if source_commit is not None:
+        if not SOURCE_COMMIT_RE.fullmatch(source_commit):
+            errors.append("source_commit must be exactly 40 lowercase hexadecimal characters")
+        else:
+            for row in rows:
+                existing = row.provenance.get("source_commit") if isinstance(row.provenance, dict) else None
+                if existing not in (None, "", source_commit):
+                    errors.append(f"source commit mismatch for source_id: {row.source_id}")
+                row.source_commit = source_commit
+                row.provenance["source_commit"] = source_commit
+    requested_ids = list(source_ids) if source_ids is not None else None
+    if requested_ids is not None:
+        if not requested_ids:
+            errors.append("source-ID allowlist must not be empty")
+        if len(requested_ids) != len(set(requested_ids)):
+            errors.append("source-ID allowlist contains duplicates")
+        rows_by_id = {row.source_id: row for row in rows}
+        missing_ids = sorted(set(requested_ids) - set(rows_by_id))
+        if missing_ids:
+            errors.append(f"source-ID allowlist contains missing IDs: {missing_ids}")
+        rows = [rows_by_id[source_id] for source_id in requested_ids if source_id in rows_by_id]
     if batch_size < 1: errors.append("--batch-size must be at least 1")
     if start_index < 0: errors.append("--start-index must be at least 0")
     if limit is not None and limit < 1: errors.append("--limit must be at least 1")
@@ -1207,7 +1322,12 @@ def export_generation_normalization_batches(
     if output_dir.resolve() == private_output_dir.resolve() or _is_within(output_dir, private_output_dir) or _is_within(private_output_dir, output_dir):
         errors.append("public and private output directories must be separate")
     errors.extend(_source_duplicate_errors(rows))
-    rows = sorted(rows, key=lambda item: (item.source_id, item.source_dataset, _json_bytes(item.provenance)))
+    # An explicit allowlist is an operator-authored packet order. Preserve it
+    # byte-for-byte so the returned normalization rows can be checked by
+    # position as well as by identity. Unbounded exports retain deterministic
+    # source ordering for compatibility with the original workflow.
+    if requested_ids is None:
+        rows = sorted(rows, key=lambda item: (item.source_id, item.source_dataset, _json_bytes(item.provenance)))
     selected = rows[start_index:]
     if limit is not None: selected = selected[:limit]
     if not selected: errors.append("no source rows remain after applying start-index/limit")
@@ -1216,19 +1336,41 @@ def export_generation_normalization_batches(
             errors.append(f"missing specification for source_id: {row.source_id}")
         if not row.reference_rtl:
             errors.append(f"missing reference RTL for source_id: {row.source_id}")
-    tasks = [(row, _task_id(row)) for row in selected]
+    private_selected = selected
+    correction_count = 0
+    if (correction_manifest is None) != (correction_root is None):
+        errors.append("correction_manifest and correction_root must be supplied together")
+    elif correction_manifest is not None and correction_root is not None:
+        from scripts.dataset.rtl_generation_asset_corrections import overlay_source_rows
+
+        private_selected, correction_errors, correction_rows = overlay_source_rows(
+            selected,
+            correction_manifest,
+            correction_root,
+            expected_correction_version=correction_version or "assetfix_v002",
+        )
+        errors.extend(correction_errors)
+        correction_count = len(correction_rows)
+    private_tasks = [(row, _task_id(row)) for row in private_selected]
+    # The correction overlay is authoritative for both the private asset
+    # closure and the leak audit.  The public row does not serialize RTL,
+    # testbench, or support bytes, but auditing the pre-overlay source row can
+    # falsely report a public *_ifc.txt companion as leaked support content.
+    # The overlaid row preserves the public specification and interface while
+    # carrying the corrected testbench and declared empty support closure.
+    tasks = private_tasks
     task_ids = [task_id for _, task_id in tasks]
     if len(task_ids) != len(set(task_ids)): errors.append("duplicate deterministic task_id")
     batch_count = (len(tasks) + batch_size - 1) // batch_size if tasks else 0
     public_paths = [output_dir / f"batch_{i:03d}.json" for i in range(1, batch_count + 1)]
     private_files = [private_output_dir / "verification_assets.jsonl"]
-    for row, task_id in tasks:
+    for row, task_id in private_tasks:
         private_files.append(private_output_dir / "workspace" / task_id / "reference.sv")
         if row.testbench is not None: private_files.append(private_output_dir / "workspace" / task_id / "testbench.sv")
         private_files.extend(private_output_dir / "workspace" / task_id / "support" / name for name in row.support_files)
     errors.extend(_prepare_public_output(output_dir, public_paths, force))
     errors.extend(_prepare_private_output(private_output_dir, private_files, force))
-    for row, _ in tasks:
+    for row, _ in private_tasks:
         for support_name in row.support_files:
             if Path(support_name).is_absolute() or ".." in Path(support_name).parts or Path(support_name).name != support_name:
                 errors.append(f"unsafe support file path: {support_name}")
@@ -1239,7 +1381,7 @@ def export_generation_normalization_batches(
     if errors:
         result = {"ok":False,"input":_relative_display(input_path),"output_dir":_relative_display(output_dir),"private_output_dir":_relative_display(private_output_dir),"exported_rows":0,"batch_files":[],"errors":sorted(set(errors)),"warnings":[]}
         return result, 1
-    assets = [_asset_record(row, task_id) for row, task_id in tasks]
+    assets = [_asset_record(row, task_id) for row, task_id in private_tasks]
     payloads: list[tuple[Path, dict[str, Any]]] = []
     for index, offset in enumerate(range(0, len(tasks), batch_size), 1):
         batch_tasks = tasks[offset:offset + batch_size]
@@ -1266,14 +1408,14 @@ def export_generation_normalization_batches(
         for path, payload in payloads:
             _atomic_write(path, (json.dumps(payload,ensure_ascii=False,indent=2)+"\n").encode("utf-8"))
         _atomic_write(private_output_dir / "verification_assets.jsonl", asset_bytes)
-        for row, task_id in tasks:
+        for row, task_id in private_tasks:
             workspace = private_output_dir / "workspace" / task_id
             _atomic_write(workspace / "reference.sv", _text_bytes(row.reference_rtl))
             if row.testbench is not None: _atomic_write(workspace / "testbench.sv", _text_bytes(row.testbench))
             for name, content in sorted(row.support_files.items()): _atomic_write(workspace / "support" / name, content)
     except (OSError, ValueError) as exc:
         return {"ok":False,"input":_relative_display(input_path),"output_dir":_relative_display(output_dir),"private_output_dir":_relative_display(private_output_dir),"exported_rows":0,"batch_files":[],"errors":[f"could not write outputs: {exc}"],"warnings":[]}, 1
-    return {"ok":True,"input":_relative_display(input_path),"output_dir":_relative_display(output_dir),"private_output_dir":_relative_display(private_output_dir),"batch_size":batch_size,"start_index":start_index,"limit":limit,"exported_rows":len(tasks),"batch_files":[_relative_display(path) for path,_ in payloads],"private_assets":_relative_display(private_output_dir/"verification_assets.jsonl"),"readiness_categories":dict(sorted(Counter(_readiness(row)[0] for row,_ in tasks).items())),"errors":[],"warnings":[]}, 0
+    return {"ok":True,"input":_relative_display(input_path),"output_dir":_relative_display(output_dir),"private_output_dir":_relative_display(private_output_dir),"batch_size":batch_size,"start_index":start_index,"limit":limit,"exported_rows":len(tasks),"batch_files":[_relative_display(path) for path,_ in payloads],"private_assets":_relative_display(private_output_dir/"verification_assets.jsonl"),"readiness_categories":dict(sorted(Counter(_readiness(row)[0] for row,_ in private_tasks).items())),"corrections_applied":correction_count,"public_correction_bytes_excluded":correction_count > 0,"errors":[],"warnings":[]}, 0
 
 
 def _load_json(path: Path) -> tuple[Any | None, list[str]]:
@@ -1282,9 +1424,21 @@ def _load_json(path: Path) -> tuple[Any | None, list[str]]:
     except (OSError, UnicodeError, json.JSONDecodeError) as exc: return None, [f"could not read JSON {path}: {exc}"]
 
 
-def _normalized_rows(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
-    rows = value if isinstance(value, list) else value.get("rows") if isinstance(value, dict) else None
-    if not isinstance(rows, list): return [], ["normalized input must be an array or object with rows"]
+def _normalized_rows(
+    value: Any,
+    *,
+    require_response_object: bool = False,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    if require_response_object:
+        if not isinstance(value, dict):
+            return [], ["normalized response must be an object with only a top-level rows array"]
+        if set(value) != {"rows"}:
+            return [], ["normalized response must contain only the top-level rows field"]
+        rows = value.get("rows")
+    else:
+        rows = value if isinstance(value, list) else value.get("rows") if isinstance(value, dict) else None
+    if not isinstance(rows, list):
+        return [], ["normalized input must be an array or object with rows"]
     errors=[]; result=[]
     for index,row in enumerate(rows,1):
         if not isinstance(row,dict): errors.append(f"normalized row {index} must be an object")
@@ -1298,6 +1452,38 @@ def _raw_rows(value: Any) -> tuple[list[dict[str, Any]], list[str]]:
     rows=value.get("rows")
     if not isinstance(rows,list): return [], ["raw batch rows must be an array"]
     return [r for r in rows if isinstance(r,dict)], [f"raw batch row {i} must be an object" for i,r in enumerate(rows,1) if not isinstance(r,dict)]
+
+
+def _effective_reset_hints(raw: dict[str, Any]) -> list[dict[str, Any]]:
+    """Use explicit reset language to complete an older incomplete hint.
+
+    Some already-exported public packets recorded ``synchronous: null`` when
+    the specification also mentioned synchronous enables alongside an
+    explicitly asynchronous reset.  The packet is immutable, so validation
+    may complete only that unresolved field from the preserved public
+    specification.  Conflicting concrete hint values remain authoritative and
+    are still checked normally.
+    """
+    reset_hints = raw.get("deterministic_reset_hints") or []
+    if not isinstance(reset_hints, list):
+        return []
+    specification = raw.get("raw_specification")
+    interface_hints = raw.get("deterministic_interface_hints") or []
+    if not isinstance(specification, str) or not isinstance(interface_hints, list):
+        return reset_hints
+    _, derived_hints = _clock_reset_hints(specification, interface_hints)
+    if len(reset_hints) != 1 or len(derived_hints) != 1:
+        return reset_hints
+    existing = reset_hints[0]
+    derived = derived_hints[0]
+    if (
+        existing.get("signal") == derived.get("signal")
+        and existing.get("active_level") == derived.get("active_level")
+        and existing.get("synchronous") is None
+        and derived.get("synchronous") is not None
+    ):
+        return derived_hints
+    return reset_hints
 
 
 def _task_shape_errors(task: dict[str, Any], raw: dict[str, Any] | None = None, private_assets: dict[str, dict[str, Any]] | None = None) -> list[str]:
@@ -1448,13 +1634,33 @@ def _task_shape_errors(task: dict[str, Any], raw: dict[str, Any] | None = None, 
             expected_declarations=[x.get("declaration") for x in hints if isinstance(x,dict)]
             actual_declarations=[x.get("declaration") for x in ports if isinstance(x,dict)]
             if expected_declarations != actual_declarations: errors.append("port declarations do not preserve source-facing wording")
+            expected_ranges=[x.get("packed_range") for x in hints if isinstance(x,dict)]
+            actual_ranges=[x.get("packed_range") for x in ports if isinstance(x,dict)]
+            if expected_ranges != actual_ranges: errors.append("packed ranges do not preserve deterministic source hints")
+            expected_widths=[x.get("width_bits") for x in hints if isinstance(x,dict)]
+            actual_widths=[x.get("width_bits") for x in ports if isinstance(x,dict)]
+            if expected_widths != actual_widths: errors.append("port widths do not preserve deterministic source hints")
         clock_hint=raw.get("deterministic_clock_hints") or []
-        reset_hint=raw.get("deterministic_reset_hints") or []
+        reset_hint=_effective_reset_hints(raw)
         clock=task.get("clocking") if isinstance(task.get("clocking"),dict) else {}
         reset=task.get("reset") if isinstance(task.get("reset"),dict) else {}
         if not clock_hint and (clock.get("clock_signal") is not None or clock.get("edge") is not None): errors.append("invented clock evidence")
         if not reset_hint and any(reset.get(key) is not None for key in ("signal","active_level","synchronous")):
             errors.append("invented reset evidence")
+        if len(reset_hint) == 1:
+            expected_reset = reset_hint[0]
+            actual_reset = {
+                "signal": reset.get("signal"),
+                "active_level": reset.get("active_level"),
+                "synchronous": reset.get("synchronous"),
+            }
+            expected_reset = {
+                "signal": expected_reset.get("signal"),
+                "active_level": expected_reset.get("active_level"),
+                "synchronous": expected_reset.get("synchronous"),
+            }
+            if actual_reset != expected_reset:
+                errors.append("reset contract does not preserve deterministic source hints")
         material=[w for w in raw.get("normalization_warnings",[]) if isinstance(w,str) and any(k in w for k in ("missing","ambiguous","conflict"))]
         if material and not ambiguities: errors.append("missing ambiguity record for exporter warning")
     for path, value in _walk_strings(task):
@@ -1494,13 +1700,22 @@ def _load_assets(path: Path) -> tuple[dict[str,dict[str,Any]], list[str]]:
     return records, errors
 
 
-def validate_generation_normalized_batch(raw_batch_path: Path, normalized_path: Path, private_assets_path: Path | None = None) -> tuple[dict[str,Any], int]:
+def validate_generation_normalized_batch(
+    raw_batch_path: Path,
+    normalized_path: Path,
+    private_assets_path: Path | None = None,
+    *,
+    require_response_object: bool = False,
+) -> tuple[dict[str,Any], int]:
     raw_value, errors=_load_json(raw_batch_path)
     raw_rows, raw_errors=_raw_rows(raw_value)
     errors.extend(raw_errors)
     normalized_value, normalized_errors=_load_json(normalized_path)
     errors.extend(normalized_errors)
-    normalized_rows, row_errors=_normalized_rows(normalized_value)
+    normalized_rows, row_errors=_normalized_rows(
+        normalized_value,
+        require_response_object=require_response_object,
+    )
     errors.extend(row_errors)
     assets=None
     if private_assets_path is not None:
@@ -1511,7 +1726,7 @@ def validate_generation_normalized_batch(raw_batch_path: Path, normalized_path: 
     for index,(raw,task) in enumerate(zip(raw_rows,normalized_rows),1):
         row_errors_all.extend(f"row {index}: {item}" for item in _task_shape_errors(task,raw,assets))
     errors.extend(row_errors_all)
-    report={"ok":not errors,"raw_batch":_relative_display(raw_batch_path),"normalized":_relative_display(normalized_path),"rows":len(normalized_rows),"errors":sorted(set(errors)),"row_errors":row_errors_all}
+    report={"ok":not errors,"raw_batch":_relative_display(raw_batch_path),"normalized":_relative_display(normalized_path),"rows":len(normalized_rows),"errors":sorted(set(errors)),"row_errors":row_errors_all,"response_object_required":require_response_object}
     return report, 0 if report["ok"] else 1
 
 
@@ -1757,8 +1972,11 @@ def assemble_generation_inputs(normalized_path: Path, private_assets_path: Path,
     if assets_output.exists() and force and not _managed_jsonl(assets_output,VERIFICATION_ASSET_SCHEMA_VERSION): errors.append("refusing to replace unknown asset output")
     if errors:
         return {"ok":False,"tasks_output":_relative_display(tasks_output),"assets_output":_relative_display(assets_output),"rows":len(tasks),"unused_private_asset_count":unused_private_asset_count,"errors":sorted(set(errors))},1
-    task_bytes=b"".join(json.dumps(t,ensure_ascii=False,separators=(",", ":"),sort_keys=True).encode()+b"\n" for t in sorted(tasks,key=lambda x:(str(x.get('task_id')),str(x.get('source_id')))))
-    asset_bytes=b"".join(json.dumps(selected_assets[t],ensure_ascii=False,separators=(",", ":"),sort_keys=True).encode()+b"\n" for t in sorted(task_ids))
+    # Normalized response order is part of the packet contract. Preserve it
+    # through assembly so a five-task exchange can be audited positionally.
+    ordered_task_ids = [str(task.get("task_id")) for task in tasks]
+    task_bytes=b"".join(json.dumps(t,ensure_ascii=False,separators=(",", ":"),sort_keys=True).encode()+b"\n" for t in tasks)
+    asset_bytes=b"".join(json.dumps(selected_assets[t],ensure_ascii=False,separators=(",", ":"),sort_keys=True).encode()+b"\n" for t in ordered_task_ids)
     try:
         _atomic_write(tasks_output,task_bytes); _atomic_write(assets_output,asset_bytes)
     except OSError as exc:

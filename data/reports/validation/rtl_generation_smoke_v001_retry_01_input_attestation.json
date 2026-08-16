@@ -1,0 +1,27 @@
+{
+  "schema_version": "rtl_dataset_packaging_input_attestation_v0.1",
+  "package_id": "rtl_generation_smoke_v001_retry_01",
+  "phase": "pre_package",
+  "source_commit": "c498220d0a52248f8e3fdffe279075215bde2da6",
+  "source_tree_sha256": "e88d556887c67467147757ae4bb772836ae0224e313581785e8c705fe56f304f",
+  "frozen_split_sha256": "6675f0dc7369c0bff167d56d0e1e5f4ea50f3b94cf9a6d94eae0e6478321f608",
+  "artifacts": {
+    "generation_tasks": "c1aaf8f866f91a68d02cd1a04c302e6fad80834403f3810ae92a11c64c7fde6a",
+    "candidate_records": "2bef66d0db3197f36b87a14c7f4540bbe76950fd0765450268e19979dcd72d64",
+    "attempt_history": "7d0171b1546b82dbecd80862de7c0ce5f42a03068cd7f7483de01cd88f6a51a1",
+    "candidate_evidence": "6f9096020edaa547e7cb15133be01b33a90e9455b549b4c4a01e327f7314fe4c",
+    "runner_sidecar": "cb871f27dc522c9c1feb72dc4b76bb9e03aac51800c850f19c2112e3f8100847",
+    "qualification_report": "71c99fce6d1664f15296cd3f4930310430dbc9b8fe387d6f1f0056a78fc10d06",
+    "qualification_binding": "2bc15d357809bf17b05611a4d177f9e6249c7907d49434cbea35b1a42b5dfcfa",
+    "qualification_mutation_evidence": "eb1ad1bcc32e452e6116143e1f59a8f520739fb72d9687d7d956a1c51ba3ab61",
+    "qualification_runner_sidecar": "ab4e34d04fdaddfdb0e33fbdf360ad7ca09ab892a537856dfad320d4f9ae6c18",
+    "qualified_correction_manifest": "a7c4f47948564dec890939bada0122dcba197f8c77adc8b701d33329ee809c22",
+    "qualified_correction_report": "8f547413d819d32d8812b16fa744085b21a425a72cfd01d37985b5d637cb492a",
+    "readiness_split": "257b2a3e7faa189efe441d43be6185be74e8469ad82126e0488bea7fee9b0d77",
+    "normalization_attestation": "7278572f4d78938fc8702738e2288ec29948417db175d5a5c19ba65fafea9c23",
+    "base_split_manifest": "6675f0dc7369c0bff167d56d0e1e5f4ea50f3b94cf9a6d94eae0e6478321f608",
+    "source_acquisition": "a209fe2a6dd8fb8b37a98c0f467c387c74e70db30f44c2dd9db4dd815dc3b777",
+    "assetfix_manifest": "6fef854c1ab26423615b59f49461222b9ff6137ad501a3d26757640669c676ea"
+  },
+  "canonical_inputs_unchanged": true
+}

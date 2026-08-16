@@ -1,0 +1,31 @@
+{
+  "consumable": true,
+  "counts": {
+    "all": 5,
+    "rejected_rows": 0,
+    "train": 5
+  },
+  "errors": [],
+  "finalization": {
+    "complete_run_validation": "passed",
+    "content_review": "passed",
+    "pre_finalization_freeze": "passed"
+  },
+  "lineage": {
+    "authorization_sha256": "61d9642e4cf97df3732f7f2e542232abe3c391dc6721f32a740e1ca84df2fed7",
+    "consumable": true,
+    "package_id": "rtl_generation_smoke_v001_retry_02",
+    "parent_package_id": "rtl_generation_smoke_v001_retry_01",
+    "recovery_reason": "packaging_privacy_detector_scope_defect",
+    "schema_version": "rtl_dataset_package_lineage_v0.1",
+    "status": "successful_recovery_package"
+  },
+  "ok": true,
+  "output_dir": "data/distill/rtl_generation_smoke_v001_retry_02",
+  "pinned_task_order_match": true,
+  "private_content_detected": false,
+  "qualification_report_hash_match": true,
+  "rejected_count": 0,
+  "row_count": 5,
+  "train_count": 5
+}

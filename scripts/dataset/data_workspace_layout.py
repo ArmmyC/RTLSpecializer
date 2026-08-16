@@ -26,8 +26,19 @@ RUN_WORKFLOW = "manual_rtl_teacher"
 RUN_ID_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
-VERIFICATION_ATTEMPT_ROOT_RE = re.compile(r"verification/attempt_0[1-4]")
-VERIFICATION_WORKSPACE_DIR_RE = re.compile(r"verification/attempt_0[1-4]/workspace(?:/.*)?")
+VERIFICATION_ATTEMPT_ROOT_RE = re.compile(r"verification/attempt_0[1-4](?:_retry_(?:0[1-9]|[1-9][0-9]*))?")
+VERIFICATION_WORKSPACE_DIR_RE = re.compile(
+    r"verification/attempt_0[1-4](?:_retry_(?:0[1-9]|[1-9][0-9]*))?/workspace(?:/.*)?"
+)
+VERIFICATION_PACKET_DIR_RE = re.compile(
+    r"verification/attempt_0[1-4](?:_retry_(?:0[1-9]|[1-9][0-9]*))?/packet_[0-9]{4}"
+)
+VERIFICATION_PACKET_WORKSPACE_DIR_RE = re.compile(
+    r"verification/attempt_0[1-4](?:_retry_(?:0[1-9]|[1-9][0-9]*))?/packet_[0-9]{4}/workspace(?:/.*)?"
+)
+VERIFICATION_ATTEMPT_PATH_RE = re.compile(
+    r"verification/attempt_0[1-4](?:_retry_(?:0[1-9]|[1-9][0-9]*))?(?:/.*)?"
+)
 REPAIR_ATTEMPT_DIR_RE = re.compile(r"repairs/attempt_0[2-4](?:/.*)?")
 
 CATEGORIES = (
@@ -680,6 +691,8 @@ def _is_valid_verification_directory(relative: str) -> bool:
     return bool(
         VERIFICATION_ATTEMPT_ROOT_RE.fullmatch(relative)
         or VERIFICATION_WORKSPACE_DIR_RE.fullmatch(relative)
+        or VERIFICATION_PACKET_DIR_RE.fullmatch(relative)
+        or VERIFICATION_PACKET_WORKSPACE_DIR_RE.fullmatch(relative)
     )
 
 
@@ -726,7 +739,7 @@ def validate_manual_rtl_run(run_root: Path) -> tuple[dict[str, Any], int]:
                     continue
                 if relative.startswith("normalization/packets/") or relative.startswith("normalization/responses/") or relative.startswith("teacher/packets/") or relative.startswith("teacher/responses/") or relative in {"private_assets/verification_assets.jsonl"} or relative.startswith("private_assets/workspace/") or relative.startswith("reports/"):
                     continue
-                if re.match(r"verification/attempt_0[1-4]/", relative) or re.match(r"repairs/attempt_0[2-4]/", relative):
+                if VERIFICATION_ATTEMPT_PATH_RE.fullmatch(relative) or re.match(r"repairs/attempt_0[2-4]/", relative):
                     continue
                 errors.append(f"unexpected file in run: {relative}")
             elif path.is_dir():

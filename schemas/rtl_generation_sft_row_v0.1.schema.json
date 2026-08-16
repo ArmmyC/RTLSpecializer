@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_generation_sft_row_v0.1.schema.json",
+  "title": "Verified RTL generation SFT row v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "dataset_name", "dataset_version", "dataset_stage", "split", "source_id", "task_id", "candidate_id", "attempt", "candidate_sha256", "source", "license", "design_family", "created_by", "review_status", "approval_status", "promotion_allowed", "provenance", "verification", "messages"],
+  "properties": {
+    "schema_version": {"const": "rtl_generation_sft_row_v0.1"},
+    "id": {"type": "string", "minLength": 1},
+    "dataset_name": {"type": "string", "minLength": 1},
+    "dataset_version": {"const": "v0.1"},
+    "dataset_stage": {"const": "verified_generation_sft"},
+    "split": {"const": "train"},
+    "source_id": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "candidate_id": {"type": "string", "minLength": 1},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 4},
+    "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source": {"const": "teacher_generated_verified"},
+    "license": {"type": ["string", "null"]},
+    "design_family": {"type": ["string", "null"]},
+    "created_by": {"const": "package_verified_rtl_generation_dataset"},
+    "review_status": {"const": "automated_verified_unreviewed"},
+    "approval_status": {"const": "not_approved"},
+    "promotion_allowed": {"const": false},
+    "provenance": {"type": "object"},
+    "verification": {"type": "object"},
+    "messages": {"type": "array", "minItems": 3, "maxItems": 3}
+  }
+}

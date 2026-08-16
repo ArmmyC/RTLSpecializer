@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_generation_human_review_v0.1.schema.json",
+  "title": "RTL generation human review v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "package_id", "package_tree_sha256", "reviewer", "review_status", "promotion_allowed", "row_count", "rows"],
+  "properties": {
+    "schema_version": {"const": "rtl_generation_human_review_v0.1"},
+    "package_id": {"type": "string", "minLength": 1},
+    "package_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewer_type", "reviewer_id", "reviewed_at", "review_method"],
+      "properties": {
+        "reviewer_type": {"const": "human"},
+        "reviewer_id": {"type": "string", "minLength": 1},
+        "reviewed_at": {"type": "string", "minLength": 1},
+        "review_method": {"const": "manual_row_review"}
+      }
+    },
+    "review_status": {"const": "human_reviewed"},
+    "promotion_allowed": {"const": false},
+    "row_count": {"const": 5},
+    "rows": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_id",
+          "task_id",
+          "candidate_id",
+          "candidate_sha256",
+          "prompt_understandable",
+          "assistant_rtl_only",
+          "top_module_interface_preserved",
+          "rtl_readable",
+          "suitable_training_target",
+          "private_verification_absent",
+          "metadata_accurate",
+          "review_outcome",
+          "review_notes"
+        ],
+        "properties": {
+          "source_id": {"type": "string", "minLength": 1},
+          "task_id": {"type": "string", "minLength": 1},
+          "candidate_id": {"type": "string", "minLength": 1},
+          "candidate_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "prompt_understandable": {"const": true},
+          "assistant_rtl_only": {"const": true},
+          "top_module_interface_preserved": {"const": true},
+          "rtl_readable": {"const": true},
+          "suitable_training_target": {"const": true},
+          "private_verification_absent": {"const": true},
+          "metadata_accurate": {"const": true},
+          "review_outcome": {"const": "retain_unpromoted"},
+          "review_notes": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

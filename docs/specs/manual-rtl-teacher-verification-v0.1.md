@@ -34,6 +34,12 @@ data/review/rtl_teacher_repair_packets/attempt_03
 data/review/rtl_teacher_repair_packets/attempt_04
 ```
 
+When a failed handoff must be preserved, a recovery handoff may use an
+immutable suffix such as `verification/attempt_01_retry_01`. The suffix is
+control-plane lineage only; the candidate attempt remains attempt 1. Recovery
+suffixes must be `_retry_<positive integer>` and the original handoff must not
+be replaced.
+
 ## Contracts and invariants
 
 - Initial and repair packet IDs match the exact deterministic format and their

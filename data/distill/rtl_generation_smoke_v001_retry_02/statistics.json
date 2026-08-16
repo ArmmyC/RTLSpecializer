@@ -1,0 +1,32 @@
+{
+  "acceptance_affected": false,
+  "accepted_attempts": 5,
+  "accepted_rows_with_warnings": 1,
+  "accepted_tasks": 5,
+  "all_rows": 5,
+  "assets_qualified": 5,
+  "attempt_records": 5,
+  "attempts_per_accepted_task": {
+    "Prob001_zero": 1,
+    "Prob020_mt2015_eq2": 1,
+    "Prob048_m2014_q4c": 1,
+    "Prob071_always_casez": 1,
+    "Prob079_fsm3onehot": 1
+  },
+  "augmentation_rows": 0,
+  "candidate_records": 5,
+  "compile_pass_rate": 1.0,
+  "detected_mutations": 10,
+  "infrastructure_failures": 0,
+  "mutation_rows": 10,
+  "normalization_accepted": 5,
+  "reference_exposures": 0,
+  "rejected_rows": 0,
+  "repairs": 0,
+  "schema_version": "rtl_verified_generation_statistics_v0.1",
+  "simulation_pass_rate": 1.0,
+  "test_rows": 0,
+  "validation_rows": 0,
+  "warning_count": 1,
+  "warnings_present": true
+}

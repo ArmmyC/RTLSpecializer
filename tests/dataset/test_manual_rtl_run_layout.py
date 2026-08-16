@@ -90,11 +90,35 @@ def test_run_validation_accepts_nested_verification_workspace(tmp_path: Path) ->
     for attempt_number in ("02", "03", "04"):
         (run / "verification" / f"attempt_{attempt_number}" / "workspace").mkdir(parents=True)
 
+    recovery_workspace = run / "verification" / "attempt_01_retry_01" / "workspace" / "rtlgen_synthetic_example_attempt_01"
+    recovery_workspace.mkdir(parents=True)
+    (recovery_workspace / "candidate.sv").write_text("module TopModule; endmodule\n", encoding="utf-8")
+    (recovery_workspace / "testbench.sv").write_text("module tb; endmodule\n", encoding="utf-8")
+
     report, code = validate_manual_rtl_run(run)
     assert code == 0, report
     assert report["ok"] is True
     assert report["errors"] == []
     assert not any(path.name == "reference.sv" for path in (run / "verification").rglob("*"))
+
+
+def test_run_validation_accepts_packetized_verification_handoffs(tmp_path: Path) -> None:
+    run = tmp_path / "runs" / "pilot_001"
+    initialize_manual_rtl_run("pilot_001", "VerilogEval", run.parent)
+
+    packet = run / "verification" / "attempt_02" / "packet_0001"
+    (packet / "workspace" / "candidate").mkdir(parents=True)
+    (packet / "candidate_manifest.jsonl").write_text("{}\n", encoding="utf-8")
+    (packet / "verification_plan.jsonl").write_text("{}\n", encoding="utf-8")
+    (packet / "run_instructions.md").write_text("manual handoff\n", encoding="utf-8")
+    (packet / "workspace" / "candidate" / "candidate.sv").write_text(
+        "module TopModule; endmodule\n", encoding="utf-8"
+    )
+
+    report, code = validate_manual_rtl_run(run)
+    assert code == 0, report
+    assert report["ok"] is True
+    assert report["errors"] == []
 
 
 @pytest.mark.parametrize(
@@ -104,6 +128,9 @@ def test_run_validation_accepts_nested_verification_workspace(tmp_path: Path) ->
         "verification/attempt_05",
         "verification/attempt_1",
         "verification/attempt_01_extra",
+        "verification/attempt_01_retry_0",
+        "verification/attempt_01_retry_00",
+        "verification/attempt_01_retry_bad",
         "verification/random",
         "verification/attempt_05/workspace",
         "verification/attempt_01/unexpected_directory",

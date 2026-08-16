@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rtl_verification_asset_qualification_v0.1.schema.json",
+  "title": "RTL verification asset qualification report v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "source_commit",
+    "source_tree_sha256",
+    "frozen_split_sha256",
+    "correction_version",
+    "correction_manifest_sha256",
+    "correction_report_sha256",
+    "qualification_manifest_sha256",
+    "qualification_evidence_sha256",
+    "qualification_sidecar_sha256",
+    "row_count",
+    "mutation_count",
+    "rows",
+    "runner",
+    "qualification_passed",
+    "errors"
+  ],
+  "properties": {
+    "schema_version": {"const": "rtl_verification_asset_qualification_v0.1"},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "source_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "frozen_split_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "correction_version": {"const": "assetfix_v002"},
+    "correction_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "correction_report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "qualification_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "qualification_evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "qualification_sidecar_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "row_count": {"const": 5},
+    "mutation_count": {"type": "integer", "minimum": 1},
+    "rows": {"type": "array", "minItems": 5, "maxItems": 5},
+    "runner": {"type": "object"},
+    "qualification_passed": {"type": "boolean"},
+    "errors": {"type": "array", "items": {"type": "string"}}
+  }
+}

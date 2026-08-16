@@ -1,0 +1,25 @@
+{
+  "consumable": true,
+  "lineage_status": "successful_recovery_package",
+  "ok": true,
+  "output_hashes": {
+    "all.jsonl": "f10907ed3c4c117b5da220db62cea2b721bd188fd08c4f328574e71779b6d34b",
+    "dataset_card.md": "ab9944afe97caa66fbf56320f5b29aa635dbc7f56e4a051e356e7bfefced9937",
+    "manifest.json": "d3b2ddabc18a08978517575e330d6eb480d2cab9dfa9f58cd27d17ae8a55ab2c",
+    "provenance_report.json": "8cb92bf4947c254a035e74316d9d53ee3302d677d6a515b879a4cb949eac346c",
+    "rejected_rows.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "statistics.json": "c9ea6d8f0928b0519239417b5fde9202c6cf9296d961fb16ecb75ccc0478de1c",
+    "train.jsonl": "f10907ed3c4c117b5da220db62cea2b721bd188fd08c4f328574e71779b6d34b",
+    "validation_report.json": "20fb1b1c730597a7c054a73c1d8c1508a65b06dcca044205a012ff90a2a27d73",
+    "validation_report.md": "e1b90bf436aca2649f908b96a46db4182902347cda4d8d0527451c91837d5198"
+  },
+  "package_id": "rtl_generation_smoke_v001_retry_02",
+  "package_tree_sha256": "c8a7c077674c7bd4b84891a37831804e2a2b8f761a56c9b1c3a7d22a8de32c15",
+  "phase": "final",
+  "promotion_allowed": false,
+  "rejected_count": 0,
+  "row_count": 5,
+  "row_files_unchanged_from_pre_finalization": true,
+  "schema_version": "rtl_dataset_packaging_freeze_v0.1",
+  "train_count": 5
+}

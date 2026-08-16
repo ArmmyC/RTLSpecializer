@@ -1,0 +1,64 @@
+{
+  "assistant_rtl_only": true,
+  "mutation_content_detected": false,
+  "ok": true,
+  "package_id": "rtl_generation_smoke_v001_retry_02",
+  "pinned_task_order_match": true,
+  "private_content_detected": false,
+  "promotion_allowed": false,
+  "public_interfaces_present": true,
+  "public_specifications_present": true,
+  "raw_logs_detected": false,
+  "reference_content_detected": false,
+  "review_status": "automated_verified_unreviewed",
+  "row_count": 5,
+  "rows": [
+    {
+      "assistant_rtl_only": true,
+      "candidate_id": "rtlgen_verilogeval_prob001_zero_eaec15c148f9_attempt_01",
+      "candidate_sha256": "a319e1d875ac640f11ec7ed5562824b8752f35f37c51637eb24500b884a2ec13",
+      "public_interface_present": true,
+      "public_specification_present": true,
+      "source_id": "Prob001_zero",
+      "task_id": "rtlgen_verilogeval_prob001_zero_eaec15c148f9"
+    },
+    {
+      "assistant_rtl_only": true,
+      "candidate_id": "rtlgen_verilogeval_prob020_mt2015_eq2_aec940375a36_attempt_01",
+      "candidate_sha256": "c3ab5d8650b29bfb691c454f02637d255a11628b6ff6a8362dd3e4ee9930f44a",
+      "public_interface_present": true,
+      "public_specification_present": true,
+      "source_id": "Prob020_mt2015_eq2",
+      "task_id": "rtlgen_verilogeval_prob020_mt2015_eq2_aec940375a36"
+    },
+    {
+      "assistant_rtl_only": true,
+      "candidate_id": "rtlgen_verilogeval_prob071_always_casez_35df92a35797_attempt_01",
+      "candidate_sha256": "4b965925cce832fc75c13dc11ee9e6f37225132e641a6bb5f5201f1abea44812",
+      "public_interface_present": true,
+      "public_specification_present": true,
+      "source_id": "Prob071_always_casez",
+      "task_id": "rtlgen_verilogeval_prob071_always_casez_35df92a35797"
+    },
+    {
+      "assistant_rtl_only": true,
+      "candidate_id": "rtlgen_verilogeval_prob048_m2014_q4c_7379fc4191bf_attempt_01",
+      "candidate_sha256": "3b69c56e2afa3c7aaacf364f952a38bc27d80f520e1f520e6e3d0df1c25bca7e",
+      "public_interface_present": true,
+      "public_specification_present": true,
+      "source_id": "Prob048_m2014_q4c",
+      "task_id": "rtlgen_verilogeval_prob048_m2014_q4c_7379fc4191bf"
+    },
+    {
+      "assistant_rtl_only": true,
+      "candidate_id": "rtlgen_verilogeval_prob079_fsm3onehot_e3cf6755e024_attempt_01",
+      "candidate_sha256": "574ece292d2d81bd0fe25751eaf71d14b85d42a2d364eff25fb5909e01e83e83",
+      "public_interface_present": true,
+      "public_specification_present": true,
+      "source_id": "Prob079_fsm3onehot",
+      "task_id": "rtlgen_verilogeval_prob079_fsm3onehot_e3cf6755e024"
+    }
+  ],
+  "schema_version": "rtl_dataset_packaging_content_review_v0.1",
+  "testbench_content_detected": false
+}

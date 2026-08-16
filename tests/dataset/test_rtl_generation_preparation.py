@@ -1,18 +1,376 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from scripts.dataset.rtl_generation_preparation import (
     SourceRow,
+    _clock_reset_hints,
+    _interface_hints,
     _readiness,
     _task_id,
     _verification_dependency_report,
     export_generation_normalization_batches,
 )
+from scripts.dataset.rtl_generation_asset_corrections import (
+    load_correction_manifest,
+    overlay_source_rows,
+)
 from tests.dataset.rtl_generation_test_helpers import load_batch, make_checkout
+
+
+def test_v003_correction_manifest_is_accepted_by_generation_overlay_loader(tmp_path: Path) -> None:
+    correction_root = tmp_path / "correction"
+    testbench = correction_root / "tasks" / "Prob029_m2014_q4g" / "testbench.sv"
+    testbench.parent.mkdir(parents=True)
+    content = b'''module tb;
+  logic a;
+  logic y;
+  TopModule dut(.a(a), .y(y));
+  initial begin
+    $display("Mismatches: %0d", 0);
+    $finish;
+  end
+endmodule
+'''
+    testbench.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    row = {
+        "schema_version": "rtl_verification_asset_correction_row_v0.2",
+        "source_dataset": "VerilogEval",
+        "source_id": "Prob029_m2014_q4g",
+        "task_id": "task_prob029",
+        "split": "train",
+        "top_module": "TopModule",
+        "upstream_commit": "a" * 40,
+        "original_prompt_sha256": "b" * 64,
+        "original_reference_rtl_sha256": "c" * 64,
+        "original_testbench_sha256": "d" * 64,
+        "corrected_testbench_sha256": digest,
+        "correction_version": "assetfix_v003",
+        "reference_modified": False,
+        "reference_copied_to_support": False,
+        "testbench_path": "tasks/Prob029_m2014_q4g/testbench.sv",
+        "support_files": [],
+        "dependency_closure": "passed",
+        "verification_readiness": "executable_ready",
+        "qualification_status": "pending_isolated_qualification",
+    }
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    rows, errors = load_correction_manifest(
+        manifest,
+        correction_root,
+        expected_correction_version="assetfix_v003",
+    )
+
+    assert errors == []
+    assert rows == [row]
+
+
+@pytest.mark.parametrize(
+    "correction_version",
+    ["assetfix_v005", "assetfix_v006", "assetfix_v007", "assetfix_v009", "assetfix_v010"],
+)
+def test_extended_correction_manifest_is_accepted_by_generation_overlay_loader(
+    tmp_path: Path,
+    correction_version: str,
+) -> None:
+    correction_root = tmp_path / "correction"
+    testbench = correction_root / "tasks" / "Prob002_m2014_q4i" / "testbench.sv"
+    testbench.parent.mkdir(parents=True)
+    content = b'''module tb;
+  logic a;
+  logic y;
+  TopModule dut(.a(a), .y(y));
+  initial begin
+    $display("Mismatches: %0d", 0);
+    $finish;
+  end
+endmodule
+'''
+    testbench.write_bytes(content)
+    digest = hashlib.sha256(content).hexdigest()
+    row = {
+        "schema_version": "rtl_verification_asset_correction_row_v0.2",
+        "source_dataset": "VerilogEval",
+        "source_id": "Prob002_m2014_q4i",
+        "task_id": "task_prob002",
+        "split": "train",
+        "design_family": "combinational",
+        "top_module": "TopModule",
+        "upstream_commit": "a" * 40,
+        "original_prompt_sha256": "b" * 64,
+        "original_reference_rtl_sha256": "c" * 64,
+        "original_testbench_sha256": "d" * 64,
+        "corrected_testbench_sha256": digest,
+        "correction_version": correction_version,
+        "correction_reason": "public-specification correction",
+        "authoring_method": "trusted_manual_public_spec",
+        "reference_modified": False,
+        "reference_copied_to_support": False,
+        "testbench_path": "tasks/Prob002_m2014_q4i/testbench.sv",
+        "support_files": [],
+        "dependency_closure": "passed",
+        "verification_readiness": "executable_ready",
+        "qualification_status": "qualified",
+        "qualification_result": "passed",
+        "public_specification_sha256": "e" * 64,
+        "selection_ids_sha256": "f" * 64,
+        "selection_report_sha256": "0" * 64,
+    }
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    rows, errors = load_correction_manifest(
+        manifest,
+        correction_root,
+        expected_correction_version=correction_version,
+    )
+
+    assert errors == []
+    assert rows == [row]
+
+
+def test_correction_overlay_clears_source_adapter_support_files(tmp_path: Path) -> None:
+    correction_root = tmp_path / "correction"
+    testbench = correction_root / "tasks" / "Prob002_m2014_q4i" / "testbench.sv"
+    testbench.parent.mkdir(parents=True)
+    content = b'''module tb;
+  logic a;
+  logic y;
+  TopModule dut(.a(a), .y(y));
+  initial begin
+    $display("Mismatches: %0d", 0);
+    $finish;
+  end
+endmodule
+'''
+    testbench.write_bytes(content)
+    row = {
+        "schema_version": "rtl_verification_asset_correction_row_v0.2",
+        "source_dataset": "VerilogEval",
+        "source_id": "Prob002_m2014_q4i",
+        "task_id": "task_prob002",
+        "split": "train",
+        "top_module": "TopModule",
+        "upstream_commit": "a" * 40,
+        "original_prompt_sha256": "b" * 64,
+        "original_reference_rtl_sha256": "c" * 64,
+        "original_testbench_sha256": "d" * 64,
+        "corrected_testbench_sha256": hashlib.sha256(content).hexdigest(),
+        "correction_version": "assetfix_v005",
+        "reference_modified": False,
+        "reference_copied_to_support": False,
+        "testbench_path": "tasks/Prob002_m2014_q4i/testbench.sv",
+        "support_files": [],
+        "dependency_closure": "passed",
+        "verification_readiness": "executable_ready",
+        "qualification_status": "qualified",
+    }
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    source = replace(
+        _dependency_row("module tb; TopModule dut(); endmodule\n"),
+        source_id="Prob002_m2014_q4i",
+        support_files={"Prob002_m2014_q4i_ifc.txt": b"public interface metadata"},
+    )
+
+    overlaid, errors, _ = overlay_source_rows(
+        [source],
+        manifest,
+        correction_root,
+        expected_correction_version="assetfix_v005",
+    )
+
+    assert errors == []
+    assert overlaid[0].testbench == content.decode("utf-8")
+    assert overlaid[0].support_files == {}
+
+
+def test_normalization_export_audits_the_overlaid_support_closure(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.jsonl"
+    source_path.write_text(
+        json.dumps({
+            "source_id": "Prob002_m2014_q4i",
+            "source_dataset": "VerilogEval",
+            "design_family": "combinational",
+            "specification": "public interface metadata",
+            "artifacts": {
+                "rtl_code": "module Ref; endmodule\n",
+                "testbench": "module tb; TopModule dut(); endmodule\n",
+                "support_files": {
+                    "Prob002_m2014_q4i_ifc.txt": "public interface metadata",
+                },
+            },
+            "license": "MIT",
+            "provenance": {
+                "public_dataset_name": "VerilogEval",
+                "original_source_id": "Prob002_m2014_q4i",
+                "source_commit": "a" * 40,
+            },
+            "design_context": {
+                "target_module_name": "TopModule",
+                "interface_ports_from_prompt": [
+                    {"name": "a", "direction": "input"},
+                ],
+            },
+        }) + "\n",
+        encoding="utf-8",
+    )
+    correction_root = tmp_path / "correction"
+    testbench_path = correction_root / "tasks" / "Prob002_m2014_q4i" / "testbench.sv"
+    testbench_path.parent.mkdir(parents=True)
+    corrected_testbench = (
+        "module tb;\n"
+        "  TopModule dut();\n"
+        "  initial begin\n"
+        "    $display(\"Mismatches: %0d\", 0);\n"
+        "    $finish;\n"
+        "  end\n"
+        "endmodule\n"
+    ).encode("utf-8")
+    testbench_path.write_bytes(corrected_testbench)
+    correction_manifest = tmp_path / "correction.jsonl"
+    correction_manifest.write_text(
+        json.dumps({
+            "schema_version": "rtl_verification_asset_correction_row_v0.2",
+            "source_dataset": "VerilogEval",
+            "source_id": "Prob002_m2014_q4i",
+            "task_id": "rtlgen_verilogeval_prob002_m2014_q4i_aaaaaaaaaaaa",
+            "split": "train",
+            "top_module": "TopModule",
+            "upstream_commit": "a" * 40,
+            "original_prompt_sha256": "b" * 64,
+            "original_reference_rtl_sha256": "c" * 64,
+            "original_testbench_sha256": "d" * 64,
+            "corrected_testbench_sha256": hashlib.sha256(corrected_testbench).hexdigest(),
+            "correction_version": "assetfix_v005",
+            "reference_modified": False,
+            "reference_copied_to_support": False,
+            "testbench_path": "tasks/Prob002_m2014_q4i/testbench.sv",
+            "support_files": [],
+            "dependency_closure": "passed",
+            "verification_readiness": "executable_ready",
+            "qualification_status": "qualified",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    result, code = export_generation_normalization_batches(
+        source_path,
+        tmp_path / "public",
+        tmp_path / "private",
+        batch_size=1,
+        source_commit="a" * 40,
+        source_ids=["Prob002_m2014_q4i"],
+        correction_manifest=correction_manifest,
+        correction_root=correction_root,
+        correction_version="assetfix_v005",
+    )
+
+    assert code == 0, result
+    assert result["exported_rows"] == 1
+    assets = [
+        json.loads(line)
+        for line in (tmp_path / "private" / "verification_assets.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert assets[0]["support_files"] == []
+
+
+def test_interface_hints_preserve_parenthetical_bit_widths() -> None:
+    ports = _interface_hints(
+        """
+        - input A (2 bits)
+        - input data (8 bits)
+        - output result (3 bits)
+        """
+    )
+
+    assert [port["width_bits"] for port in ports] == [2, 8, 3]
+    assert [port["packed_range"] for port in ports] == [None, None, None]
+
+
+def test_clock_reset_hints_preserve_explicit_reset_contract() -> None:
+    specification = """
+    - input clk
+    - input r
+    - output q
+
+    Implement a D flip flop with active high synchronous reset.
+    """
+    ports = _interface_hints(specification)
+
+    clocks, resets = _clock_reset_hints(specification, ports)
+
+    assert clocks == [{"signal": "clk", "edge": "posedge"}]
+    assert resets == [{
+        "signal": "r",
+        "active_level": "high",
+        "synchronous": True,
+    }]
+
+
+def test_clock_reset_hints_ignore_synchronous_nonreset_clause_for_async_reset() -> None:
+    specification = """
+    - input clk
+    - input areset
+    - input load
+    - output q
+
+    Implement a shift register with asynchronous positive edge triggered
+    areset, synchronous active high signals load, and enable.
+    """
+    ports = _interface_hints(specification)
+
+    _, resets = _clock_reset_hints(specification, ports)
+
+    assert resets == [{
+        "signal": "areset",
+        "active_level": "high",
+        "synchronous": False,
+    }]
+
+
+def test_clock_reset_hints_accept_adverbial_asynchronous_reset() -> None:
+    specification = """
+    - input clk
+    - input areset
+    - output q
+
+    It should asynchronously reset when reset is high.
+    """
+    ports = _interface_hints(specification)
+
+    _, resets = _clock_reset_hints(specification, ports)
+
+    assert resets == [{
+        "signal": "areset",
+        "active_level": "high",
+        "synchronous": False,
+    }]
+
+
+def test_short_r_is_not_a_reset_without_reset_language() -> None:
+    specification = """
+    - input clk
+    - input r
+    - output q
+
+    Capture the input value on each positive clock edge.
+    """
+    ports = _interface_hints(specification)
+
+    _, resets = _clock_reset_hints(specification, ports)
+
+    assert resets == []
 
 
 def _dependency_row(
@@ -211,6 +569,8 @@ def test_manual_normalization_prompt_matches_generation_task_schema() -> None:
     collapsed = " ".join(prompt.split())
     assert "exactly `clock_signal` and `edge`" in collapsed
     assert "exactly `signal`, `active_level`, and `synchronous`" in collapsed
+    assert "parenthetical width" in collapsed
+    assert "explicitly identifies reset behavior" in collapsed
     for field in ("cycles", "min_cycles", "max_cycles", "throughput_cycles", "description"):
         assert f"`{field}`" in prompt, field
     assert "do not include a top-level `license`" in prompt

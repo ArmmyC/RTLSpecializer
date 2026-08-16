@@ -67,6 +67,11 @@ For every row:
 - use `behavioral_constraints`, not `constraints`;
 - copy actual deterministic hints and source metadata from the input row. The
   null and empty values in the structural example do not override those facts;
+- treat an explicit parenthetical width such as `(8 bits)` in a deterministic
+  port declaration as authoritative and preserve it in `width_bits`;
+- when the public specification explicitly identifies reset behavior, preserve
+  its signal, active level, and synchronous/asynchronous contract in `reset`;
+  use null only when the source leaves that fact genuinely unknown;
 - do not repeat any public batch wrapper field: `batch_schema_version`,
   `created_by`, `source_label`, `batch_index`, `batch_count`, `row_count`,
   `start_index`, or `prompt_template`;

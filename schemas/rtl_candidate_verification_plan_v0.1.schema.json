@@ -22,6 +22,28 @@
     "simulation_result_contract": {"const": "mismatch_count_v1"},
     "requested_checks": {"type": "object", "additionalProperties": false, "required": ["compile", "simulation", "lint", "synthesis"], "properties": {"compile": {"const": true}, "simulation": {"const": true}, "lint": {"const": false}, "synthesis": {"const": false}}},
     "workspace_paths": {"type": "object", "additionalProperties": false, "required": ["candidate_rtl_path", "testbench_path", "support_files"], "properties": {"candidate_rtl_path": {"$ref": "#/$defs/relative_path"}, "testbench_path": {"$ref": "#/$defs/relative_path"}, "support_files": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/relative_path"}}}},
-    "expected_hashes": {"type": "object", "additionalProperties": false, "required": ["candidate_rtl_sha256", "testbench_sha256", "support_files"], "properties": {"candidate_rtl_sha256": {"$ref": "#/$defs/sha256"}, "testbench_sha256": {"$ref": "#/$defs/sha256"}, "support_files": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/hash_record"}}}}
+    "expected_hashes": {"type": "object", "additionalProperties": false, "required": ["candidate_rtl_sha256", "testbench_sha256", "support_files"], "properties": {"candidate_rtl_sha256": {"$ref": "#/$defs/sha256"}, "testbench_sha256": {"$ref": "#/$defs/sha256"}, "support_files": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/hash_record"}}}},
+    "qualification_binding": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["binding_schema_version", "qualification_source", "qualification_result", "correction_version", "source_commit", "source_tree_sha256", "frozen_split_sha256", "qualification_report_sha256", "qualification_manifest_sha256", "mutation_evidence_sha256", "runner_sidecar_sha256", "corrected_testbench_sha256", "task_record_sha256", "asset_record_sha256", "reference_supplied"],
+      "properties": {
+        "binding_schema_version": {"const": "rtl_generation_qualification_binding_v0.1"},
+        "qualification_source": {"const": "asset_qualification_retry_01"},
+        "qualification_result": {"const": "passed"},
+        "correction_version": {"const": "assetfix_v002"},
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "frozen_split_sha256": {"$ref": "#/$defs/sha256"},
+        "qualification_report_sha256": {"$ref": "#/$defs/sha256"},
+        "qualification_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "mutation_evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "runner_sidecar_sha256": {"$ref": "#/$defs/sha256"},
+        "corrected_testbench_sha256": {"$ref": "#/$defs/sha256"},
+        "task_record_sha256": {"$ref": "#/$defs/sha256"},
+        "asset_record_sha256": {"$ref": "#/$defs/sha256"},
+        "reference_supplied": {"const": false}
+      }
+    }
   }
 }
